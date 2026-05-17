@@ -118,16 +118,20 @@ separately. Produce initial cluster set with confidence scores.
 - `keyword_serps` for the SERP-overlap component of confidence (optional;
   if missing, the fallback formula is used).
 - Config: `clustering.min_cluster_size`, `clustering.min_samples`,
-  `clustering.cluster_selection_epsilon`.
+  `clustering.cluster_selection_epsilon`, `clustering.thin_bucket_threshold`.
 
 **Process:**
 1. For each intent bucket independently:
    1. Pull the intent's keywords and their embeddings.
-   2. Run HDBSCAN with the config parameters.
-   3. Keywords labeled `-1` (noise) become single-member clusters with
-      `confidence_score = NULL` so they show up in human review.
-   4. For each cluster (multi-member), compute the three confidence
-      components and the weighted sum per ADR-004.
+   2. **If the bucket has fewer than `thin_bucket_threshold` keywords:**
+      skip HDBSCAN. Each keyword becomes a single-member cluster with
+      `confidence_score = NULL`. See ADR-005 — protects rare intents
+      (VENDOR/LEGAL/ACCESS) from being dumped into HDBSCAN noise.
+   3. **Otherwise:** run HDBSCAN with the config parameters.
+      - Keywords labeled `-1` (noise) become single-member clusters with
+        `confidence_score = NULL` so they show up in human review.
+      - For each multi-member cluster, compute the three confidence
+        components and the weighted sum per ADR-004.
 2. Insert into `clusters` and `cluster_members`. Set
    `clusters.clustering_run_id` to the current `pipeline_jobs.id`.
 3. Mark every cluster in `require_human_review_intents` (from YAML) as
@@ -138,8 +142,9 @@ separately. Produce initial cluster set with confidence scores.
 - `cluster_members` (junction rows, one per member with
   `similarity_score` = cosine distance from cluster centroid,
   `is_centroid` for the closest member).
-- `pipeline_jobs.output_summary` includes per-intent cluster counts and
-  noise rate.
+- `pipeline_jobs.output_summary` includes per-intent cluster counts,
+  per-intent noise rate, and a list of intents that fell below
+  `thin_bucket_threshold` and were not clustered.
 
 **Confidence score formula (canonical source: ADR-004):**
 

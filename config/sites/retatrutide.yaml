@@ -169,6 +169,13 @@ clustering:
   cluster_selection_epsilon: 0.15
   target_cluster_count: 500
 
+  # Intent buckets with fewer than this many keywords skip HDBSCAN
+  # entirely. Every keyword in a thin bucket becomes a single-member
+  # cluster with confidence_score = NULL (always routed to human review).
+  # Protects rare-but-important intents like VENDOR/LEGAL/ACCESS from
+  # being dumped into HDBSCAN noise. See docs/decisions-log.md ADR-005.
+  thin_bucket_threshold: 50
+
 serp_refinement:
   # Phase 11: SERP overlap thresholds
   merge_threshold: 0.7    # If clusters share 70%+ top-10 URLs, merge

@@ -183,6 +183,52 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-005: Promote keywords in thin intent buckets to single-member clusters, do not run HDBSCAN
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** Phase 10 clusters within each intent bucket separately
+  (per the per-intent-clustering decision in
+  [decisions-and-reasoning.md → Intent classification before clustering](decisions-and-reasoning.md#decision-intent-classification-before-clustering)).
+  Keyword distributions across intents are heavily skewed in practice:
+  EDUCATIONAL/SAFETY/COMPARISON typically have hundreds of keywords;
+  rare-but-important intents like VENDOR/LEGAL/ACCESS may have 10–30.
+  With `min_cluster_size = 5`, HDBSCAN tends to dump the entire thin
+  bucket into the noise label (-1), which would discard the keywords
+  that most need human attention — exactly the regulatory-sensitive
+  ones listed in `require_human_review_intents`.
+- **Decision:** When an intent bucket has fewer than
+  `thin_bucket_threshold` keywords (default 50), skip HDBSCAN for that
+  bucket. Promote every keyword to its own single-member cluster with
+  `confidence_score = NULL`. Per ADR-004, NULL confidence routes to
+  human review regardless of the auto-approve threshold.
+- **Consequences:**
+  - Rare-intent keywords are never lost to clustering noise.
+  - Review burden for thin intents is bounded by keyword count, not
+    arbitrary clustering outcomes — reviewers know exactly what they're
+    seeing.
+  - Single-member clusters for thin-intent keywords mix with
+    single-member noise clusters from dense intents in the review
+    queue. Reviewers should be able to distinguish them via
+    `cluster_members.count = 1` plus the intent — no schema change
+    needed.
+  - The 50-keyword threshold is a parameter, not a constant — sites
+    that need different sensitivity can override in YAML.
+- **Alternatives considered:**
+  - Lower `min_cluster_size` for thin buckets to 2 or 3 (rejected: at
+    those sizes HDBSCAN's density model breaks down and produces
+    arbitrary groupings).
+  - Merge thin buckets into a single "miscellaneous" bucket for
+    clustering, then re-tag (rejected: defeats the whole reason for
+    per-intent clustering — mixed intents in one bucket).
+  - Keep the keywords but tag them as `cluster_id = NULL` rather than
+    creating single-member clusters (rejected: breaks the
+    cluster-is-the-review-unit invariant in Phase 12).
+- **Related:** ADR-004, [pipeline-phases.md → Phase 10](pipeline-phases.md#phase-10-hdbscan-clustering),
+  [decisions-and-reasoning.md → Intent classification before clustering](decisions-and-reasoning.md#decision-intent-classification-before-clustering).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:
