@@ -80,7 +80,17 @@ CREATE TABLE IF NOT EXISTS raw_keywords (
     id BIGSERIAL PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     keyword TEXT NOT NULL,
-    keyword_normalized TEXT NOT NULL,
+    -- keyword_normalized must come from pipeline/utils/normalize.py
+    -- per docs/decisions-log.md ADR-006. The CHECK below catches the
+    -- cheapest bypass mistakes (uppercase, untrimmed, double spaces,
+    -- empty) but is NOT a substitute for the canonical normalizer.
+    keyword_normalized TEXT NOT NULL
+        CHECK (
+            length(keyword_normalized) > 0
+            AND keyword_normalized = lower(keyword_normalized)
+            AND keyword_normalized = btrim(keyword_normalized)
+            AND keyword_normalized !~ '\s\s'
+        ),
     discovery_method TEXT NOT NULL,
     discovery_source TEXT,
     discovered_at TIMESTAMPTZ NOT NULL DEFAULT now(),

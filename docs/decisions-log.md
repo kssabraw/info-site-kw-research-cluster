@@ -229,6 +229,94 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-006: Keyword normalization rules
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** `raw_keywords.keyword_normalized` is the dedup key
+  (`UNIQUE (site_id, keyword_normalized)`) and the join key for most
+  downstream phases. The original design note said "lowercase + stripped
+  + collapsed whitespace" and stopped there — no rule for hyphens,
+  plurals, possessives, Unicode, parentheticals, brand capitalization
+  (`LY3437943` vs `ly3437943`), or punctuation. Without a pinned spec,
+  different phases will normalize differently, the UNIQUE constraint
+  will fire on apparent-duplicates from different writers, and dedup
+  will silently miss near-duplicates.
+- **Decision:** Normalization is the composition of these steps,
+  applied in order. The canonical implementation lives in
+  `pipeline/utils/normalize.py::normalize_keyword(s: str) -> str`.
+  Every writer to `raw_keywords.keyword_normalized` and
+  `discovered_keywords.keyword` (for dedup comparison) must call this
+  function and no other.
+
+  1. **Unicode normalize** to NFKC. Composes accents, normalizes width.
+  2. **Casefold** (not lowercase). `str.casefold()` handles non-ASCII
+     case more reliably than `.lower()` (e.g., German `ß` → `ss`).
+  3. **Replace** these characters with a single space: `( ) [ ] { } / \ | _ , ; : ! ? " ' ` (backtick) `~ * + = < > & % $ # @`
+     Note: the apostrophe `'` is included, so `retatrutide's` →
+     `retatrutide s`. After whitespace collapse and trailing-token
+     dropping (step 6), it becomes `retatrutide`.
+  4. **Preserve** ASCII letters, digits, hyphens, periods, and spaces.
+     Hyphens inside words are preserved (`retatrutide-info`); periods
+     in decimals and abbreviations are preserved (`2.5 mg`, `u.s.`).
+  5. **Trim** leading/trailing whitespace; **collapse** runs of internal
+     whitespace to single spaces.
+  6. **Drop trailing single-letter tokens** of length 1 — catches the
+     post-apostrophe-strip artifacts (`retatrutide s` → `retatrutide`)
+     and stray standalone letters from punctuation removal. Tokens of
+     length ≥ 2 are preserved (`mg`, `iv` stay).
+  7. **Reject** the result if empty after trimming — caller raises;
+     never write an empty `keyword_normalized`.
+
+  **What this deliberately does NOT do:**
+  - **Stemming.** `retatrutides` and `retatrutide` are different
+    keywords; SERPs often differ. Embedding similarity handles
+    semantic merging at clustering time.
+  - **Hyphen removal.** `retatrutide-info` stays as a single normalized
+    string (with the hyphen), distinct from `retatrutide info`.
+  - **Number-to-word or word-to-number.** `2.5 mg` and `two point five
+    mg` stay distinct.
+  - **Diacritic stripping.** NFKC composes but does not strip — `café`
+    stays `café`, not `cafe`. (Diacritics inside ASCII-dominant
+    keywords are vanishingly rare in current niches; revisit if a
+    multi-language site is launched.)
+
+  **Belt and suspenders:** the schema adds a CHECK constraint on
+  `raw_keywords.keyword_normalized` that catches the cheapest
+  violations (uppercase letters, leading/trailing whitespace, double
+  spaces, empty string). This does NOT replace the canonical
+  normalizer — it only catches accidental bypasses.
+
+- **Consequences:**
+  - One canonical normalizer; all dedup is deterministic and stable
+    across re-runs.
+  - The CHECK constraint surfaces direct-INSERT bugs (e.g., a
+    debugging script that bypasses `pipeline/utils/database.py`)
+    before they corrupt dedup state.
+  - Hyphenated compounds (`retatrutide-info`, `glp-1`) get treated as
+    single tokens — embedding clustering will still group them with
+    their non-hyphenated variants if semantically close, so the cost
+    is small.
+  - Possessives ('s) collapse to the base via the apostrophe + trailing-
+    single-letter rules. This is opinionated; if it causes problems
+    revisit with a new ADR.
+
+- **Alternatives considered:**
+  - Use the database as the normalizer (GENERATED column for
+    `keyword_normalized`). Rejected: Unicode NFKC and `casefold` are
+    not available in plain Postgres without extensions; pushing to a
+    Python normalizer keeps the rules portable.
+  - Aggressive normalization (strip hyphens, strip diacritics,
+    Porter stemming). Rejected: erases SERP-relevant distinctions that
+    DataForSEO returns as separate keywords with different volumes.
+  - Per-phase normalizers tuned to each phase's needs. Rejected: this
+    is the exact failure mode we're fixing.
+
+- **Related:** `pipeline/utils/normalize.py` (to be written),
+  [database-schema.md → raw_keywords](database-schema.md#raw_keywords).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

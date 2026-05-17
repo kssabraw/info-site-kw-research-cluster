@@ -123,8 +123,14 @@ CREATE TABLE raw_keywords (
     id BIGSERIAL PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     keyword TEXT NOT NULL,
-    keyword_normalized TEXT NOT NULL,
-    
+    keyword_normalized TEXT NOT NULL
+        CHECK (
+            length(keyword_normalized) > 0
+            AND keyword_normalized = lower(keyword_normalized)
+            AND keyword_normalized = btrim(keyword_normalized)
+            AND keyword_normalized !~ '\s\s'
+        ),
+
     -- Discovery metadata
     discovery_method TEXT NOT NULL,
     discovery_source TEXT,
@@ -164,8 +170,12 @@ CREATE INDEX idx_keywords_tier ON raw_keywords(site_id, tier);
 ```
 
 **Design notes:**
-- `keyword_normalized` is lowercase + stripped + collapsed whitespace
-  (used for deduplication)
+- `keyword_normalized` is the dedup key. The canonical normalization
+  rules are pinned in
+  [decisions-log.md ADR-006](decisions-log.md#adr-006-keyword-normalization-rules).
+  All writes must go through `pipeline/utils/normalize.py::normalize_keyword()`.
+  The CHECK constraint catches obvious bypasses (uppercase, untrimmed,
+  double spaces, empty) — it is a fence, not the rule.
 - `discovery_method` examples: 'seed_expansion', 'paa_harvest',
   'related_search', 'url_mining', 'domain_mining', 'manual'
 - `discovery_source` captures the specific source URL or domain that
