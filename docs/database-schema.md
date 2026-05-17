@@ -215,23 +215,29 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE keyword_embeddings (
     keyword_id BIGINT PRIMARY KEY REFERENCES raw_keywords(id) ON DELETE CASCADE,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-    embedding VECTOR(3072),
+    embedding HALFVEC(3072),
     model_version TEXT NOT NULL,
     enriched_text TEXT,
     embedded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_embeddings_site ON keyword_embeddings(site_id);
-CREATE INDEX idx_embeddings_hnsw ON keyword_embeddings 
-    USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_embeddings_hnsw ON keyword_embeddings
+    USING hnsw (embedding halfvec_cosine_ops);
 ```
 
 **Design notes:**
 - Default dimensions 3072 (text-embedding-3-large native)
+- Stored as `HALFVEC` (half-precision, 2 bytes per element) rather than
+  `VECTOR` (4 bytes). pgvector's HNSW index supports `VECTOR` only up to
+  2000 dims, `HALFVEC` up to 4000. Half-precision cosine similarity at
+  3072 dims is within ~1% of full precision — well below clustering noise.
+  See `docs/decisions-log.md` ADR-003.
 - Can be reduced via Matryoshka (1024 or 1536) if storage matters
 - `enriched_text` is the actual string that was embedded
   (keyword + intent + SERP titles), useful for debugging
 - HNSW index enables fast similarity queries
+- Storage: 3072 × 2 bytes = ~6 KB per row; 15K keywords → ~90 MB per site
 
 ### serp_urls
 
@@ -643,8 +649,8 @@ pipeline_jobs: ~1 KB per job × ~50 jobs = ~50 KB
 tangential_concepts: ~200 KB (1000 concepts × 200 bytes)
 raw_keywords: ~5 MB (15K keywords × ~300 bytes)
 keyword_serps: ~10 MB (3K keywords × 10 results × 300 bytes)
-keyword_embeddings: ~180 MB (15K × 3072 × 4 bytes)
-With 1024-dim reduction: ~60 MB
+keyword_embeddings: ~90 MB (15K × 3072 × 2 bytes, halfvec)
+With 1024-dim reduction: ~30 MB
 serp_urls: ~500 KB
 serp_domains: ~100 KB
 discovered_keywords: ~5 MB

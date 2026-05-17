@@ -1,20 +1,17 @@
 -- ============================================================================
--- Multi-Tenant Keyword Discovery & Clustering Pipeline
--- Canonical current-state schema
+-- Migration 0001: initial schema
 -- ============================================================================
+-- Why: First-time deployment of the multi-tenant keyword discovery and
+-- clustering pipeline. Creates 14 tables, pgvector extension, RLS
+-- enablement, and updated_at triggers.
 --
--- This file reflects the schema at HEAD. Use it for fresh deploys. For
--- migrating an existing database, apply schema/migrations/NNNN_*.sql in
--- order. Both files must be updated together — see
--- schema/migrations/README.md for the convention.
---
--- Idempotent: safe to re-run against a fresh or partially-deployed db
--- (uses IF NOT EXISTS / OR REPLACE / DROP IF EXISTS).
---
--- For schema documentation and design notes, see docs/database-schema.md
+-- Embeddings use HALFVEC(3072) rather than VECTOR(3072) so HNSW indexes
+-- work — pgvector HNSW caps VECTOR at 2000 dims, HALFVEC at 4000.
+-- See docs/decisions-log.md ADR-003.
 -- ============================================================================
 
 \set ON_ERROR_STOP on
+BEGIN;
 
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -360,6 +357,8 @@ CREATE TRIGGER update_topics_updated_at
     BEFORE UPDATE ON topics
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+COMMIT;
+
 -- ============================================================================
--- Schema deployment complete
+-- Migration 0001 complete
 -- ============================================================================

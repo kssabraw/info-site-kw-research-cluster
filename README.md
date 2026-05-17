@@ -58,18 +58,30 @@ In the Supabase SQL editor, run `schema/schema.sql`:
 ```bash
 # Option A: Copy/paste into Supabase SQL editor
 
-# Option B: Use psql if you have direct database access
-psql "$DATABASE_URL" -f schema/schema.sql
+# Option B: Use psql if you have direct database access.
+# -v ON_ERROR_STOP=1 is required — without it, psql silently continues
+# past errors and leaves the schema in a partial state.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/schema.sql
 ```
 
 Verify deployment:
 
 ```sql
-SELECT table_name FROM information_schema.tables 
-WHERE table_schema = 'public' 
-ORDER BY table_name;
 -- Should list 14 tables
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'public'
+ORDER BY table_name;
+
+-- Should return one row: idx_embeddings_hnsw
+SELECT indexname FROM pg_indexes
+WHERE schemaname = 'public'
+  AND indexname = 'idx_embeddings_hnsw';
 ```
+
+If the HNSW index row is missing, the deploy failed silently on
+`keyword_embeddings` (likely a pgvector version mismatch — `HALFVEC`
+requires pgvector ≥ 0.7.0). Re-run with `ON_ERROR_STOP=1` to surface
+the error.
 
 ### 4. Configure your first site
 
