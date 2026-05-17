@@ -641,10 +641,19 @@ ALTER TABLE topic_relationships ENABLE ROW LEVEL SECURITY;
 ```
 
 **Design notes:**
-- RLS is enabled but no policies are defined initially
-- Service role connections (used by the pipeline) bypass RLS by default
-- When team UI is built, policies based on `site_users` table get added
-- This means the foundation is ready for multi-user without retrofit
+- RLS is enabled but no policies are defined. This is intentional for
+  the current single-user CLI pipeline (service_role bypasses RLS).
+- **Any non-service_role connection gets zero rows back from every
+  multi-tenant table.** Not an oversight — see ADR-013.
+- The trigger for adding policies is specific: the first commit that
+  introduces a `site_users` table, a non-service_role connection path,
+  or the team UI must also add policies in `schema/policies/` in the
+  same commit. See [`schema/policies/README.md`](../schema/policies/README.md).
+- Denormalized `site_id` on child tables (`keyword_serps`,
+  `keyword_embeddings`, `cluster_members`, `topic_keywords`,
+  `topic_dependencies`, `topic_relationships`) exists so future
+  policies can filter by `site_id` directly without joining through
+  the parent.
 
 ## Indexing Strategy
 

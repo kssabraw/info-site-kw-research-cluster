@@ -668,6 +668,64 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-013: Enable RLS without policies; document the security posture and the trigger for adding policies
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** Every multi-tenant table has `ENABLE ROW LEVEL
+  SECURITY` but zero policies are defined. The intent is
+  "service_role bypasses RLS, which is what the CLI pipeline uses;
+  any other connection gets zero rows." This is the right default
+  for the current single-user CLI usage, but it's a hidden
+  prerequisite for any future non-service-role access (team UI,
+  read-only analytics user, debugging via the Supabase anon key).
+  Nothing on the roadmap currently captures that hidden prerequisite.
+- **Decision:** Keep the current posture — RLS enabled, no policies,
+  service_role only — and explicitly document:
+
+  1. The posture in `schema.sql` itself as a multi-line comment
+     above the `ENABLE ROW LEVEL SECURITY` block, naming the
+     consequences for non-service-role connections.
+  2. A placeholder `schema/policies/` directory with a README
+     describing the contract a future policy set must satisfy:
+     read-your-own-site, write-your-own-site, no cross-site reads
+     unless a site_owners-style table is introduced.
+  3. An explicit trigger condition for writing the policies, so the
+     work is gated on a real event rather than indefinite deferral.
+
+  **Trigger:** the first commit that introduces any of:
+  - a `site_users` (or similar) table mapping users to sites
+  - any code path that connects with a non-`service_role` key
+  - the team UI (web dashboard) entry point
+
+  must also land a policy set in `schema/policies/` and a migration
+  that applies it. Reviewers should reject the first such commit if
+  it doesn't.
+
+- **Consequences:**
+  - The "zero policies = empty result for non-service-role" failure
+    mode is now intentional and documented, not an oversight.
+  - Future work has a tracked home (`schema/policies/`) instead of
+    being unaddressed.
+  - The trigger is concrete and reviewable — first commit that meets
+    the conditions has to do the work in the same commit.
+  - No runtime change today; service_role pipeline behaves identically.
+- **Alternatives considered:**
+  - Disable RLS entirely until policies are designed. Rejected:
+    leaves the multi-tenant tables open by default, which is the
+    wrong default to forget.
+  - Add a minimal "deny all" policy now. Rejected: identical to no
+    policy + RLS enabled (both result in zero rows for non-service-
+    role), but creates an artifact that suggests "policies are
+    designed" — false signal.
+  - Defer documenting this. Rejected: that's exactly how the hidden
+    prerequisite stayed hidden for an entire scaffolding session.
+
+- **Related:** `schema/policies/README.md` (placeholder),
+  [database-schema.md → Row Level Security](database-schema.md#row-level-security).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

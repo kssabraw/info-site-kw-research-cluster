@@ -356,6 +356,21 @@ CREATE INDEX IF NOT EXISTS idx_topic_rels_type ON topic_relationships(site_id, r
 -- ============================================================================
 -- Row Level Security
 -- ============================================================================
+--
+-- RLS is enabled on every multi-tenant table. No policies are defined.
+--
+-- Posture: service_role connections (used by the CLI pipeline) bypass RLS
+-- entirely. ANY OTHER CONNECTION GETS ZERO ROWS. This is intentional for
+-- the current single-user pipeline.
+--
+-- Policies must be added the first time any of the following lands:
+--   - a site_users table mapping users to sites
+--   - a code path connecting with a non-service_role key
+--   - a team UI entry point
+--
+-- See docs/decisions-log.md ADR-013 for the full contract and
+-- schema/policies/README.md for where the policy SQL will live.
+-- ============================================================================
 
 ALTER TABLE sites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_jobs ENABLE ROW LEVEL SECURITY;
