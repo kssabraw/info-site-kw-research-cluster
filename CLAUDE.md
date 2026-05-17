@@ -18,7 +18,7 @@ Update the checklist below as work progresses. Active site at top.
 
 Phase progress:
 - [x] Project scaffold and database schema
-- [x] Schema deployed to Supabase (`kw_clustering` schema in AR-Internal-Tools, retatrutide site registered with id=1)
+- [x] Schema deployed to Supabase and retatrutide site registered (instance details in DEPLOYMENT.md)
 - [ ] Phase 00: Concept mapping
 - [ ] Phase 01: Seed expansion
 - [ ] Phase 02: SERP fetching
@@ -136,6 +136,7 @@ clustering-tool/
 ├── CLAUDE.md                       # This file
 ├── PROJECT_BRIEF.md                # Architecture decisions and rationale
 ├── README.md                       # Setup and run instructions
+├── DEPLOYMENT.md                   # Current deployment instance specifics
 ├── pyproject.toml                  # Python deps via uv
 ├── .env.example                    # Required env vars template
 ├── docs/
@@ -156,16 +157,20 @@ clustering-tool/
 └── output/                         # Local exports (Google Sheets CSVs, etc)
 ```
 
-## Deployment target
+## Database conventions
 
-The schema is deployed to the **AR-Internal-Tools** Supabase project
-(`wvcthtmmcmhkybcesirb`, Postgres 15.8 + pgvector 0.8.0), in the
-**`kw_clustering`** schema. See `docs/decisions-log.md` ADR-019 for
-why a dedicated schema rather than `public`.
+All pipeline tables live in the **`kw_clustering`** schema, not
+`public`. See `docs/decisions-log.md` ADR-019.
 
-Pipeline connections must `SET search_path TO kw_clustering, public,
-extensions` before issuing queries — `pipeline/utils/database.py` (when
-written) is the canonical place for this.
+Pipeline connections must `SET LOCAL search_path TO kw_clustering,
+public, extensions` inside every transaction — `pipeline/utils/database.py`
+(when written) is the canonical place for this. CLI psql users must
+do it manually (see README).
+
+For the **current deployment instance** (Supabase project ref, Postgres
+version, last-deployed migration), see `DEPLOYMENT.md`. Keeping
+instance-specific facts out of this file so the codebase doc doesn't
+silently couple to one specific deployment.
 
 ## How to Run
 

@@ -296,6 +296,7 @@ clustering-tool/
 ├── CLAUDE.md                       # Project context for Claude Code
 ├── PROJECT_BRIEF.md                # Architectural reasoning
 ├── README.md                       # This file
+├── DEPLOYMENT.md                   # Current deployment instance (project ref, versions)
 ├── .env.example                    # Environment variable template
 ├── .gitignore                      # Secrets and build artifacts
 ├── pyproject.toml                  # Python dependencies (uv)
