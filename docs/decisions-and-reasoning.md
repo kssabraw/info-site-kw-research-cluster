@@ -1,14 +1,28 @@
 # Decisions and Reasoning
 
 This document captures the reasoning behind architectural and strategic
-decisions made during initial project design. It supplements
-[PROJECT_BRIEF.md](../PROJECT_BRIEF.md) by documenting not just *what*
-was decided but *why*, including alternatives considered and tradeoffs
-accepted.
+decisions. It supplements [PROJECT_BRIEF.md](../PROJECT_BRIEF.md) by
+documenting not just *what* was decided but *why*, including
+alternatives considered and tradeoffs accepted.
 
 When future contributors (including future you) wonder "why was X chosen
 over Y?" — this document is the answer. Decisions are organized by topic,
 not chronologically.
+
+## Which file does a decision go in?
+
+There are two decision docs in this project. The split is:
+
+| It belongs here (`decisions-and-reasoning.md`) | It belongs in [`decisions-log.md`](decisions-log.md) |
+|---|---|
+| A class of decisions or a principle | One specific technical choice |
+| Timeless / topic-organized | Has a date and a status |
+| Reversing it would mean rethinking the project | Could plausibly be reversed in a future ADR |
+| Example: "use OpenAI embeddings, not Voyage" | Example: "use HALFVEC(3072), not VECTOR(3072)" |
+
+When an ADR in `decisions-log.md` is the implementation of a strategic
+choice discussed here, it should link back to the relevant section
+rather than duplicating the reasoning.
 
 ---
 
