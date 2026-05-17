@@ -130,6 +130,7 @@ Full schema in `docs/database-schema.md`. Core tables:
 
 ## Project Structure
 
+```
 clustering-tool/
 ├── CLAUDE.md                       # This file
 ├── PROJECT_BRIEF.md                # Architecture decisions and rationale
@@ -145,13 +146,14 @@ clustering-tool/
 │   └── sites/
 │       └── {site_slug}.yaml        # Per-site config
 ├── pipeline/
-│   ├── init.py
+│   ├── __init__.py
 │   ├── run.py                      # CLI entry point
 │   ├── phases/                     # 12 phase modules
 │   └── utils/                      # Database, API clients, config
 ├── schema/
 │   └── schema.sql                  # Supabase schema DDL
 └── output/                         # Local exports (Google Sheets CSVs, etc)
+```
 
 ## How to Run
 

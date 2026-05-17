@@ -165,7 +165,9 @@ options like BGE-M3 (free self-hosted).
 - Quality gap to Voyage is real but small (~5% on relevant benchmarks)
   and probably invisible at our scale (12K keywords clustering to 500)
 - Matryoshka dimension flexibility (can reduce from 3072 to 1024 or 512)
-- Cost is trivial for one-time embedding: ~$0.04 per site
+- Cost is trivial for one-time embedding: ~$0.10 per site
+  (slightly conservative vs the $0.04 a back-of-envelope produces;
+  ADR-014 uses $0.10 across docs for budget planning)
 - Self-hosted (BGE-M3) saves money but adds GPU/Docker complexity not
   worth it at this scale
 - Voyage's domain advantage is for RAG retrieval, not clustering
@@ -181,7 +183,7 @@ options like BGE-M3 (free self-hosted).
 **Tradeoffs accepted:**
 - ~5% potentially better clustering with Voyage
 - Vendor dependency on OpenAI
-- API cost (though trivial at $0.04/run)
+- API cost (trivial at ~$0.10/run)
 
 ### Decision: Claude for content generation (multi-model routing)
 

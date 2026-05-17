@@ -439,7 +439,12 @@ logged to `pipeline_jobs.error_message` for resume.
 
 **`APPROVE`** (or blank action):
 1. Insert one `topics` row with the reviewer's `primary_keyword` and
-   `suggested_subfolder`. `source_cluster_id = clusters.id`.
+   `suggested_subfolder`. `source_cluster_id = clusters.id`. Inherit
+   `ymyl_risk`, `regulatory_sensitivity`, and `freshness_tier` from
+   the YAML `intent_taxonomy.{cluster.intent}` block — these are
+   per-intent properties, not per-topic decisions, so the YAML is the
+   source of truth. If the YAML omits a flag for that intent, the
+   `topics` column stays NULL.
 2. Insert `topic_keywords` rows for every cluster member with
    `role = 'primary'` for the chosen primary keyword, then `secondary`
    / `supporting` / `faq` assigned by Phase-12 heuristics (TBD —

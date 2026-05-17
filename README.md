@@ -275,26 +275,35 @@ Rough costs per site (~10K-15K keywords, ~500 clusters):
 Excludes Supabase storage (negligible) and human review time.
 
 ## Project Structure
+
+```
 clustering-tool/
 ├── CLAUDE.md                       # Project context for Claude Code
 ├── PROJECT_BRIEF.md                # Architectural reasoning
 ├── README.md                       # This file
 ├── .env.example                    # Environment variable template
+├── .gitignore                      # Secrets and build artifacts
 ├── pyproject.toml                  # Python dependencies (uv)
 ├── docs/
 │   ├── architecture.md             # System design details
 │   ├── pipeline-phases.md          # Per-phase specifications
 │   ├── database-schema.md          # Schema documentation
-│   └── decisions-log.md            # ADRs (architecture decision records)
+│   ├── decisions-log.md            # ADRs
+│   └── decisions-and-reasoning.md  # Strategic rationale
 ├── config/
 │   └── sites/                      # Per-site YAML configs
 ├── schema/
-│   └── schema.sql                  # Database schema deployment
+│   ├── schema.sql                  # Canonical current schema
+│   ├── migrations/                 # Sequential migrations
+│   └── policies/                   # RLS policies (placeholder, see ADR-013)
+├── scripts/
+│   └── check-conventions.sh        # Enforces CLAUDE.md rules
 └── pipeline/
-├── init.py
-├── run.py                      # CLI entry point
-├── phases/                     # 12 phase modules
-└── utils/                      # Database, API clients, config
+    ├── __init__.py
+    ├── run.py                      # CLI entry point
+    ├── phases/                     # 12 phase modules
+    └── utils/                      # Database, API clients, config
+```
 
 ## Contributing / Development
 

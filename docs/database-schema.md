@@ -75,7 +75,8 @@ CREATE TABLE pipeline_jobs (
     output_summary JSONB,
     error_message TEXT,
     error_traceback TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (id, site_id)   -- ADR-018
 );
 
 CREATE INDEX idx_jobs_site_phase ON pipeline_jobs(site_id, phase);
@@ -159,7 +160,7 @@ CREATE TABLE raw_keywords (
     intent_confidence NUMERIC(3, 2),
     suggested_subfolder TEXT,
     language_register TEXT
-        CHECK (language_register IN ('clinical', 'consumer', 'user_slang', NULL)),
+        CHECK (language_register IN ('clinical', 'consumer', 'user_slang')),
     tangential_distance INTEGER
         CHECK (tangential_distance BETWEEN 0 AND 3),
     
@@ -168,7 +169,8 @@ CREATE TABLE raw_keywords (
     is_included BOOLEAN NOT NULL DEFAULT TRUE,
     exclusion_reason TEXT,
     
-    UNIQUE (site_id, keyword_normalized)
+    UNIQUE (site_id, keyword_normalized),
+    UNIQUE (id, site_id)   -- ADR-018
 );
 
 CREATE INDEX idx_keywords_site ON raw_keywords(site_id);
@@ -206,7 +208,7 @@ and competitor analysis.
 ```sql
 CREATE TABLE keyword_serps (
     id BIGSERIAL PRIMARY KEY,
-    keyword_id BIGINT NOT NULL REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    keyword_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 100),
     url TEXT NOT NULL,
@@ -215,13 +217,13 @@ CREATE TABLE keyword_serps (
     snippet TEXT,
     serp_features JSONB,
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (keyword_id, position)
+    UNIQUE (keyword_id, position),
+    -- Tenant-scoped FK (ADR-018)
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_serps_keyword ON keyword_serps(keyword_id);
-CREATE INDEX idx_serps_site ON keyword_serps(site_id);
 CREATE INDEX idx_serps_url ON keyword_serps(url);
-CREATE INDEX idx_serps_domain ON keyword_serps(domain);
 CREATE INDEX idx_serps_site_domain ON keyword_serps(site_id, domain);
 ```
 
@@ -238,12 +240,14 @@ Vector embeddings for clustering. Uses pgvector extension.
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE keyword_embeddings (
-    keyword_id BIGINT PRIMARY KEY REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    keyword_id BIGINT PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     embedding HALFVEC(3072),
     model_version TEXT NOT NULL,
     enriched_text TEXT,
-    embedded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    embedded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Tenant-scoped FK (ADR-018)
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_embeddings_site ON keyword_embeddings(site_id);
@@ -392,12 +396,22 @@ CREATE TABLE clusters (
     reviewer_notes TEXT,
     
     -- Relationships (set during/after review)
-    merged_into_cluster_id BIGINT REFERENCES clusters(id),
-    split_from_cluster_id BIGINT REFERENCES clusters(id),
+    merged_into_cluster_id BIGINT,
+    split_from_cluster_id BIGINT,
     
     -- Metadata
-    clustering_run_id BIGINT REFERENCES pipeline_jobs(id),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    clustering_run_id BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    
+    -- Self-merge prevention (ADR-018)
+    CHECK (merged_into_cluster_id IS NULL OR merged_into_cluster_id != id),
+    CHECK (split_from_cluster_id IS NULL OR split_from_cluster_id != id),
+    -- Composite uniqueness for tenant-scoped FKs (ADR-018)
+    UNIQUE (id, site_id),
+    -- Tenant-scoped FKs (ADR-018)
+    FOREIGN KEY (merged_into_cluster_id, site_id) REFERENCES clusters (id, site_id),
+    FOREIGN KEY (split_from_cluster_id, site_id) REFERENCES clusters (id, site_id),
+    FOREIGN KEY (clustering_run_id, site_id) REFERENCES pipeline_jobs (id, site_id)
 );
 
 CREATE INDEX idx_clusters_site ON clusters(site_id);
@@ -424,13 +438,16 @@ Junction table: which keywords are in which cluster.
 
 ```sql
 CREATE TABLE cluster_members (
-    cluster_id BIGINT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
-    keyword_id BIGINT NOT NULL REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    cluster_id BIGINT NOT NULL,
+    keyword_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     similarity_score NUMERIC(4, 3),
     is_centroid BOOLEAN NOT NULL DEFAULT FALSE,
     added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (cluster_id, keyword_id)
+    PRIMARY KEY (cluster_id, keyword_id),
+    -- Tenant-scoped FKs (ADR-018)
+    FOREIGN KEY (cluster_id, site_id) REFERENCES clusters (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_cluster_members_cluster ON cluster_members(cluster_id);
@@ -452,7 +469,7 @@ article generation.
 CREATE TABLE topics (
     id BIGSERIAL PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-    source_cluster_id BIGINT REFERENCES clusters(id),
+    source_cluster_id BIGINT,
     
     -- Topic identity. slug and subfolder formats per ADR-008.
     primary_keyword TEXT NOT NULL,
@@ -471,14 +488,14 @@ CREATE TABLE topics (
     description TEXT,
     target_word_count INTEGER,
     ymyl_risk TEXT
-        CHECK (ymyl_risk IN ('low', 'medium', 'high', NULL)),
+        CHECK (ymyl_risk IN ('low', 'medium', 'high')),
     regulatory_sensitivity TEXT
-        CHECK (regulatory_sensitivity IN ('low', 'medium', 'high', NULL)),
+        CHECK (regulatory_sensitivity IN ('low', 'medium', 'high')),
     freshness_tier TEXT
-        CHECK (freshness_tier IN ('evergreen', 'medium', 'high', NULL)),
+        CHECK (freshness_tier IN ('evergreen', 'medium', 'high')),
     
     -- Hierarchy
-    parent_topic_id BIGINT REFERENCES topics(id),
+    parent_topic_id BIGINT,
     -- Dependency edges live in topic_dependencies, not as a column
     -- on this table. See ADR-009.
 
@@ -495,7 +512,10 @@ CREATE TABLE topics (
     
     -- Single UNIQUE on url_path; (site_id, slug, subfolder) is
     -- functionally identical since url_path is derived. See ADR-008.
-    UNIQUE (site_id, url_path)
+    UNIQUE (site_id, url_path),
+    UNIQUE (id, site_id),   -- ADR-018
+    FOREIGN KEY (source_cluster_id, site_id) REFERENCES clusters (id, site_id),
+    FOREIGN KEY (parent_topic_id, site_id) REFERENCES topics (id, site_id)
 );
 
 CREATE INDEX idx_topics_site ON topics(site_id);
@@ -525,14 +545,17 @@ This is the bridge between clustering and content generation.
 
 ```sql
 CREATE TABLE topic_keywords (
-    topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
-    keyword_id BIGINT NOT NULL REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    topic_id BIGINT NOT NULL,
+    keyword_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     role TEXT NOT NULL
         CHECK (role IN ('primary', 'secondary', 'supporting', 'faq')),
     suggested_heading TEXT,
     added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (topic_id, keyword_id)
+    PRIMARY KEY (topic_id, keyword_id),
+    -- Tenant-scoped FKs (ADR-018)
+    FOREIGN KEY (topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_topic_keywords_topic ON topic_keywords(topic_id);
@@ -561,12 +584,15 @@ arrays carry no referential integrity in Postgres. See ADR-009.
 
 ```sql
 CREATE TABLE topic_dependencies (
-    topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
-    depends_on_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE RESTRICT,
+    topic_id BIGINT NOT NULL,
+    depends_on_topic_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (topic_id, depends_on_topic_id),
-    CHECK (topic_id != depends_on_topic_id)
+    CHECK (topic_id != depends_on_topic_id),
+    -- Tenant-scoped FKs (ADR-018)
+    FOREIGN KEY (topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_topic_deps_topic ON topic_dependencies(topic_id);
@@ -595,13 +621,23 @@ and content planning.
 CREATE TABLE topic_relationships (
     id BIGSERIAL PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-    from_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
-    to_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    from_topic_id BIGINT NOT NULL,
+    to_topic_id BIGINT NOT NULL,
     relationship_type TEXT NOT NULL
         CHECK (relationship_type IN ('parent', 'child', 'sibling', 'related', 'comparison', 'glossary_term')),
     strength NUMERIC(3, 2),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (from_topic_id, to_topic_id, relationship_type)
+    UNIQUE (from_topic_id, to_topic_id, relationship_type),
+    -- Symmetric relationships ('sibling', 'related', 'comparison') must
+    -- be stored canonically (from_topic_id < to_topic_id) so the same
+    -- undirected edge isn't recorded twice. See ADR-018.
+    CHECK (
+        relationship_type NOT IN ('sibling', 'related', 'comparison')
+        OR from_topic_id < to_topic_id
+    ),
+    -- Tenant-scoped FKs (ADR-018)
+    FOREIGN KEY (from_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (to_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_topic_rels_from ON topic_relationships(from_topic_id);
@@ -614,6 +650,11 @@ CREATE INDEX idx_topic_rels_type ON topic_relationships(site_id, relationship_ty
 - Computed after topics are approved, before article generation
 - `strength` based on embedding similarity of primary keywords
 - Used by content generation for internal link target selection
+- **Symmetric vs asymmetric:** `parent`, `child`, `glossary_term` are
+  directed and may exist in either order. `sibling`, `related`,
+  `comparison` are undirected and constrained to canonical
+  storage (`from_topic_id < to_topic_id`) so the same edge can't
+  be inserted twice. See ADR-018.
 
 ## Row Level Security
 

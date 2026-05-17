@@ -149,9 +149,11 @@ CREATE TABLE IF NOT EXISTS keyword_serps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_serps_keyword ON keyword_serps(keyword_id);
-CREATE INDEX IF NOT EXISTS idx_serps_site ON keyword_serps(site_id);
 CREATE INDEX IF NOT EXISTS idx_serps_url ON keyword_serps(url);
-CREATE INDEX IF NOT EXISTS idx_serps_domain ON keyword_serps(domain);
+-- idx_serps_site_domain covers (site_id) and (site_id, domain) queries;
+-- standalone idx_serps_site and idx_serps_domain are redundant. The
+-- architecture defers cross-site domain queries, so dropping them
+-- saves write cost without removing query support. Cleanup tier.
 CREATE INDEX IF NOT EXISTS idx_serps_site_domain ON keyword_serps(site_id, domain);
 
 -- embedding uses HALFVEC (half-precision, 2 bytes per element) because
@@ -378,6 +380,16 @@ CREATE TABLE IF NOT EXISTS topic_relationships (
     strength NUMERIC(3, 2),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (from_topic_id, to_topic_id, relationship_type),
+    -- Canonicalize symmetric edges: for 'sibling', 'related', and
+    -- 'comparison' the edge is undirected, so the pair must be stored
+    -- with from_topic_id < to_topic_id. This prevents accidental
+    -- duplicate edges like (A,B,'related') AND (B,A,'related'). Asymmetric
+    -- edges ('parent', 'child', 'glossary_term') retain direction and
+    -- are unconstrained by this CHECK.
+    CHECK (
+        relationship_type NOT IN ('sibling', 'related', 'comparison')
+        OR from_topic_id < to_topic_id
+    ),
     -- Tenant-scoped FKs (ADR-018).
     FOREIGN KEY (from_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE,
     FOREIGN KEY (to_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE
