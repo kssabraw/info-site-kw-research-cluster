@@ -31,6 +31,32 @@ Specs come from running the phase against real data, not from
 speculation. If you haven't run it, don't write the spec — leave the
 OPEN block and let the next implementer do it.
 
+## Cross-cutting contracts every phase must honor
+
+These apply to every phase regardless of its individual spec.
+
+- **fetch vs derive (ADR-015):** every phase separates work that
+  costs money (`fetch`) from work that only reads existing rows
+  (`derive`). `--rederive` mode runs only the latter. Pure-fetch
+  phases raise `NotImplementedError` on `--rederive`; pure-derive
+  phases run normally.
+- **Per-batch commit on iteration (ADR-016):** any phase iterating
+  over external API calls commits per-batch (sizes in ADR-016).
+  Resume after partial failure via
+  `pipeline/utils/database.py::unprocessed_for_phase(site_id, phase_name)`,
+  which returns the rows still lacking this phase's output.
+- **CostTracker (ADR-014):** every API call charges the run's
+  CostTracker before issuing. `CostBudgetExceeded` is fatal to the
+  current run; partial batches remain committed.
+- **`@track_job` decorator (CLAUDE.md R4):** every `def run(...)` in
+  `pipeline/phases/` is decorated. The decorator owns the
+  `pipeline_jobs` lifecycle (status transitions, output_summary,
+  error capture).
+
+If you find yourself writing phase-specific logic for any of these,
+stop — promote the logic to the shared utility and call it from
+every phase.
+
 ---
 
 ## Phase 00: Concept Mapping

@@ -150,16 +150,38 @@ it as `--force`.
 
 ## Error Handling
 
-**OPEN** — answer alongside Phase Orchestration.
+**Partially specified (ADR-016):** phases iterating over external API
+calls commit per-batch and resume on re-run.
 
-1. Categories: recoverable (transient API failure), fatal (config
-   invalid), partial (some rows failed, others succeeded). How does
-   each propagate up to `pipeline_jobs.status`?
-2. Errors hitting `pipeline_jobs.error_message` are TEXT — truncate
-   or summarize long tracebacks? `error_traceback` is separate; what
-   goes where?
-3. Are errors raised, returned as result objects, or both? Pick one
-   convention and apply across all phases.
+- Batch sizes are per-phase (see ADR-016's table). Each batch:
+  fetch → validate → insert in a single transaction.
+- A re-run picks up only items lacking output, via a shared helper in
+  `pipeline/utils/database.py` (`unprocessed_for_phase(site_id,
+  phase_name)`).
+- A batch failure (API 5xx, validation, cost guardrail) records
+  batch boundaries in `pipeline_jobs.error_message` and exits
+  non-zero. Committed batches remain in Supabase.
+- `--force` deletes prior output before iterating, so resume-pickup
+  is bypassed when you genuinely want fresh API data.
+
+Pure-derive phases (03, 06, 10, 11) are not bound by this contract —
+they read existing rows and write computed outputs, typically in a
+single transaction.
+
+**OPEN** — remaining when error handling code is written.
+
+1. Error categories: recoverable (retry transient API failure) vs
+   fatal (config invalid, schema mismatch) vs partial (some batch
+   items succeeded). The batch model from ADR-016 covers partial;
+   the others still need a propagation policy to
+   `pipeline_jobs.status`.
+2. `pipeline_jobs.error_message` is TEXT — truncate or summarize
+   long tracebacks? `error_traceback` is the separate field for the
+   full trace. Pick a length cap for `error_message` (suggested:
+   first line + last paragraph of the traceback, ~1KB max).
+3. Errors raised vs returned — pick one. Suggested: raise inside the
+   phase, catch in `@track_job` decorator, which writes status and
+   re-raises.
 
 ---
 

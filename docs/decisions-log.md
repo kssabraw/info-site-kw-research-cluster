@@ -911,6 +911,90 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-016: Phases that iterate over external API calls commit per-batch; failures preserve progress
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** Phases like Phase 02 (SERP fetching) and Phase 09
+  (embeddings) iterate over thousands of items, each requiring a paid
+  API call. A naïve "batch transform, single insert" implementation
+  loses everything if the API returns a 5xx mid-iteration. With
+  `MAX_RUN_COST_USD` (ADR-014) enforcing a hard kill, mid-run aborts
+  are not hypothetical — they're a normal failure mode.
+
+  Combined with ADR-015's expectation that `--force` is the way to
+  re-fetch, the implication is: re-running after a mid-phase failure
+  must not re-fetch (and re-pay for) items that already succeeded.
+- **Decision:** Any phase that iterates over external API calls MUST
+  commit progress incrementally. The default unit is **per-batch**,
+  not per-item:
+
+  - **Per-batch commit:** group items into batches of N (typically
+    50–200, phase-specific). After each batch's API responses are
+    received, insert the resulting rows in a single transaction.
+    The next batch starts only after the previous one is committed.
+  - **Resumability:** on every iteration, the phase queries Supabase
+    for "items that don't already have output for this phase," and
+    only fetches those. A re-run after partial failure picks up
+    exactly where the previous run left off, without re-fetching
+    anything paid for.
+  - **The `--force` interaction:** `--force` explicitly deletes prior
+    output before iterating, so the resume-pickup behavior doesn't
+    apply (and the cost guardrail covers re-fetch budget).
+  - **Failure recording:** when a batch fails (API error, validation
+    error, cost guardrail trip), the phase records the failure in
+    `pipeline_jobs.error_message` with batch boundaries (e.g.,
+    "Phase 02: failed at batch 14 of 60, keywords 1301-1400") and
+    exits non-zero. The committed batches (1-13) remain in Supabase.
+
+  **Per-phase batch sizes** (initial values; refine with real
+  throughput data, new ADR if tuning):
+
+  | Phase | Batch size | Rationale |
+  |---|---|---|
+  | 01 Seed expansion | 1 seed per `keyword_ideas` call | DataForSEO endpoint is per-seed |
+  | 02 SERP fetching | 100 keywords | DataForSEO `serp/google/organic/task_post` supports bulk |
+  | 04 URL mining | 1 URL per `ranked_keywords` call | Endpoint is per-URL |
+  | 05 Domain mining | 1 domain per `keywords_for_site` call | Endpoint is per-domain |
+  | 07 Volume enrichment | 1000 keywords | `keyword_overview` is bulk-priced per 1K |
+  | 08 Intent classification | 50 keywords per Haiku call | Per-call prompt overhead |
+  | 09 Embedding generation | 100 keywords per OpenAI call | Embeddings endpoint supports bulk; 100 keeps payload small |
+
+  Phases that don't iterate over external APIs (Phase 03, 06, 10, 11)
+  may use single-transaction batch logic where it simplifies code.
+  This ADR's contract is specifically for phases with API-call
+  iteration.
+
+- **Consequences:**
+  - Mid-phase failures (network blip, 5xx, cost cap) become a recoverable
+    inconvenience instead of a budget catastrophe.
+  - Phase implementations gain a small structural requirement: a
+    per-batch loop with a Supabase-state-aware resume query. Pays
+    for itself the first time it prevents re-paying for SERPs.
+  - Database write load is moderately higher than a single bulk
+    insert (multiple transactions per phase), negligible at our
+    scale.
+  - The "resume query" pattern is shared across phases — should live
+    in `pipeline/utils/database.py` as `unprocessed_for_phase(site_id,
+    phase_name)` or similar, returning the ids that haven't yet been
+    processed.
+
+- **Alternatives considered:**
+  - Single-transaction per phase (the naïve default). Rejected: see
+    Context.
+  - Per-item commit (one transaction per API response). Rejected:
+    too chatty at scale; batches of 50–200 are a better balance
+    between failure granularity and write overhead.
+  - External job queue (Celery, RQ) with per-item retry. Rejected:
+    overkill for current scale, adds operational surface area that
+    PROJECT_BRIEF.md explicitly defers.
+
+- **Related:** [architecture.md → Error Handling](architecture.md#error-handling),
+  ADR-014 (CostTracker integration — failed batches still report
+  their cost), ADR-015 (resume + `--force` interaction).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:
