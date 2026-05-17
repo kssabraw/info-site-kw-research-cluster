@@ -106,13 +106,14 @@ cp config/sites/retatrutide.yaml config/sites/yoursite.yaml
 # Edit with your seeds, niche terms, etc.
 ```
 
-Register the site in the database:
+Register the site in the database (tables live in `kw_clustering` —
+see ADR-019):
 
 ```sql
-INSERT INTO sites (slug, domain, display_name, niche_description, config) 
+INSERT INTO kw_clustering.sites (slug, domain, display_name, niche_description, config)
 VALUES (
     'yoursite',
-    'yoursite.com', 
+    'yoursite.com',
     'Your Site Display Name',
     'Description of the niche',
     '{}'::jsonb
@@ -188,9 +189,9 @@ To launch keyword discovery for a new niche:
 1. **Create site config** at `config/sites/{newslug}.yaml`
    (use existing site config as template)
 
-2. **Register in database**:
+2. **Register in database** (tables live in `kw_clustering` — see ADR-019):
 ```sql
-   INSERT INTO sites (slug, domain, display_name, niche_description, config) 
+   INSERT INTO kw_clustering.sites (slug, domain, display_name, niche_description, config)
    VALUES (...);
 ```
 
@@ -216,10 +217,10 @@ uv run python -m pipeline.run --site yoursite --status
 ### Query pipeline_jobs directly
 
 ```sql
-SELECT phase, status, started_at, completed_at, 
+SELECT phase, status, started_at, completed_at,
        output_summary->>'keywords_discovered' as keywords
-FROM pipeline_jobs 
-WHERE site_id = (SELECT id FROM sites WHERE slug = 'yoursite')
+FROM kw_clustering.pipeline_jobs
+WHERE site_id = (SELECT id FROM kw_clustering.sites WHERE slug = 'yoursite')
 ORDER BY started_at DESC
 LIMIT 20;
 ```
@@ -227,11 +228,11 @@ LIMIT 20;
 ### View site stats
 
 ```sql
-SELECT 
-    (SELECT COUNT(*) FROM raw_keywords WHERE site_id = s.id) as keywords,
-    (SELECT COUNT(*) FROM clusters WHERE site_id = s.id) as clusters,
-    (SELECT COUNT(*) FROM topics WHERE site_id = s.id) as topics
-FROM sites s
+SELECT
+    (SELECT COUNT(*) FROM kw_clustering.raw_keywords WHERE site_id = s.id) as keywords,
+    (SELECT COUNT(*) FROM kw_clustering.clusters WHERE site_id = s.id) as clusters,
+    (SELECT COUNT(*) FROM kw_clustering.topics WHERE site_id = s.id) as topics
+FROM kw_clustering.sites s
 WHERE s.slug = 'yoursite';
 ```
 
