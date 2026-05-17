@@ -1083,6 +1083,123 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-018: Tenant-scoped composite FKs prevent cross-site data corruption; CHECK constraints prevent cluster self-merge
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** Adversarial review found two real cross-tenant bugs
+  the schema did not prevent:
+
+  - **C2:** Child tables with denormalized `site_id`
+    (`keyword_serps`, `keyword_embeddings`, `cluster_members`,
+    `topic_keywords`, `topic_dependencies`, `topic_relationships`,
+    plus self-references on `clusters`) had FKs referencing only
+    the parent's `id`. A row could claim `site_id = 2` while
+    pointing at a parent row owned by `site_id = 1`. Verified
+    empirically: `INSERT INTO keyword_serps (keyword_id=1, site_id=2, ...)`
+    succeeded against a `raw_keywords` row that had `site_id = 1`.
+  - **M1:** `clusters.merged_into_cluster_id` and
+    `split_from_cluster_id` accepted self-reference (cluster merges
+    into itself) AND cross-site reference (cluster in site 1 merges
+    into a cluster in site 2). Both verified empirically.
+
+  Once RLS policies are added (ADR-013), site 2 would be able to
+  read site 1's SERP rows via these mis-attributed children.
+
+- **Decision:**
+
+  **1. Parent tables get composite unique constraints.** Add
+  `UNIQUE (id, site_id)` to:
+
+  - `pipeline_jobs`
+  - `raw_keywords`
+  - `clusters`
+  - `topics`
+
+  `id` is already PRIMARY KEY (globally unique). The additional
+  composite uniqueness is what FK constraints need to reference the
+  `(id, site_id)` pair — see ADR text on Postgres FK targets.
+
+  **2. Child tables get tenant-scoped composite FKs.** Replace
+  every single-column FK to a parent that participates in
+  multi-tenancy with a composite FK pinning the parent's `site_id`
+  to the child's:
+
+  ```
+  -- Pattern:
+  FOREIGN KEY (child_parent_ref, site_id) REFERENCES parent (id, site_id) [ON DELETE ...]
+  ```
+
+  Applied to:
+
+  | Table | FK from | FK to |
+  |---|---|---|
+  | `keyword_serps` | `(keyword_id, site_id)` | `raw_keywords(id, site_id)` |
+  | `keyword_embeddings` | `(keyword_id, site_id)` | `raw_keywords(id, site_id)` |
+  | `cluster_members` | `(cluster_id, site_id)` | `clusters(id, site_id)` |
+  | `cluster_members` | `(keyword_id, site_id)` | `raw_keywords(id, site_id)` |
+  | `clusters` | `(merged_into_cluster_id, site_id)` | `clusters(id, site_id)` |
+  | `clusters` | `(split_from_cluster_id, site_id)` | `clusters(id, site_id)` |
+  | `clusters` | `(clustering_run_id, site_id)` | `pipeline_jobs(id, site_id)` |
+  | `topics` | `(source_cluster_id, site_id)` | `clusters(id, site_id)` |
+  | `topics` | `(parent_topic_id, site_id)` | `topics(id, site_id)` |
+  | `topic_keywords` | `(topic_id, site_id)` | `topics(id, site_id)` |
+  | `topic_keywords` | `(keyword_id, site_id)` | `raw_keywords(id, site_id)` |
+  | `topic_dependencies` | `(topic_id, site_id)` | `topics(id, site_id)` |
+  | `topic_dependencies` | `(depends_on_topic_id, site_id)` | `topics(id, site_id)` |
+  | `topic_relationships` | `(from_topic_id, site_id)` | `topics(id, site_id)` |
+  | `topic_relationships` | `(to_topic_id, site_id)` | `topics(id, site_id)` |
+
+  All preserve their prior `ON DELETE` semantics
+  (CASCADE / RESTRICT / no action).
+
+  **3. Cluster self-merge gets explicit CHECK constraints.**
+
+  ```sql
+  CHECK (merged_into_cluster_id IS NULL OR merged_into_cluster_id != id)
+  CHECK (split_from_cluster_id IS NULL OR split_from_cluster_id != id)
+  ```
+
+  Composite FK + same-table reference would allow a cluster to
+  merge into itself (`(merged_into_cluster_id=id, site_id=site_id)`
+  is a valid `(id, site_id)` in the same table). CHECKs close that
+  case.
+
+- **Consequences:**
+  - Multi-tenant data integrity is now enforced at the database
+    layer. RLS policy writers (ADR-013 trigger) can trust that the
+    denormalized `site_id` columns reflect the parent's `site_id`.
+  - Schema gains 4 `UNIQUE (id, site_id)` constraints and ~15 new
+    table-level FK declarations. Trivial overhead; small
+    write-amplification on the new unique indexes.
+  - Inline FK declarations on column lines are converted to
+    table-level FOREIGN KEY clauses. Cosmetic — schema files
+    slightly longer but more readable for composite cases.
+  - Future child tables added in new migrations must follow the
+    same pattern. Worth a note in `schema/migrations/README.md`.
+
+  Verified against Postgres: all four original failure modes
+  (cross-tenant SERP, cluster self-merge, cluster cross-site merge,
+  same-site merge) now behave as designed.
+
+- **Alternatives considered:**
+  - Triggers that validate `site_id` matches the parent's on every
+    INSERT/UPDATE. Rejected: harder to reason about, easy to miss
+    when adding new tables, slower than FK indexes.
+  - Drop denormalized `site_id` columns and join through parents.
+    Rejected: defeats the performance reason for denormalization
+    and complicates RLS policy queries.
+  - Wait until RLS policies are written. Rejected: RLS without
+    constrained denormalization is the bug (the policies trust the
+    denormalized column).
+
+- **Related:** ADR-013 (RLS deferred but trusts these constraints),
+  ADR-009 (`topic_dependencies` introduced the composite-FK pattern
+  for one table; this ADR generalizes it),
+  [database-schema.md](database-schema.md).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

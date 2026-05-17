@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
     output_summary JSONB,
     error_message TEXT,
     error_traceback TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Composite uniqueness for tenant-scoped FKs (ADR-018).
+    UNIQUE (id, site_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_site_phase ON pipeline_jobs(site_id, phase);
@@ -115,7 +117,9 @@ CREATE TABLE IF NOT EXISTS raw_keywords (
     relevance_score NUMERIC(3, 2),
     is_included BOOLEAN NOT NULL DEFAULT TRUE,
     exclusion_reason TEXT,
-    UNIQUE (site_id, keyword_normalized)
+    UNIQUE (site_id, keyword_normalized),
+    -- Composite uniqueness for tenant-scoped FKs (ADR-018).
+    UNIQUE (id, site_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_keywords_site ON raw_keywords(site_id);
@@ -127,7 +131,7 @@ CREATE INDEX IF NOT EXISTS idx_keywords_tier ON raw_keywords(site_id, tier);
 
 CREATE TABLE IF NOT EXISTS keyword_serps (
     id BIGSERIAL PRIMARY KEY,
-    keyword_id BIGINT NOT NULL REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    keyword_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 100),
     url TEXT NOT NULL,
@@ -136,7 +140,9 @@ CREATE TABLE IF NOT EXISTS keyword_serps (
     snippet TEXT,
     serp_features JSONB,
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (keyword_id, position)
+    UNIQUE (keyword_id, position),
+    -- Tenant-scoped FK: prevents cross-site keyword reference. ADR-018.
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_serps_keyword ON keyword_serps(keyword_id);
@@ -151,12 +157,14 @@ CREATE INDEX IF NOT EXISTS idx_serps_site_domain ON keyword_serps(site_id, domai
 -- Precision loss vs VECTOR is well below 1% on cosine similarity at 3072 dims.
 -- See docs/decisions-log.md ADR-003.
 CREATE TABLE IF NOT EXISTS keyword_embeddings (
-    keyword_id BIGINT PRIMARY KEY REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    keyword_id BIGINT PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     embedding HALFVEC(3072),
     model_version TEXT NOT NULL,
     enriched_text TEXT,
-    embedded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    embedded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Tenant-scoped FK: prevents cross-site keyword reference. ADR-018.
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_embeddings_site ON keyword_embeddings(site_id);
@@ -237,10 +245,19 @@ CREATE TABLE IF NOT EXISTS clusters (
     review_action TEXT,
     reviewed_at TIMESTAMPTZ,
     reviewer_notes TEXT,
-    merged_into_cluster_id BIGINT REFERENCES clusters(id),
-    split_from_cluster_id BIGINT REFERENCES clusters(id),
-    clustering_run_id BIGINT REFERENCES pipeline_jobs(id),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    merged_into_cluster_id BIGINT,
+    split_from_cluster_id BIGINT,
+    clustering_run_id BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Self-merge prevention (ADR-018).
+    CHECK (merged_into_cluster_id IS NULL OR merged_into_cluster_id != id),
+    CHECK (split_from_cluster_id IS NULL OR split_from_cluster_id != id),
+    -- Composite uniqueness for tenant-scoped FKs (ADR-018).
+    UNIQUE (id, site_id),
+    -- Tenant-scoped FKs: merges, splits, and run linkage stay in-site.
+    FOREIGN KEY (merged_into_cluster_id, site_id) REFERENCES clusters (id, site_id),
+    FOREIGN KEY (split_from_cluster_id, site_id) REFERENCES clusters (id, site_id),
+    FOREIGN KEY (clustering_run_id, site_id) REFERENCES pipeline_jobs (id, site_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_clusters_site ON clusters(site_id);
@@ -250,13 +267,16 @@ CREATE INDEX IF NOT EXISTS idx_clusters_confidence ON clusters(site_id, confiden
 CREATE INDEX IF NOT EXISTS idx_clusters_subfolder ON clusters(site_id, suggested_subfolder);
 
 CREATE TABLE IF NOT EXISTS cluster_members (
-    cluster_id BIGINT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
-    keyword_id BIGINT NOT NULL REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    cluster_id BIGINT NOT NULL,
+    keyword_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     similarity_score NUMERIC(4, 3),
     is_centroid BOOLEAN NOT NULL DEFAULT FALSE,
     added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (cluster_id, keyword_id)
+    PRIMARY KEY (cluster_id, keyword_id),
+    -- Tenant-scoped FKs (ADR-018).
+    FOREIGN KEY (cluster_id, site_id) REFERENCES clusters (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_cluster_members_cluster ON cluster_members(cluster_id);
@@ -266,7 +286,7 @@ CREATE INDEX IF NOT EXISTS idx_cluster_members_site ON cluster_members(site_id);
 CREATE TABLE IF NOT EXISTS topics (
     id BIGSERIAL PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-    source_cluster_id BIGINT REFERENCES clusters(id),
+    source_cluster_id BIGINT,
     primary_keyword TEXT NOT NULL,
     title TEXT,
     -- slug and subfolder formats per ADR-008: kebab-case lowercase,
@@ -283,7 +303,7 @@ CREATE TABLE IF NOT EXISTS topics (
     ymyl_risk TEXT CHECK (ymyl_risk IN ('low', 'medium', 'high')),
     regulatory_sensitivity TEXT CHECK (regulatory_sensitivity IN ('low', 'medium', 'high')),
     freshness_tier TEXT CHECK (freshness_tier IN ('evergreen', 'medium', 'high')),
-    parent_topic_id BIGINT REFERENCES topics(id),
+    parent_topic_id BIGINT,
     -- topic-to-topic dependency edges live in topic_dependencies; see ADR-009
     status TEXT NOT NULL DEFAULT 'planned'
         CHECK (status IN ('planned', 'queued', 'drafting', 'review', 'published', 'archived')),
@@ -293,7 +313,12 @@ CREATE TABLE IF NOT EXISTS topics (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Single UNIQUE on url_path; (site_id, slug, subfolder) is
     -- functionally identical since url_path is derived. See ADR-008.
-    UNIQUE (site_id, url_path)
+    UNIQUE (site_id, url_path),
+    -- Composite uniqueness for tenant-scoped FKs (ADR-018).
+    UNIQUE (id, site_id),
+    -- Tenant-scoped FKs (ADR-018).
+    FOREIGN KEY (source_cluster_id, site_id) REFERENCES clusters (id, site_id),
+    FOREIGN KEY (parent_topic_id, site_id) REFERENCES topics (id, site_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_topics_site ON topics(site_id);
@@ -303,13 +328,16 @@ CREATE INDEX IF NOT EXISTS idx_topics_status ON topics(site_id, status);
 CREATE INDEX IF NOT EXISTS idx_topics_parent ON topics(parent_topic_id);
 
 CREATE TABLE IF NOT EXISTS topic_keywords (
-    topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
-    keyword_id BIGINT NOT NULL REFERENCES raw_keywords(id) ON DELETE CASCADE,
+    topic_id BIGINT NOT NULL,
+    keyword_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('primary', 'secondary', 'supporting', 'faq')),
     suggested_heading TEXT,
     added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (topic_id, keyword_id)
+    PRIMARY KEY (topic_id, keyword_id),
+    -- Tenant-scoped FKs (ADR-018).
+    FOREIGN KEY (topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (keyword_id, site_id) REFERENCES raw_keywords (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_topic_keywords_topic ON topic_keywords(topic_id);
@@ -321,12 +349,16 @@ CREATE INDEX IF NOT EXISTS idx_topic_keywords_site ON topic_keywords(site_id);
 -- topics.depends_on_topic_ids BIGINT[] which had no referential
 -- integrity. See ADR-009.
 CREATE TABLE IF NOT EXISTS topic_dependencies (
-    topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
-    depends_on_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE RESTRICT,
+    topic_id BIGINT NOT NULL,
+    depends_on_topic_id BIGINT NOT NULL,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (topic_id, depends_on_topic_id),
-    CHECK (topic_id != depends_on_topic_id)
+    CHECK (topic_id != depends_on_topic_id),
+    -- Tenant-scoped FKs (ADR-018). RESTRICT on depends_on side preserves
+    -- the dependency-graph integrity rule from ADR-009.
+    FOREIGN KEY (topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_topic_deps_topic ON topic_dependencies(topic_id);
@@ -336,13 +368,16 @@ CREATE INDEX IF NOT EXISTS idx_topic_deps_site ON topic_dependencies(site_id);
 CREATE TABLE IF NOT EXISTS topic_relationships (
     id BIGSERIAL PRIMARY KEY,
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-    from_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
-    to_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    from_topic_id BIGINT NOT NULL,
+    to_topic_id BIGINT NOT NULL,
     relationship_type TEXT NOT NULL
         CHECK (relationship_type IN ('parent', 'child', 'sibling', 'related', 'comparison', 'glossary_term')),
     strength NUMERIC(3, 2),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (from_topic_id, to_topic_id, relationship_type)
+    UNIQUE (from_topic_id, to_topic_id, relationship_type),
+    -- Tenant-scoped FKs (ADR-018).
+    FOREIGN KEY (from_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE,
+    FOREIGN KEY (to_topic_id, site_id) REFERENCES topics (id, site_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_topic_rels_from ON topic_relationships(from_topic_id);
