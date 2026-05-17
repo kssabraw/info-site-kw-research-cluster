@@ -822,6 +822,95 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-015: Phases split work into `fetch` and `derive` steps; add `--rederive` to re-run only the derived part
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** `--force` was the only re-run modifier. That's a
+  blunt instrument: changing `discovery.semantic_relevance_threshold`
+  from 0.65 to 0.70 and re-running Phase 06 with `--force` would
+  re-fetch DataForSEO data we already have, paying for it again. The
+  predictable response when this becomes painful is a one-off
+  debugging script that bypasses the pipeline conventions — exactly
+  the failure mode ADR-012 (convention enforcement) was added to
+  prevent.
+- **Decision:** Every phase splits its work conceptually into two
+  steps, even when implemented as a single function:
+
+  - **fetch:** any work that costs money or hits an external API.
+    Examples: DataForSEO keyword_ideas (Phase 01), SERP fetching
+    (Phase 02), URL/domain mining (Phase 04/05), volume enrichment
+    (Phase 07), intent classification (Phase 08), embedding
+    generation (Phase 09).
+  - **derive:** work that only reads existing rows and writes
+    computed results back. Examples: Phase 03 (URL/domain frequency
+    aggregation from existing SERPs), Phase 06 (relevance filtering
+    from existing keywords and the niche embedding), Phase 10
+    (HDBSCAN clustering from existing embeddings), Phase 11 (SERP
+    overlap refinement from existing SERPs + clusters).
+
+  Phases that are pure derive (03, 06, 10, 11) have no fetch step.
+  Phases that are pure fetch (01, 02, 04, 05, 07, 08, 09) typically
+  still have small derive sub-steps (e.g., Phase 07 reconciling
+  Phase 01 volumes with Phase 07 volumes is the derive sub-step
+  of Phase 07).
+
+  **Re-run flag semantics:**
+
+  - `--force`: re-runs everything. Equivalent to "DELETE this site's
+    phase output, then run." Costs API budget on every fetch step.
+  - `--rederive`: skips all fetch steps; runs only derive steps,
+    reading existing rows. Costs zero API budget. The default re-run
+    mode after a config-only change (filter threshold, cluster
+    parameter, intent taxonomy).
+  - `--from-phase NN` / `--to-phase NN`: range, applied to either
+    `--force` or `--rederive`.
+  - No-flag re-run: phases that detect their output already exists
+    skip and log "already complete." This is the idempotency default;
+    use it for resuming.
+
+  **Phase implementation contract:**
+
+  Every phase function MUST be structured so that `--rederive`
+  works without API calls. Concretely: the phase's `run(site_id,
+  mode=...)` checks `mode == 'rederive'` and short-circuits the
+  fetch steps, reading existing rows from Supabase instead. A phase
+  that can't honor `--rederive` (because it has no derive output to
+  recompute) raises `NotImplementedError("phase NN is fetch-only;
+  --rederive is a no-op here")` rather than silently treating
+  `--rederive` as `--force`.
+
+- **Consequences:**
+  - Iterating on filter thresholds, clustering params, or intent
+    taxonomies is now cheap (zero API cost) and consistent across
+    phases.
+  - Phase implementation gains a small structural requirement
+    (separate fetch/derive logic) — paid once, benefits forever.
+  - The `--force` flag is preserved for the case where you genuinely
+    want fresh API data (e.g., SERP volatility, model version
+    upgrade).
+  - The `pipeline_jobs.config_snapshot` mechanism (ADR-010) plus
+    `--rederive` is the path to fully reproducible re-clustering
+    runs without paying twice.
+
+- **Alternatives considered:**
+  - Per-phase env vars to skip API calls. Rejected: scattered config,
+    no consistency across phases.
+  - A `--cached` flag instead of `--rederive`. Rejected: "cached"
+    suggests we're reading from a separate cache; `--rederive`
+    accurately describes "read existing DB rows, recompute derived
+    output."
+  - Auto-detect whether to re-fetch based on input/output age.
+    Rejected: requires staleness logic per phase, hidden behavior
+    that's hard to reason about during iteration.
+
+- **Related:** [architecture.md → Phase Orchestration](architecture.md#phase-orchestration),
+  [pipeline-phases.md](pipeline-phases.md), ADR-014 (CostTracker —
+  `--rederive` runs should report `total = 0` to confirm no API
+  calls were made).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

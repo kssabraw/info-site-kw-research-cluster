@@ -118,16 +118,33 @@ placeholders accumulate; checklists either get ticked or get noticed.
 
 ## Phase Orchestration
 
-**OPEN** — answer when `pipeline/run.py` is written.
+**Partially specified (ADR-015):** re-run flag semantics are pinned
+down.
 
-1. `@track_job` decorator: what's its signature and what does it wrap?
+- `--force`: re-runs all steps including fetch. Costs API budget.
+- `--rederive`: re-runs derive steps only. Reads existing Supabase
+  rows; zero API cost. Default mode for iterating on config-only
+  changes (filter thresholds, clustering params, intent taxonomies).
+- `--from-phase NN` / `--to-phase NN`: range modifier on either of
+  the above.
+- No flag: phases that detect their output already exists skip and
+  log "already complete" (idempotency default; use for resuming).
+
+Phase functions must structurally separate "fetch" work (API calls,
+external state) from "derive" work (DB reads + computed writes) so
+`--rederive` is meaningful. A phase that is pure fetch raises
+`NotImplementedError` on `--rederive` rather than silently treating
+it as `--force`.
+
+**OPEN** — remaining when `pipeline/run.py` is written.
+
+1. `@track_job` decorator: signature and wrapping behavior.
    (CLAUDE.md mandates its use but no implementation exists yet.)
 2. How are phase dependencies declared — a static graph, runtime
    checks against `pipeline_jobs`, or implicit through CLI ordering?
-3. `--force` is the only re-run modifier (see prior review). Add
-   partial re-run flags? Defer? Decide here.
-4. How does the runner detect mid-phase failures and recover? Per-row
-   commit pattern, or restart-from-scratch with idempotent inserts?
+3. How does the runner detect mid-phase failures and recover? See the
+   Error Handling section — per-item commit is now mandated by
+   ADR-016.
 
 ---
 
