@@ -445,11 +445,11 @@ CREATE TABLE topics (
     site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     source_cluster_id BIGINT REFERENCES clusters(id),
     
-    -- Topic identity
+    -- Topic identity. slug and subfolder formats per ADR-008.
     primary_keyword TEXT NOT NULL,
     title TEXT,
-    slug TEXT NOT NULL,
-    subfolder TEXT NOT NULL,
+    slug TEXT NOT NULL CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
+    subfolder TEXT NOT NULL CHECK (subfolder ~ '^/([a-z0-9-]+/)+$'),
     url_path TEXT GENERATED ALWAYS AS (subfolder || slug || '/') STORED,
     
     -- Classification
@@ -483,8 +483,9 @@ CREATE TABLE topics (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     
-    UNIQUE (site_id, url_path),
-    UNIQUE (site_id, slug, subfolder)
+    -- Single UNIQUE on url_path; (site_id, slug, subfolder) is
+    -- functionally identical since url_path is derived. See ADR-008.
+    UNIQUE (site_id, url_path)
 );
 
 CREATE INDEX idx_topics_site ON topics(site_id);
@@ -495,7 +496,10 @@ CREATE INDEX idx_topics_parent ON topics(parent_topic_id);
 ```
 
 **Design notes:**
-- `url_path` is generated from `subfolder` + `slug` for consistency
+- `url_path` is generated from `subfolder` + `slug`. The CHECK
+  constraints on `slug` and `subfolder` (per ADR-008) prevent
+  malformed paths like `/guideshow-to/` (missing slash) or `/guides//`
+  (empty slug).
 - `pillar_level` determines content depth: root = homepage tier,
   pillar = major section overview, sub_pillar = topic cluster overview,
   leaf = individual article

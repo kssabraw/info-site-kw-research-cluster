@@ -263,8 +263,10 @@ CREATE TABLE IF NOT EXISTS topics (
     source_cluster_id BIGINT REFERENCES clusters(id),
     primary_keyword TEXT NOT NULL,
     title TEXT,
-    slug TEXT NOT NULL,
-    subfolder TEXT NOT NULL,
+    -- slug and subfolder formats per ADR-008: kebab-case lowercase,
+    -- subfolder starts and ends with '/'.
+    slug TEXT NOT NULL CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
+    subfolder TEXT NOT NULL CHECK (subfolder ~ '^/([a-z0-9-]+/)+$'),
     url_path TEXT GENERATED ALWAYS AS (subfolder || slug || '/') STORED,
     intent TEXT NOT NULL,
     pillar_level TEXT NOT NULL
@@ -283,8 +285,9 @@ CREATE TABLE IF NOT EXISTS topics (
     keyword_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (site_id, url_path),
-    UNIQUE (site_id, slug, subfolder)
+    -- Single UNIQUE on url_path; (site_id, slug, subfolder) is
+    -- functionally identical since url_path is derived. See ADR-008.
+    UNIQUE (site_id, url_path)
 );
 
 CREATE INDEX IF NOT EXISTS idx_topics_site ON topics(site_id);

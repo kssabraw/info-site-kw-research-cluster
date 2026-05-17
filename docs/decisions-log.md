@@ -357,6 +357,61 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-008: Enforce `topics.subfolder` and `topics.slug` formats via CHECK; drop redundant UNIQUE
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** `topics.url_path` is a STORED GENERATED column:
+  `subfolder || slug || '/'`. Nothing validated the inputs.
+  Empirically verified that the schema accepted:
+  - `subfolder='/guides'` (no trailing slash) + `slug='how-to'` →
+    `url_path = '/guideshow-to/'`
+  - `subfolder=''` + `slug='kw'` → `url_path = 'kw/'`
+  - `subfolder='/guides/'` + `slug=''` → `url_path = '/guides//'`
+
+  Each is a malformed URL that downstream article generation would
+  consume blindly. Additionally, the table had both
+  `UNIQUE (site_id, url_path)` and `UNIQUE (site_id, slug, subfolder)`,
+  which constrain the same set of values (url_path is derived from the
+  inputs). One was a redundant index paying write cost for no
+  benefit.
+
+- **Decision:**
+
+  1. Add CHECK constraints on the inputs:
+     - `subfolder ~ '^/([a-z0-9-]+/)+$'` — must start and end with `/`,
+       segments are kebab-case lowercase alphanumerics with hyphens.
+       Examples that pass: `/get/cost/`, `/guides/`. Fail:
+       `/guides`, `guides/`, `/Get/Cost/`, `//`, `/get_cost/`.
+     - `slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'` — kebab-case, no leading
+       or trailing hyphen, never empty. Examples that pass:
+       `retatrutide-side-effects`, `dose-2-5mg`. Fail: empty,
+       `-foo`, `foo-`, `Foo-Bar`, `foo--bar`.
+
+  2. Drop `UNIQUE (site_id, slug, subfolder)` — it is functionally
+     identical to `UNIQUE (site_id, url_path)`.
+
+- **Consequences:**
+  - Malformed URL paths are rejected at insert time, surfacing
+    convention bugs in whichever phase wrote them.
+  - One fewer composite index on `topics`, saving write throughput
+    and storage.
+  - Sites whose folder taxonomies don't fit kebab-case (e.g., a niche
+    that wants underscores or non-ASCII paths) need a new ADR to
+    relax these regexes. Acceptable: SEO-conventional URL paths
+    are kebab-case lowercase by default.
+- **Alternatives considered:**
+  - Normalize subfolder/slug at write time instead of checking.
+    Rejected: the CHECK approach surfaces bugs at the source rather
+    than silently fixing up bad inputs.
+  - Make `url_path` the only constrained column with a CHECK on its
+    final shape. Rejected: input checks give better error messages
+    ("subfolder missing trailing slash") than output checks ("url_path
+    fails regex").
+- **Related:** [database-schema.md → topics](database-schema.md#topics).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:
