@@ -13,7 +13,12 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
--- Extensions
+-- Schema isolation: all pipeline tables live in `kw_clustering` so they
+-- don't share namespace with other applications. See ADR-019.
+CREATE SCHEMA IF NOT EXISTS kw_clustering;
+SET search_path TO kw_clustering, public, extensions;
+
+-- Extensions (pgvector typically installed in `public` on Supabase)
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================================

@@ -55,6 +55,10 @@ cp .env.example .env
 
 In the Supabase SQL editor, run `schema/schema.sql`:
 
+All pipeline tables live in a dedicated `kw_clustering` schema (not
+`public`) — see `docs/decisions-log.md` ADR-019. The schema script
+creates it for you; you don't need to pre-create anything.
+
 ```bash
 # Option A: Copy/paste into Supabase SQL editor
 
@@ -67,21 +71,31 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/schema.sql
 Verify deployment:
 
 ```sql
--- Should list 15 tables
+-- Should list 15 tables, all in the kw_clustering schema
 SELECT table_name FROM information_schema.tables
-WHERE table_schema = 'public'
+WHERE table_schema = 'kw_clustering'
 ORDER BY table_name;
 
--- Should return one row: idx_embeddings_hnsw
-SELECT indexname FROM pg_indexes
-WHERE schemaname = 'public'
-  AND indexname = 'idx_embeddings_hnsw';
+-- Should return one row: idx_embeddings_hnsw (in kw_clustering)
+SELECT schemaname || '.' || indexname FROM pg_indexes
+WHERE indexname = 'idx_embeddings_hnsw';
 ```
 
 If the HNSW index row is missing, the deploy failed silently on
 `keyword_embeddings` (likely a pgvector version mismatch — `HALFVEC`
 requires pgvector ≥ 0.7.0). Re-run with `ON_ERROR_STOP=1` to surface
 the error.
+
+**Ad-hoc queries in Supabase Studio or psql** must set the search_path
+first, otherwise unqualified table names won't resolve:
+
+```sql
+SET search_path TO kw_clustering, public, extensions;
+SELECT * FROM sites;
+```
+
+Pipeline code does this automatically on every connection (see
+`pipeline/utils/database.py`).
 
 ### 4. Configure your first site
 

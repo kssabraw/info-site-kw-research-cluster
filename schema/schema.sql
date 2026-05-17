@@ -16,7 +16,19 @@
 
 \set ON_ERROR_STOP on
 
--- Extensions
+-- Schema isolation: all pipeline tables live in `kw_clustering` so they
+-- don't share namespace with other applications sitting in `public`.
+-- See docs/decisions-log.md ADR-019.
+CREATE SCHEMA IF NOT EXISTS kw_clustering;
+
+-- search_path resolution order: new tables and unqualified type refs
+-- (HALFVEC, vector ops) resolve against this list left-to-right. We
+-- need `public` (or wherever pgvector is installed) and `extensions`
+-- (Supabase convention) in the path so HALFVEC and halfvec_cosine_ops
+-- resolve without explicit schema qualification.
+SET search_path TO kw_clustering, public, extensions;
+
+-- Extensions (pgvector typically installed in `public` on Supabase)
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================================

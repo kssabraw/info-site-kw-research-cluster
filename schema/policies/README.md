@@ -63,3 +63,19 @@ schema/policies/
 Policy SQL files follow the same naming convention as
 `schema/migrations/`, and ARE migrations — they must be applied in
 order and committed alongside the schema change that necessitates them.
+
+## Schema namespace
+
+Per ADR-019, all pipeline tables live in `kw_clustering`. Policy SQL
+must qualify targets explicitly:
+
+```sql
+CREATE POLICY site_owner_read ON kw_clustering.raw_keywords
+    FOR SELECT TO authenticated
+    USING (site_id IN (SELECT site_id FROM kw_clustering.site_users
+                       WHERE user_id = auth.uid()));
+```
+
+Don't rely on `search_path` inside policy definitions — explicit
+qualification prevents accidents if the search_path of the executing
+session differs.

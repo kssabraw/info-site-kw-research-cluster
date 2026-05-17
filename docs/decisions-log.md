@@ -1200,6 +1200,73 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-019: Pipeline tables live in a dedicated `kw_clustering` schema, not `public`
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** The retatrutide pipeline is deploying into the
+  existing `AR-Internal-Tools` Supabase project (Postgres 15.8 +
+  pgvector 0.8.0) rather than a dedicated project — cost decision.
+  That project already has 9 tables in `public` for an unrelated
+  application (`profiles`, `clients`, `runs`, `module_outputs`, etc.).
+  Adding our 15 tables to the same schema works but creates schema
+  sprawl: 24 tables in `public`, operators of the existing app see
+  our keyword-pipeline tables in their queries, and namespace
+  collisions become a real risk as both apps grow.
+- **Decision:** All pipeline tables live in a dedicated
+  `kw_clustering` schema. Migration `0001` starts with:
+
+  ```sql
+  CREATE SCHEMA IF NOT EXISTS kw_clustering;
+  SET search_path TO kw_clustering, public, extensions;
+  ```
+
+  Reasoning for the `search_path` order:
+  - `kw_clustering` first so unqualified DDL (`CREATE TABLE sites ...`)
+    lands in the pipeline schema.
+  - `public` second so `HALFVEC` (pgvector type) and
+    `halfvec_cosine_ops` (HNSW operator class) resolve without
+    qualification — pgvector installs into `public` on Supabase.
+  - `extensions` last so Supabase's vault/jwt/etc. types are
+    reachable if needed.
+
+  Pipeline code (when written) must `SET search_path` on every
+  connection — the obvious place is `pipeline/utils/database.py` at
+  connection setup. CLI psql users must do it manually (or pass
+  `-c "SET search_path TO kw_clustering, public, extensions"`).
+
+- **Consequences:**
+  - Clean isolation from the existing AR-Internal-Tools workload.
+    Operators can grant/revoke privileges per schema. Dropping
+    everything pipeline-related is a single `DROP SCHEMA
+    kw_clustering CASCADE`.
+  - Pipeline connections gain one extra SET statement at startup.
+    Negligible cost; one line in the connection wrapper.
+  - Future `schema/policies/` work (ADR-013) must qualify policy
+    targets with `kw_clustering.` or rely on `search_path` —
+    policies should use explicit qualification for safety.
+  - Anyone running ad-hoc SQL in Supabase Studio against this
+    project must either prefix table names or set search_path in
+    their session. Trivial in practice but worth documenting in
+    README.
+
+- **Alternatives considered:**
+  - Deploy to `public` alongside the existing tables. Rejected:
+    namespace sprawl, no isolation, collision risk as both apps
+    add tables.
+  - Create a new Supabase project. Rejected: cost (this is the
+    user's explicit constraint).
+  - Use Supabase Branches feature. Rejected: branches are for
+    preview-deploy workflows, not long-running namespace isolation
+    inside one production project.
+
+- **Related:** [schema/schema.sql](../schema/schema.sql) (canonical),
+  [schema/migrations/0001_initial_schema.sql](../schema/migrations/0001_initial_schema.sql),
+  ADR-013 (RLS policy work must qualify with `kw_clustering.`),
+  the AR-Internal-Tools Supabase project (`wvcthtmmcmhkybcesirb`).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

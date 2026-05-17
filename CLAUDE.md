@@ -18,6 +18,7 @@ Update the checklist below as work progresses. Active site at top.
 
 Phase progress:
 - [x] Project scaffold and database schema
+- [x] Schema deployed to Supabase (`kw_clustering` schema in AR-Internal-Tools, retatrutide site registered with id=1)
 - [ ] Phase 00: Concept mapping
 - [ ] Phase 01: Seed expansion
 - [ ] Phase 02: SERP fetching
@@ -154,6 +155,17 @@ clustering-tool/
 │   └── schema.sql                  # Supabase schema DDL
 └── output/                         # Local exports (Google Sheets CSVs, etc)
 ```
+
+## Deployment target
+
+The schema is deployed to the **AR-Internal-Tools** Supabase project
+(`wvcthtmmcmhkybcesirb`, Postgres 15.8 + pgvector 0.8.0), in the
+**`kw_clustering`** schema. See `docs/decisions-log.md` ADR-019 for
+why a dedicated schema rather than `public`.
+
+Pipeline connections must `SET search_path TO kw_clustering, public,
+extensions` before issuing queries — `pipeline/utils/database.py` (when
+written) is the canonical place for this.
 
 ## How to Run
 

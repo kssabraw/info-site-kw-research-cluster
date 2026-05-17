@@ -55,6 +55,17 @@ COMMIT;
 and "succeeds" with a partial schema. (This is exactly how the original
 HNSW-on-3072 bug almost shipped.)
 
+**Schema namespace.** All pipeline tables live in `kw_clustering`,
+not `public` (ADR-019). Every migration must include:
+
+```sql
+SET search_path TO kw_clustering, public, extensions;
+```
+
+near the top, AFTER any `CREATE SCHEMA IF NOT EXISTS kw_clustering`
+if a future migration introduces new schemas. Without it, new objects
+land in `public` and break the isolation.
+
 ## Running migrations
 
 There is no migration runner yet. For now:
