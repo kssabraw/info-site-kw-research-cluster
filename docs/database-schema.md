@@ -383,8 +383,12 @@ CREATE INDEX idx_clusters_subfolder ON clusters(site_id, suggested_subfolder);
 ```
 
 **Design notes:**
-- `confidence_score` 0-1 based on intra-cluster similarity and intent
-  agreement; threshold for auto-approval comes from site config
+- `confidence_score` is defined by a fixed formula in
+  [decisions-log.md ADR-004](decisions-log.md#adr-004-define-clustersconfidence_score-as-a-weighted-sum-of-three-signals):
+  `0.50 * intra_similarity + 0.30 * intent_agreement + 0.20 * serp_overlap`.
+  Single-member clusters store `NULL` and are always routed to human review.
+  Phase 10 is the only writer of this column; downstream code must not
+  recompute it inline.
 - `review_status` transitions: pending → approved/rejected, or
   pending → merged/split (which creates child clusters)
 - `clustering_run_id` enables comparing different clustering runs

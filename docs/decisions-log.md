@@ -120,6 +120,69 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-004: Define `clusters.confidence_score` as a weighted sum of three signals
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** `clusters.confidence_score` (NUMERIC(3,2), range 0–1) drives
+  `confidence_auto_approve_threshold` in site YAML — clusters above the
+  threshold skip human review. The schema reserved the field but no
+  formula was specified, leaving the auto-approval decision implementation-
+  defined. For YMYL niches like retatrutide this is a real risk: a cluster
+  could skip review based on whatever number Phase 10 happens to produce.
+- **Decision:** Define `confidence_score` as the weighted sum:
+
+  ```
+  confidence_score =
+      0.50 * intra_similarity      # how tight the cluster is
+    + 0.30 * intent_agreement      # how confident intent classification was
+    + 0.20 * serp_overlap          # whether members share SERP territory
+  ```
+
+  Where each component is normalized to [0, 1]:
+
+  - `intra_similarity` = mean pairwise cosine similarity of member
+    embeddings, clipped to [0, 1]. (Cosine on normalized embeddings is
+    in [-1, 1]; we clip negatives to 0 since negative similarity inside
+    a cluster signals a clustering failure, not a low confidence.)
+  - `intent_agreement` = mean of `raw_keywords.intent_confidence` across
+    cluster members. Already in [0, 1].
+  - `serp_overlap` = mean pairwise Jaccard of the top-10 SERP URL sets
+    across cluster members.
+
+  Fallback: if no SERPs are available for cluster members (e.g.,
+  Phase 02 was skipped or this cluster's keywords are below the SERP
+  fetch volume cutoff), drop the serp_overlap term and renormalize to:
+
+  ```
+  confidence_score =
+      0.625 * intra_similarity
+    + 0.375 * intent_agreement
+  ```
+
+  Single-member clusters get `confidence_score = NULL` (not a synthetic
+  high value) and are always routed to human review regardless of the
+  auto-approve threshold.
+- **Consequences:**
+  - Auto-approval is now defined by a single formula across all phase
+    implementations and re-runs — `pipeline_jobs.config_snapshot` plus
+    the formula in this ADR is sufficient to reproduce the score.
+  - The 0.50/0.30/0.20 weights are a starting point. Tuning them is a
+    parameter change and should be a new ADR (don't edit this one).
+  - NULL confidence on single-member clusters means the auto-approve
+    threshold cannot accidentally approve a cluster of one keyword.
+- **Alternatives considered:**
+  - Use intra_similarity alone (simplest, but ignores intent agreement
+    which catches misclassified-keyword pollution).
+  - Use a learned model (premature — no training data and no labels).
+  - Multiplicative combination of the three signals (rejected: a single
+    weak signal would dominate; additive with explicit weights is
+    easier to reason about and tune).
+- **Related:** [pipeline-phases.md → Phase 10](pipeline-phases.md#phase-10-hdbscan-clustering),
+  [database-schema.md → clusters](database-schema.md#clusters).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

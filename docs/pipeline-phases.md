@@ -109,10 +109,80 @@ OpenAI text-embedding-3-large with enriched input text.
 
 ## Phase 10: HDBSCAN Clustering
 
-*To be documented when implemented.*
-
 **Purpose:** Cluster keywords using HDBSCAN within each intent bucket
 separately. Produce initial cluster set with confidence scores.
+
+**Inputs:**
+- `raw_keywords` filtered to `is_included = TRUE`, grouped by `primary_intent`.
+- `keyword_embeddings.embedding` (3072-dim halfvec).
+- `keyword_serps` for the SERP-overlap component of confidence (optional;
+  if missing, the fallback formula is used).
+- Config: `clustering.min_cluster_size`, `clustering.min_samples`,
+  `clustering.cluster_selection_epsilon`.
+
+**Process:**
+1. For each intent bucket independently:
+   1. Pull the intent's keywords and their embeddings.
+   2. Run HDBSCAN with the config parameters.
+   3. Keywords labeled `-1` (noise) become single-member clusters with
+      `confidence_score = NULL` so they show up in human review.
+   4. For each cluster (multi-member), compute the three confidence
+      components and the weighted sum per ADR-004.
+2. Insert into `clusters` and `cluster_members`. Set
+   `clusters.clustering_run_id` to the current `pipeline_jobs.id`.
+3. Mark every cluster in `require_human_review_intents` (from YAML) as
+   `review_status = 'pending'` regardless of confidence.
+
+**Outputs:**
+- `clusters` (one row per cluster, plus single-member rows for noise).
+- `cluster_members` (junction rows, one per member with
+  `similarity_score` = cosine distance from cluster centroid,
+  `is_centroid` for the closest member).
+- `pipeline_jobs.output_summary` includes per-intent cluster counts and
+  noise rate.
+
+**Confidence score formula (canonical source: ADR-004):**
+
+```
+confidence_score = 0.50 * intra_similarity
+                 + 0.30 * intent_agreement
+                 + 0.20 * serp_overlap
+```
+
+Components:
+
+- `intra_similarity`: mean pairwise cosine similarity of member
+  embeddings, clipped to [0, 1].
+- `intent_agreement`: mean of `raw_keywords.intent_confidence` for
+  members.
+- `serp_overlap`: mean pairwise Jaccard of top-10 SERP URL sets for
+  members.
+
+Fallback (no SERPs available for members):
+
+```
+confidence_score = 0.625 * intra_similarity + 0.375 * intent_agreement
+```
+
+Single-member clusters: `confidence_score = NULL`. These always go to
+human review.
+
+**Failure modes:**
+- HDBSCAN dumps everything to noise (`-1`): cluster count is 0 for that
+  intent bucket; all keywords become single-member clusters. Surface
+  the noise rate in `output_summary` so review effort is predictable.
+- Embedding model version drift across runs: members of the same
+  cluster may have been embedded by different model versions if
+  Phase 09 was re-run with a new model. Phase 10 must refuse to cluster
+  members that don't share `keyword_embeddings.model_version` — fail
+  fast rather than silently mixing.
+
+**Idempotency:** Re-running deletes prior clusters and members for the
+current site (cascading from `clusters`), then re-inserts. Approved
+topics in the `topics` table are not affected (topics keep their own
+keyword bundles via `topic_keywords`).
+
+**Configuration:** `clustering.*` block in site YAML.
 
 ---
 
