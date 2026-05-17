@@ -17,7 +17,7 @@ Update the checklist below as work progresses. Active site at top.
 ### Active Site: retatrutide
 
 Phase progress:
-- [ ] Project scaffold and database schema
+- [x] Project scaffold and database schema
 - [ ] Phase 00: Concept mapping
 - [ ] Phase 01: Seed expansion
 - [ ] Phase 02: SERP fetching
@@ -231,3 +231,29 @@ Before ending a Claude Code session:
 3. Update `docs/pipeline-phases.md` for any phases implemented or modified
 4. Commit changes with a clear message
 5. Note any open questions or blockers in a session summary
+
+## Phase Completion Contract
+
+A pipeline phase is not "done" — and its checkbox above must not be
+ticked — until **all three** of the following are true in the same
+commit:
+
+1. The status checkbox in this file is ticked.
+2. The corresponding `docs/pipeline-phases.md` **OPEN** block is
+   replaced with a **Specified** entry covering Purpose, Inputs,
+   Process, Outputs, Expected cost, Expected runtime, Failure modes,
+   Idempotency, and Configuration.
+3. Any new design decisions made while implementing the phase are
+   captured as ADRs in `docs/decisions-log.md` and linked from the
+   spec.
+
+Reviewers (human or Claude) should reject any commit that ticks a
+checkbox without also satisfying (2) and (3). The `**OPEN**` marker
+exists precisely to make incomplete specs visually conspicuous — it is
+not a stable state.
+
+Equivalent rule for `docs/architecture.md`: the **OPEN** sections
+there are unanswered questions tied to specific code modules (e.g.,
+`pipeline/utils/database.py`, `pipeline/utils/config.py`). The first
+commit that creates one of those modules must resolve the
+corresponding **OPEN** section in the same commit.

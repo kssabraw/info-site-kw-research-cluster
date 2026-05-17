@@ -1,109 +1,238 @@
 # Pipeline Phases
 
-Detailed specifications for each phase of the keyword discovery and
-clustering pipeline. This document is populated as each phase is
-implemented during the build.
+Per-phase specifications. This document is the canonical contract
+between phases — what each one reads, writes, and assumes.
 
-For each phase, document:
-- **Purpose** — what the phase accomplishes
-- **Inputs** — Supabase tables read from, config sections consumed
-- **Process** — high-level steps in order
-- **Outputs** — Supabase tables written to
-- **Expected cost** — typical API costs per run
+## How to read this doc
+
+Each phase below is either:
+
+- **Specified** — every section below is filled in. Treat as current
+  truth for downstream phases.
+- **OPEN** — a short list of unanswered questions the first
+  implementing commit must replace. The presence of OPEN means the
+  contract for that phase is not yet pinned and downstream phases
+  cannot rely on its outputs.
+
+When implementing a phase, replace its OPEN block with a fully filled
+**Specified** entry covering:
+
+- **Purpose** — what the phase accomplishes (one paragraph)
+- **Inputs** — Supabase tables read, config keys consumed
+- **Process** — numbered steps
+- **Outputs** — Supabase tables written, `pipeline_jobs.output_summary` keys
+- **Expected cost** — typical API spend per run
 - **Expected runtime** — typical wall-clock duration
-- **Failure modes** — common failure cases and how they're handled
-- **Idempotency behavior** — what happens on re-run
-- **Configuration** — which YAML config values control behavior
+- **Failure modes** — known failure categories and handling
+- **Idempotency** — what `--force` re-run does
+- **Configuration** — YAML keys that control behavior
+
+Specs come from running the phase against real data, not from
+speculation. If you haven't run it, don't write the spec — leave the
+OPEN block and let the next implementer do it.
 
 ---
 
 ## Phase 00: Concept Mapping
 
-*To be documented when implemented.*
-
 **Purpose:** LLM-generated tangential concept discovery to seed Phase 01
 with terms beyond the user-provided primary seeds.
+
+**OPEN** — answer when implementing:
+
+1. Which Claude model — Sonnet 4.6 or Opus 4.7? (Strategic doc says
+   Sonnet for cheaper tasks; concept mapping is one-shot per site, so
+   cost is small either way.)
+2. Prompt structure — single call returning a JSON list, or one call
+   per `concept_mapping.categories_template` category?
+3. How does volume validation work (`volume_validation_required: true`
+   in YAML)? DataForSEO call per concept, or batched?
+4. Output schema in `tangential_concepts`: what does `category` actually
+   contain — strings matching `categories_template`, or free-form?
 
 ---
 
 ## Phase 01: Seed Expansion
 
-*To be documented when implemented.*
-
 **Purpose:** Expand primary seeds and tangential concepts via DataForSEO
 `keyword_ideas` to produce initial keyword pool.
+
+**OPEN** — answer when implementing:
+
+1. Are tangential concepts from Phase 00 (with `promoted_to_seeds = TRUE`)
+   passed as additional seeds, or does Phase 01 always query both
+   `discovery.primary_seeds` AND `tangential_concepts` together?
+2. DataForSEO `keyword_ideas` returns up to N results per seed. What's
+   N, and is there a per-seed cap?
+3. Dedup strategy when two seeds return the same keyword — keep both
+   with merged `discovery_source`, or first-write-wins?
+4. `raw_keywords.discovery_method` value: `'seed_expansion'` or more
+   granular (`'seed_primary'` vs `'seed_tangential'`)?
 
 ---
 
 ## Phase 02: SERP Fetching
 
-*To be documented when implemented.*
-
 **Purpose:** Fetch top 10 organic results for the highest-volume keywords
 from Phase 01, capturing URLs, titles, PAA boxes, and related searches.
+
+**OPEN** — answer when implementing:
+
+1. Which keywords get SERPs? Top N by volume where N =
+   `discovery.max_keywords_for_serp_fetch` (3000 in retatrutide YAML)?
+   Confirm the cutoff is volume-based vs random sample.
+2. DataForSEO endpoint: `serp/google/organic/live/advanced` or
+   `serp/google/organic/task_post`? Batch vs single?
+3. Fields landing in `keyword_serps.serp_features` JSONB — PAA, related
+   searches, featured snippet, anything else?
+4. Re-fetch policy: if a keyword already has SERPs, skip or refresh?
+   (Default to skip for idempotency, but document.)
 
 ---
 
 ## Phase 03: URL and Domain Frequency Analysis
 
-*To be documented when implemented.*
-
 **Purpose:** Aggregate SERP data to identify hub URLs (appearing in
 multiple seed SERPs) and competitor domains for downstream mining.
+
+**OPEN** — answer when implementing:
+
+1. `serp_urls.mining_priority` thresholds: schema comment says
+   `high (10+), medium (5-9), low (3-4), skip (<3)`. Confirm or revise.
+2. `serp_urls.mining_depth` per priority — schema comment says
+   `100/50/20`. Confirm.
+3. Competitor selection for `serp_domains.is_competitor`: top N domains
+   by frequency where N = `discovery.auto_competitor_count`?
+4. How are `discovery.manual_competitor_domains` merged in — flagged
+   `is_competitor=TRUE` with a special marker, or just unioned with the
+   auto-derived list?
 
 ---
 
 ## Phase 04: URL-Level Keyword Mining
 
-*To be documented when implemented.*
-
 **Purpose:** Mine keywords from authoritative hub URLs via DataForSEO
 `ranked_keywords`, filtered to positions 1-20 for relevance.
+
+**OPEN** — answer when implementing:
+
+1. Mine `serp_urls` where `mining_priority IN ('high', 'medium', 'low')`,
+   skipping `'skip'`. Confirm.
+2. Per-URL cap = `serp_urls.mining_depth`. What position cutoff —
+   positions 1-20, or all positions then filter?
+3. Output goes to `discovered_keywords` (staging), not directly to
+   `raw_keywords`. When does Phase 06 promote?
+4. Rate limiting against DataForSEO at hub-URL scale — how does the
+   API client handle bursts?
 
 ---
 
 ## Phase 05: Domain-Level Keyword Mining
 
-*To be documented when implemented.*
-
 **Purpose:** Mine ranking keywords from auto-derived competitor domains
 via DataForSEO `keywords_for_site`.
+
+**OPEN** — answer when implementing:
+
+1. Per-domain cap — schema doesn't specify. Hardcoded or per-domain
+   config?
+2. `keywords_for_site` can return enormous result sets for large
+   competitors. What's the filter — position cap, volume floor, or
+   top-N by traffic?
+3. `discovered_keywords.source_type` is `'domain_mining'`,
+   `source_identifier` is the domain. Confirm.
+4. Same staging-table semantics as Phase 04 — output to
+   `discovered_keywords`, not directly to `raw_keywords`.
 
 ---
 
 ## Phase 06: Relevance Filtering
 
-*To be documented when implemented.*
-
 **Purpose:** Apply niche-relevance gate (must-match terms + semantic
 similarity) to all discovered keywords, marking included vs excluded.
+
+**OPEN** — answer when implementing:
+
+1. Filter applies to: keywords from Phase 01 (seed expansion) only,
+   keywords from `discovered_keywords` (Phase 04/05 staging) only, or
+   both?
+2. Must-match logic: any-of `filtering.niche_match_terms` (OR), or
+   all-of (AND)? The YAML doesn't disambiguate.
+3. Semantic similarity gate uses `discovery.semantic_relevance_threshold`
+   (0.65). Compared against what — embedding of the keyword vs.
+   embedding of the niche description? This requires the niche to be
+   embedded somewhere; where does that live?
+4. The known conflict with Phase 00: tangential discovery deliberately
+   surfaces keywords that lack `niche_match_terms`. How are tangential
+   keywords distinguished from organic discoveries when applying the
+   must-contain filter? (Suggestion: skip must-contain for keywords
+   with `tangential_distance >= 1`.)
+5. Promotion from `discovered_keywords` to `raw_keywords` happens here
+   (or in a sub-step) — define when and how.
 
 ---
 
 ## Phase 07: Volume Enrichment
 
-*To be documented when implemented.*
-
 **Purpose:** Validate and populate search volume data for all included
 keywords via DataForSEO `keyword_overview`.
+
+**OPEN** — answer when implementing:
+
+1. Re-validate every keyword's volume, or only those missing
+   `search_volume`? (Phase 01 and 04/05 already populated volumes from
+   different DataForSEO endpoints; this phase exists to reconcile.)
+2. Disagreement handling — if Phase 01 said volume=1000 and Phase 07
+   says volume=500, which wins, and is the prior value preserved
+   anywhere?
+3. Batch size against `keyword_overview` endpoint.
+4. Cost guardrail interaction — `keyword_overview` is one of the
+   pricier endpoints; how does this phase respect `MAX_RUN_COST_USD`?
 
 ---
 
 ## Phase 08: Intent Classification
 
-*To be documented when implemented.*
-
 **Purpose:** Classify each keyword's intent using Haiku 4.5 with the
 site's intent taxonomy. Map intent to suggested subfolder.
+
+**OPEN** — answer when implementing:
+
+1. Prompt structure: pass the full `intent_taxonomy` block from YAML
+   into every call, or summarize?
+2. Batching: one keyword per call, or N keywords per call returning a
+   JSON list?
+3. `intent_confidence` from the model: how is it elicited (ask the
+   model directly, or compute from logprobs / token consistency)?
+4. Output also populates `raw_keywords.suggested_subfolder` from the
+   intent → subfolder mapping in the YAML. What happens for an
+   `EDUCATIONAL` keyword whose top SERP results suggest it belongs in
+   `/conditions/`? (Reviewer fix in Phase 12, or override here?)
+5. Multi-intent keywords: pick top-1, or store top-k with a "primary"
+   flag and let Phase 10 cluster on primary?
 
 ---
 
 ## Phase 09: Embedding Generation
 
-*To be documented when implemented.*
-
 **Purpose:** Generate vector embeddings for all included keywords using
 OpenAI text-embedding-3-large with enriched input text.
+
+**OPEN** — answer when implementing:
+
+1. "Enriched input text" composition: `keyword + intent + top-3 SERP
+   titles`? Just `keyword`? The doc isn't specific. Define the exact
+   string template.
+2. `keyword_embeddings.model_version`: format like
+   `text-embedding-3-large@3072` (per ADR-002)? Pin this so Phase 10's
+   model-version-drift check has a stable string to compare.
+3. Batch size against OpenAI's embeddings endpoint.
+4. Re-embed policy: if a keyword already has an embedding with the
+   current `model_version`, skip. If `model_version` differs, replace.
+   Confirm.
+5. Halfvec conversion: OpenAI returns float32. Where is the cast to
+   `halfvec(3072)` performed — in Python before insert, or via the
+   pgvector driver?
 
 ---
 
@@ -193,10 +322,29 @@ keyword bundles via `topic_keywords`).
 
 ## Phase 11: SERP Overlap Refinement
 
-*To be documented when implemented.*
-
 **Purpose:** Refine clusters using SERP overlap analysis. Merge clusters
 sharing high SERP overlap; split clusters with low internal SERP overlap.
+
+**OPEN** — answer when implementing:
+
+1. Merge criterion: `serp_refinement.merge_threshold` (0.7) is the
+   Jaccard of top-10 URLs *between* two clusters' centroid keywords,
+   or pairwise across all members? Define precisely.
+2. Split criterion: `serp_refinement.split_threshold` (0.3) is what
+   exactly — mean pairwise Jaccard within cluster, or fraction of
+   members with low cohesion?
+3. When clusters are merged: keep the higher-confidence cluster's id
+   and absorb the other (use `merged_into_cluster_id`), or create a
+   new cluster? The schema supports both via
+   `merged_into_cluster_id` / `split_from_cluster_id`. Pick one
+   convention.
+4. Confidence recomputation after refinement: re-run the ADR-004
+   formula on the new membership? (Yes is the obvious answer; confirm
+   and document the recompute as part of this phase.)
+5. Interaction with thin-bucket clusters (ADR-005): single-member
+   clusters can't be split (member_count=1). Can they be merged into
+   a larger cluster, or are they preserved through Phase 11 untouched
+   for human review?
 
 ---
 
@@ -363,17 +511,30 @@ falls back to local CSV in `output/{site_slug}/clusters_review.csv`.
 
 ## How This Document Is Maintained
 
-This document is updated by Claude Code (or developers) during pipeline
-implementation. When a phase is implemented:
+When a phase is implemented:
 
-1. Replace "To be documented when implemented" with full specification
-2. Include actual implementation details, not speculation
-3. Note any deviations from the original design with reasoning
-4. Document failure modes discovered during testing
-5. Record actual costs and runtimes from real runs
+1. Replace its **OPEN** block with a fully-filled **Specified** entry
+   (Purpose, Inputs, Process, Outputs, Expected cost, Expected runtime,
+   Failure modes, Idempotency, Configuration).
+2. Specs come from running the phase against real data, not speculation.
+3. Note any deviations from the original design with reasoning. If the
+   deviation reflects a decision worth preserving, add an ADR in
+   `decisions-log.md` and link from the spec.
+4. Update the corresponding CLAUDE.md status checkbox in the same
+   commit.
 
 When phases are modified later:
 
-1. Update the spec to reflect current behavior
-2. Note breaking changes that affect other phases
-3. Update Cross-references if phase interfaces changed
+1. Update the spec to reflect current behavior in the same commit.
+2. Note breaking changes that affect other phases at the top of the
+   modified spec.
+3. Update cross-references if phase interfaces changed.
+
+**Phase completion contract.** A pipeline phase is not "done" until:
+
+- The CLAUDE.md status checkbox is ticked.
+- The pipeline-phases.md OPEN block is replaced with a Specified entry.
+- Any new ADRs are linked from the spec.
+
+Reviewers (human or Claude) should reject a phase-completion commit
+that doesn't satisfy all three.
