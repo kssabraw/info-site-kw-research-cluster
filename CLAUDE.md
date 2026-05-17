@@ -14,7 +14,7 @@ not by modifying pipeline code.
 
 Update the checklist below as work progresses. Active site at top.
 
-### Active Site: [SITE_SLUG]
+### Active Site: retatrutide
 
 Phase progress:
 - [ ] Project scaffold and database schema

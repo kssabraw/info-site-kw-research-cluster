@@ -1,0 +1,196 @@
+# config/sites/retatrutide.yaml
+
+site_slug: retatrutide
+site_id: null  # Resolved at runtime from slug
+
+site_metadata:
+  display_name: "Retatrutide Information"
+  domain: "TBD"  # Update when domain decided
+  niche_description: |
+    Investigational triple agonist drug (GLP-1/GIP/glucagon receptor agonist)
+    by Eli Lilly, chemical designation LY3437943, in Phase 3 trials for
+    obesity and type 2 diabetes. Editorial/informational site focused on
+    topical authority across the broader retatrutide knowledge domain.
+
+discovery:
+  primary_seeds:
+    - retatrutide
+    - LY3437943
+    - retatrutide weight loss
+    - triple agonist
+    - GLP-1 GIP glucagon
+    - retatrutide vs tirzepatide
+    - retatrutide vs semaglutide
+    - mounjaro alternative
+    - obesity drug
+    - weight loss injection
+    - retatrutide dosage
+    - retatrutide side effects
+    - buy retatrutide
+    - retatrutide cost
+    - retatrutide FDA approval
+
+  semantic_relevance_threshold: 0.65
+  volume_minimum: 10
+  max_keywords_for_serp_fetch: 3000
+  auto_competitor_count: 8
+  manual_competitor_domains: []
+
+concept_mapping:
+  # Phase 00 instructions for tangential discovery
+  niche_context: |
+    Retatrutide is Eli Lilly's investigational triple agonist drug
+    (GLP-1/GIP/glucagon receptor agonist), chemical designation LY3437943,
+    in Phase 3 trials for obesity and type 2 diabetes. Map the topical
+    neighborhood including: mechanism/pharmacology, drug class context,
+    competitor drugs (approved and investigational), clinical/regulatory
+    terminology, related physiology, conditions, side effects, lifestyle
+    considerations during treatment, regulatory access pathways, and
+    cultural/zeitgeist topics.
+
+  categories_template: medical_drug
+  expected_concepts_per_category: 20
+  volume_validation_required: true
+
+filtering:
+  niche_match_terms:
+    - retatrutide
+    - ly3437943
+    - triple agonist
+    - glp-1 gip glucagon
+    - eli lilly weight
+
+  exclusion_terms:
+    - raw research powder
+    - bulk powder for sale
+
+  branded_keyword_handling: include  # 'include' | 'exclude' | 'separate_tier'
+
+intent_taxonomy:
+  # Maps classified intent → subfolder path
+  # Confidence below threshold flags for human review
+
+  intents:
+    EDUCATIONAL:
+      description: "User wants to understand the topic"
+      subfolder: /guides/
+      examples:
+        - "how does retatrutide work"
+        - "what is triple agonist"
+
+    SAFETY:
+      description: "User has health/risk concerns"
+      subfolder: /safety/
+      examples:
+        - "retatrutide side effects"
+        - "is retatrutide safe"
+      ymyl_risk: high
+
+    DOSING:
+      description: "User wants administration/protocol details"
+      subfolder: /dosage/
+      examples:
+        - "retatrutide dosage"
+        - "how much retatrutide"
+      ymyl_risk: high
+
+    COMPARISON:
+      description: "User comparing options"
+      subfolder: /compare/
+      examples:
+        - "retatrutide vs tirzepatide"
+        - "retatrutide or ozempic"
+
+    RESEARCH:
+      description: "User researching clinical trials/studies"
+      subfolder: /research/
+      examples:
+        - "TRIUMPH-4 results"
+        - "retatrutide phase 3 data"
+
+    CONDITION:
+      description: "User searching by health condition"
+      subfolder: /conditions/
+      examples:
+        - "obesity treatment retatrutide"
+        - "retatrutide for diabetes"
+
+    LIFESTYLE:
+      description: "During-treatment lifestyle topics"
+      subfolder: /lifestyle/
+      examples:
+        - "diet on retatrutide"
+        - "alcohol and retatrutide"
+
+    PRICING:
+      description: "Cost-focused research"
+      subfolder: /get/cost/
+      examples:
+        - "how much does retatrutide cost"
+        - "retatrutide price per mg"
+      regulatory_sensitivity: medium
+
+    ACCESS:
+      description: "How to obtain"
+      subfolder: /get/pathways/
+      examples:
+        - "where to buy retatrutide"
+        - "how to get retatrutide"
+      regulatory_sensitivity: high
+
+    VENDOR:
+      description: "Vendor evaluation"
+      subfolder: /get/vendors/
+      examples:
+        - "best retatrutide vendor"
+        - "retatrutide research peptide source"
+      regulatory_sensitivity: high
+
+    LEGAL:
+      description: "Regulatory/legal status"
+      subfolder: /legal/
+      examples:
+        - "is retatrutide legal"
+        - "retatrutide FDA status"
+
+    NEWS:
+      description: "Time-sensitive/dated information"
+      subfolder: /news/
+      examples:
+        - "retatrutide approval timeline"
+        - "latest retatrutide trial results"
+      freshness_tier: high
+
+clustering:
+  embedding_model: text-embedding-3-large
+  embedding_dimensions: 3072  # Can reduce to 1024 if storage concern
+  min_cluster_size: 5
+  min_samples: 3
+  cluster_selection_epsilon: 0.15
+  target_cluster_count: 500
+
+serp_refinement:
+  # Phase 11: SERP overlap thresholds
+  merge_threshold: 0.7    # If clusters share 70%+ top-10 URLs, merge
+  split_threshold: 0.3    # If keywords in cluster share <30% SERPs, consider split
+
+review:
+  confidence_auto_approve_threshold: 0.85
+  require_human_review_intents:
+    - VENDOR
+    - LEGAL
+    - ACCESS
+
+  google_sheets:
+    # Output destination for Phase 12 review
+    sheet_id: null  # Set after first export
+    worksheet_name: "Retatrutide Clusters"
+
+output:
+  topics_target: 500
+  pillar_distribution:
+    # Soft targets for cluster type distribution
+    root_pillars: 2
+    mini_pillars: 12
+    sub_pillars: 30
+    leaf_articles: 456
