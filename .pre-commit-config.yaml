@@ -1,0 +1,18 @@
+# Pre-commit hooks enforce the Critical Conventions documented in CLAUDE.md.
+# Install with: `pip install pre-commit && pre-commit install`
+# Run manually: `pre-commit run --all-files`
+#
+# The convention checks are also runnable directly:
+# `bash scripts/check-conventions.sh`
+
+repos:
+  - repo: local
+    hooks:
+      - id: check-conventions
+        name: Enforce CLAUDE.md Critical Conventions
+        entry: bash scripts/check-conventions.sh
+        language: system
+        # No file filter — the script greps the whole pipeline/ tree itself.
+        pass_filenames: false
+        # Always run; the script no-ops when pipeline/ doesn't exist yet.
+        always_run: true

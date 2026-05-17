@@ -607,6 +607,67 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-012: Enforce Critical Conventions via `scripts/check-conventions.sh` and pre-commit
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** CLAUDE.md's "Critical Conventions" section lists rules
+  (all DB access through `pipeline/utils/database.py`, all API clients
+  in `pipeline/utils/`, `@track_job` decorator on every phase, no
+  hardcoded niche specifics, config loading through
+  `pipeline/utils/config.py`). These are rules for humans and Claude.
+  No linter, no schema, no review automation. The first slip happens
+  in a one-off debugging script that gets copy-pasted into the real
+  pipeline; the second slip is structural drift.
+- **Decision:** Add `scripts/check-conventions.sh` that grep-checks
+  the conventions and exits non-zero on violation. Wire it into
+  `.pre-commit-config.yaml` so it runs on every commit (and can be
+  invoked directly during development or in CI).
+
+  Covered checks today:
+  - DB client imports (`psycopg2`, `psycopg`, `supabase`,
+    `sqlalchemy`) only allowed in `pipeline/utils/database.py`.
+  - `anthropic` only in `pipeline/utils/claude_client.py`.
+  - `openai` only in `pipeline/utils/openai_client.py`.
+  - `dataforseo`/`dfs` only in `pipeline/utils/dataforseo.py`.
+  - `yaml.safe_load`/`yaml.load`/`yaml.full_load` only in
+    `pipeline/utils/config.py`.
+  - `os.environ`/`os.getenv` only in `pipeline/utils/config.py`.
+  - No raw SQL string literals in `pipeline/phases/`.
+  - Every `def run(` in `pipeline/phases/*.py` is preceded by
+    `@track_job`.
+
+  The script no-ops when `pipeline/` doesn't exist yet — the rules
+  are locked in as declared intent before code lands, and the moment
+  the first phase is added the hooks start enforcing.
+
+  Verified: empty repo passes; synthetic violation file triggers all
+  applicable checks and exits 1.
+
+- **Consequences:**
+  - Rules become testable artifacts rather than wishful prose.
+  - The set of checks is the public contract; new rules require an
+    ADR that adds a new check.
+  - Grep-based enforcement catches obvious slips but not subtle ones
+    (e.g., passing site_id from a global, dynamic SQL composition).
+    Subtle enforcement is type-checker territory and waits until
+    mypy/pyright is added.
+  - Pre-commit is opt-in until devs install it. CI will be wired in
+    when the build moves out of solo CLI development.
+
+- **Alternatives considered:**
+  - Custom Ruff rules. Rejected: more infrastructure, slower to
+    iterate; grep covers the rules today.
+  - Manual review checklist only. Rejected: this is what the rules
+    already were; the failure mode is documented.
+  - Wait until the first phase is written. Rejected: by then someone
+    has already slipped.
+
+- **Related:** `scripts/check-conventions.sh`, `.pre-commit-config.yaml`,
+  CLAUDE.md → Critical Conventions.
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

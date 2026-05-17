@@ -80,22 +80,37 @@ See `docs/pipeline-phases.md` for detailed specs of each phase.
 
 ## Critical Conventions
 
-When writing or modifying code, follow these rules:
+When writing or modifying code, follow these rules. Most are enforced
+by `scripts/check-conventions.sh` (wired into `.pre-commit-config.yaml`
+and runnable directly). See `docs/decisions-log.md` ADR-012.
 
 - **Always pass site_id explicitly** through function calls. Never derive
-  it from "current context" or globals.
+  it from "current context" or globals. *(Not auto-enforced — type
+  checker territory, waiting on mypy.)*
 - **All database operations** go through `pipeline/utils/database.py`,
-  not raw SQL scattered through phase modules.
+  not raw SQL scattered through phase modules. *(Enforced:
+  `db-imports-only-in-utils-database`, `no-raw-sql-in-phases`.)*
 - **All API clients** are in `pipeline/utils/` (`dataforseo.py`,
   `openai_client.py`, `claude_client.py`). Phases call these utilities,
-  don't construct API requests directly.
+  don't construct API requests directly. *(Enforced:
+  `no-anthropic-imports-outside-claude-client`,
+  `no-openai-imports-outside-openai-client`,
+  `no-dataforseo-imports-outside-dataforseo-client`.)*
 - **Config loading** goes through `pipeline/utils/config.py`. Never
-  read YAML files directly from phase modules.
+  read YAML files or env vars directly from phase modules. *(Enforced:
+  `no-direct-yaml-load-outside-config`,
+  `no-direct-env-reads-outside-config`.)*
 - **Job tracking is required** — every phase wraps its work in a
-  `pipeline_jobs` record. Use the `@track_job` decorator.
+  `pipeline_jobs` record. Use the `@track_job` decorator. *(Enforced:
+  `phase-run-must-use-track-job` — checks every `def run(` in
+  `pipeline/phases/*.py` is decorated.)*
 - **Idempotency** — phases should be safely re-runnable. If a phase has
   already produced output for a site, re-running should either skip or
-  cleanly replace, never duplicate.
+  cleanly replace, never duplicate. *(Not auto-enforced — behavioral
+  rule.)*
+
+Adding a new convention: write the rule here, add a check to
+`scripts/check-conventions.sh`, add an ADR documenting the rationale.
 
 ## Database Schema Summary
 
