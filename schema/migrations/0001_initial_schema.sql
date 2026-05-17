@@ -26,7 +26,13 @@ CREATE TABLE IF NOT EXISTS sites (
     domain TEXT NOT NULL,
     display_name TEXT NOT NULL,
     niche_description TEXT,
+    -- config: immutable input from YAML, snapshotted at site registration
     config JSONB NOT NULL DEFAULT '{}',
+    -- runtime_state: mutable, written by phases for operational metadata
+    -- (sheet IDs, run counters, derived caches). See ADR-010 — keeps
+    -- YAML diffs noise-free and clarifies what's reproducible from
+    -- pipeline_jobs.config_snapshot alone (config) vs needs runtime_state too.
+    runtime_state JSONB NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'paused', 'archived')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -189,8 +189,10 @@ review:
     - ACCESS
 
   google_sheets:
-    # Output destination for Phase 12 review
-    sheet_id: null  # Set after first export
+    # Output destination for Phase 12 review.
+    # The sheet ID itself is runtime state and is stored in
+    # sites.runtime_state -> 'phase_12' -> 'google_sheets_sheet_id'
+    # — not in this YAML. See decisions-log.md ADR-010.
     worksheet_name: "Retatrutide Clusters"
 
 output:

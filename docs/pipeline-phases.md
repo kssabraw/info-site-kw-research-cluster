@@ -459,16 +459,20 @@ each. Log count to `output_summary.auto_approved`.
   and primary-keyword candidates.
 - Config: `review.confidence_auto_approve_threshold`,
   `review.require_human_review_intents`,
-  `review.google_sheets.sheet_id` (export destination, set after
-  first export so subsequent exports update the same sheet).
+  `review.google_sheets.worksheet_name`.
+- Runtime state: `sites.runtime_state -> 'phase_12' ->
+  'google_sheets_sheet_id'` (read on subsequent exports; written by
+  the first export). YAML stays immutable — see ADR-010.
 
 ### Outputs
 
 **Export mode:**
-- A Google Sheet (or local CSV if `google_sheets.sheet_id` is null).
-- `review.google_sheets.sheet_id` populated in the site YAML config
-  (and snapshotted into `pipeline_jobs.output_summary`) if a sheet was
-  newly created.
+- A Google Sheet (or local CSV if `runtime_state.phase_12.google_sheets_sheet_id`
+  is null AND `GOOGLE_SHEETS_CREDENTIALS_PATH` is unset).
+- `sites.runtime_state.phase_12.google_sheets_sheet_id` populated if a
+  sheet was newly created. Also snapshotted into
+  `pipeline_jobs.output_summary` so the job record alone tells you
+  which sheet a run produced.
 
 **Import mode:**
 - `topics` rows for approved + merge-target clusters.

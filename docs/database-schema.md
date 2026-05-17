@@ -35,6 +35,7 @@ CREATE TABLE sites (
     display_name TEXT NOT NULL,
     niche_description TEXT,
     config JSONB NOT NULL DEFAULT '{}',
+    runtime_state JSONB NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'paused', 'archived')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -46,9 +47,15 @@ CREATE INDEX idx_sites_status ON sites(status);
 ```
 
 **Design notes:**
-- `slug` is the human-readable identifier used in CLI commands and config files
-- `config` JSONB stores the full site configuration (parsed from YAML)
-- `niche_description` is used in Phase 00 concept mapping prompts
+- `slug` is the human-readable identifier used in CLI commands and
+  config files.
+- `config` JSONB is the snapshot of the site's YAML at registration.
+  Treated as **immutable** by all phases — see ADR-010.
+- `runtime_state` JSONB holds operational metadata mutated by phases
+  during execution (e.g., Phase 12's Google Sheet ID lives at
+  `runtime_state -> 'phase_12' -> 'google_sheets_sheet_id'`). Keep
+  YAML diffs clean and operational state queryable. See ADR-010.
+- `niche_description` is used in Phase 00 concept mapping prompts.
 
 ### pipeline_jobs
 

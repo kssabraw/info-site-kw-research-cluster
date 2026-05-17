@@ -470,6 +470,71 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-010: YAML configs are immutable; runtime-mutable state lives in `sites.runtime_state`
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** Site YAML configs were intended to be immutable inputs
+  snapshotted into `pipeline_jobs.config_snapshot` for reproducibility.
+  But the YAML schema included `review.google_sheets.sheet_id: null
+  # Set after first export` — explicitly a mutable field. Phase 12
+  would write back to YAML after creating a sheet. This had three
+  problems:
+
+  1. "Reproducibility from `config_snapshot`" was only partial — the
+     snapshot was a point-in-time copy of a moving target.
+  2. YAML mutations create noisy git diffs (`sheet_id: "abc..."` lands
+     in commits) that conflate operational state with intentional
+     config changes.
+  3. Future operational state (cache invalidation timestamps, run
+     counters, derived metadata) would have nowhere to live without
+     reopening this question every time.
+
+- **Decision:** YAML configs are immutable inputs. Anything that needs
+  to persist across runs as derived/operational state lives in
+  `sites.runtime_state JSONB DEFAULT '{}'`. Phase modules read and
+  write this column directly through `pipeline/utils/database.py`.
+
+  Concrete change: `review.google_sheets.sheet_id` is removed from the
+  site YAML. Phase 12 stores the sheet ID at
+  `sites.runtime_state -> 'phase_12' -> 'google_sheets_sheet_id'`.
+
+  `pipeline_jobs.config_snapshot` continues to capture the YAML at run
+  time, but the contract is now:
+  *"Given the same YAML snapshot AND the same `sites.runtime_state`,
+   the pipeline produces the same outputs."* The snapshot is
+  necessary but no longer sufficient on its own.
+
+- **Consequences:**
+  - YAML diffs in git are now purely intentional configuration
+    changes. No more "Phase 12 wrote a sheet ID, here's a commit you
+    didn't ask for."
+  - `runtime_state` is a small extensibility point — new phases that
+    need to persist operational metadata don't require schema migrations.
+  - `pipeline_jobs.output_summary` should capture relevant
+    `runtime_state` snapshots when needed for full reproducibility
+    (e.g., snapshot the sheet ID into output_summary at Phase 12
+    export time).
+  - Document the JSONB structure conventions in
+    `docs/architecture.md` Configuration System OPEN block when
+    `pipeline/utils/database.py` is written.
+- **Alternatives considered:**
+  - Leave `sheet_id` in YAML, accept partial reproducibility.
+    Rejected: this is exactly the leak we're closing.
+  - Separate per-site state into a dedicated `site_state` table.
+    Rejected: one column on `sites` keeps related data colocated and
+    avoids a join for the common case.
+  - Use `pipeline_jobs.output_summary` exclusively (sheet ID lives
+    on the export job's row). Rejected: subsequent imports would
+    need to look up the most recent export job's row to find the
+    sheet — clumsy. Current state belongs on the entity, not on the
+    history.
+- **Related:** [database-schema.md → sites](database-schema.md#sites),
+  [pipeline-phases.md → Phase 12](pipeline-phases.md#phase-12-review-export-and-import),
+  `config/sites/retatrutide.yaml`.
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

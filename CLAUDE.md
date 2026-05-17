@@ -177,7 +177,11 @@ Each site's YAML config follows this structure:
 
 ```yaml
 site_slug: string                    # Must match sites.slug in DB
-site_id: integer                     # Set after first DB insert
+site_id: null                        # Resolved at runtime from slug; never written here
+
+# YAML configs are immutable — see decisions-log.md ADR-010.
+# Mutable runtime state (sheet IDs, run counters) lives in
+# sites.runtime_state JSONB, not in this file.
 
 discovery:
   primary_seeds: [string, ...]       # 10-15 seed keywords
