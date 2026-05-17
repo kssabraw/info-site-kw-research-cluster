@@ -13,21 +13,32 @@ site_metadata:
     topical authority across the broader retatrutide knowledge domain.
 
 discovery:
+  # primary_seeds intentionally mix scientific/educational, comparison,
+  # commercial, and regulatory seeds. Commercial seeds (buy retatrutide,
+  # retatrutide cost) will discover VENDOR/ACCESS/PRICING clusters that
+  # require human review per review.require_human_review_intents.
+  # Accepting the review-volume cost in exchange for comprehensive
+  # commercial-territory coverage. See docs/decisions-log.md ADR-017.
   primary_seeds:
+    # Scientific / educational
     - retatrutide
     - LY3437943
     - retatrutide weight loss
     - triple agonist
     - GLP-1 GIP glucagon
+    - retatrutide dosage
+    - retatrutide side effects
+    # Comparison
     - retatrutide vs tirzepatide
     - retatrutide vs semaglutide
     - mounjaro alternative
+    # Condition framing
     - obesity drug
     - weight loss injection
-    - retatrutide dosage
-    - retatrutide side effects
+    # Commercial — review-bound, see ADR-017
     - buy retatrutide
     - retatrutide cost
+    # Regulatory
     - retatrutide FDA approval
 
   semantic_relevance_threshold: 0.65

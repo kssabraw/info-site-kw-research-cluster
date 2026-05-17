@@ -995,6 +995,94 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-017: Commercial seeds belong in `primary_seeds`; accept the review-volume cost
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** The retatrutide site config has commercial-intent
+  seeds in `discovery.primary_seeds` alongside the educational/
+  scientific seeds:
+
+  ```yaml
+  primary_seeds:
+    - retatrutide
+    - LY3437943
+    - retatrutide weight loss
+    - ...
+    - buy retatrutide              # commercial
+    - retatrutide cost             # commercial
+    - retatrutide FDA approval     # regulatory
+  ```
+
+  Phase 01 expands these via DataForSEO `keyword_ideas`. Commercial
+  seeds bring back commercial keywords ("where to buy retatrutide
+  online," "retatrutide price per mg," "best retatrutide vendor").
+  Phase 08 classifies them into VENDOR/ACCESS/PRICING intents, all
+  of which appear in `review.require_human_review_intents` —
+  meaning every such cluster requires human review regardless of
+  confidence. This is a real cost: a 500-cluster site might end up
+  with 40-80 VENDOR/ACCESS/PRICING clusters all needing manual
+  scrutiny.
+
+  The question is whether to leave commercial seeds in
+  `primary_seeds` (accept the review cost) or move them out (lose
+  commercial-territory coverage).
+
+- **Decision:** Commercial-intent seeds STAY in `primary_seeds`.
+  The review-volume cost is accepted as the price of comprehensive
+  commercial-territory mapping.
+
+  The full reasoning:
+
+  1. The whole point of `require_human_review_intents` is to ensure
+     human eyes on regulatory-sensitive content for YMYL niches
+     like retatrutide. The mechanism is working as designed: it
+     correctly identifies commercial clusters for review.
+  2. Removing commercial seeds would surface the commercial
+     territory only via competitor mining (Phase 04/05), which is
+     slower and less complete. Better to discover it explicitly.
+  3. Review volume is bounded: 40-80 commercial clusters at ~2
+     minutes each is 1-3 hours of human work per site, once. Not
+     painful at the 20-site portfolio scale.
+  4. The cluster review workflow (Phase 12, ADR-008-implied
+     sheet layout) supports batch APPROVE/REJECT for routine cases.
+
+- **Consequences:**
+  - Phase 12 review queues will be dominated by commercial clusters
+    for sites in YMYL niches; expect this and plan reviewer time
+    accordingly.
+  - When site #N's niche is non-YMYL (less regulatory burden), the
+    same commercial-seed pattern still works but the human-review
+    requirement may be relaxed via that site's
+    `require_human_review_intents` config.
+  - If commercial discovery starts producing low-quality clusters
+    (e.g., the same vendor mentioned 100 times in slightly
+    different wording), the next move is tuning Phase 11 (SERP
+    overlap refinement) to merge them, NOT removing commercial
+    seeds.
+
+- **Alternatives considered:**
+  - Move commercial seeds to a separate `commercial_seeds` list
+    that gets `tangential_distance = 1` (so the must-contain
+    filter doesn't apply — per ADR-011 — but they're still
+    discovered). Rejected: tangential_distance=1 was for
+    LLM-derived concepts, not for direct seeds with a different
+    intent flavor. Overloading the field would muddle Phase 06's
+    contract.
+  - Drop commercial seeds entirely. Rejected: leaves the
+    commercial territory to competitor mining alone, which is less
+    complete and slower.
+  - Add a per-seed `intent_hint` field so Phase 08 can use it as
+    ground truth. Rejected: adds config surface for marginal
+    accuracy gain; defer to a real-data review.
+
+- **Related:** `config/sites/retatrutide.yaml` (the inline comment
+  acknowledges the design intent), ADR-011 (Phase 06 two-path
+  filter — separately resolves the tangential-vs-direct split),
+  [pipeline-phases.md → Phase 12](pipeline-phases.md#phase-12-review-export-and-import).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:
