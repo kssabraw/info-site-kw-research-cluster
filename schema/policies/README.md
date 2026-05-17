@@ -1,7 +1,7 @@
 # Row Level Security Policies
 
 This directory is **deliberately empty**. RLS is enabled on every
-multi-tenant table in `schema/schema.sql` (and `schema/migrations/0001_initial_schema.sql`),
+multi-tenant table in `schema/schema.sql` (and `schema/migrations/20260517185927_kw_clustering_initial_schema.sql`),
 but no policies are defined.
 
 ## Why empty?

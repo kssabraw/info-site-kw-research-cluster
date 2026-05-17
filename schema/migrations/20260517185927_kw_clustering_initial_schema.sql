@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 0001: initial schema
+-- Migration 20260517185927_kw_clustering_initial_schema
 -- ============================================================================
 -- Why: First-time deployment of the multi-tenant keyword discovery and
 -- clustering pipeline. Creates 15 tables in the kw_clustering schema,
@@ -22,8 +22,10 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
 -- Schema isolation: all pipeline tables live in `kw_clustering` so they
 -- don't share namespace with other applications. See ADR-019.
+-- SET LOCAL keeps the search_path transaction-scoped so it won't leak
+-- into other queries on the pooled connection after COMMIT.
 CREATE SCHEMA IF NOT EXISTS kw_clustering;
-SET search_path TO kw_clustering, public, extensions;
+SET LOCAL search_path TO kw_clustering, public, extensions;
 
 -- ============================================================================
 -- Core: sites and job tracking

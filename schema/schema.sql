@@ -4,8 +4,8 @@
 -- ============================================================================
 --
 -- This file reflects the schema at HEAD. Use it for fresh deploys. For
--- migrating an existing database, apply schema/migrations/NNNN_*.sql in
--- order. Both files must be updated together — see
+-- migrating an existing database, apply schema/migrations/YYYYMMDDHHmmss_*.sql
+-- in order. Both files must be updated together — see
 -- schema/migrations/README.md for the convention.
 --
 -- Idempotent: safe to re-run against a fresh or partially-deployed db
@@ -458,8 +458,14 @@ ALTER TABLE topic_relationships ENABLE ROW LEVEL SECURITY;
 -- ============================================================================
 -- Update Triggers
 -- ============================================================================
+--
+-- Function name is kw_clustering.set_updated_at (not update_updated_at_column)
+-- to avoid collision with public.update_updated_at_column and
+-- storage.update_updated_at_column on Supabase. See ADR-021.
+-- (Older deploys that still have update_updated_at_column get renamed by
+-- migration 20260517203000_rename_updated_at_function.sql.)
 
-CREATE OR REPLACE FUNCTION update_updated_at_column()
+CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = now();
@@ -470,12 +476,12 @@ $$ language 'plpgsql';
 DROP TRIGGER IF EXISTS update_sites_updated_at ON sites;
 CREATE TRIGGER update_sites_updated_at
     BEFORE UPDATE ON sites
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 DROP TRIGGER IF EXISTS update_topics_updated_at ON topics;
 CREATE TRIGGER update_topics_updated_at
     BEFORE UPDATE ON topics
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ============================================================================
 -- Schema deployment complete

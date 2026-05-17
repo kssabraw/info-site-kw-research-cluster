@@ -115,7 +115,7 @@ status and link to the new ADR rather than editing the old one.
     the dimensional commitment already made in three docs, and storage
     was not the constraint).
   - Use IVFFlat instead of HNSW (rejected: same 2000-dim ceiling).
-- **Related:** ADR-002, `schema/migrations/0001_initial_schema.sql`,
+- **Related:** ADR-002, `schema/migrations/20260517185927_kw_clustering_initial_schema.sql`,
   [database-schema.md → keyword_embeddings](database-schema.md#keyword_embeddings).
 
 ---
@@ -1234,7 +1234,8 @@ status and link to the new ADR rather than editing the old one.
   - `extensions` last so Supabase's vault/jwt/etc. types are
     reachable if needed.
 
-  Pipeline code (when written) must `SET search_path` on every
+  Pipeline code (when written) must `SET LOCAL search_path` on every
+  transaction (or `SET search_path` for connection-local one-shot scripts)
   connection — the obvious place is `pipeline/utils/database.py` at
   connection setup. CLI psql users must do it manually (or pass
   `-c "SET search_path TO kw_clustering, public, extensions"`).
@@ -1265,9 +1266,125 @@ status and link to the new ADR rather than editing the old one.
     inside one production project.
 
 - **Related:** [schema/schema.sql](../schema/schema.sql) (canonical),
-  [schema/migrations/0001_initial_schema.sql](../schema/migrations/0001_initial_schema.sql),
+  [schema/migrations/20260517185927_kw_clustering_initial_schema.sql](../schema/migrations/20260517185927_kw_clustering_initial_schema.sql),
   ADR-013 (RLS policy work must qualify with `kw_clustering.`),
   the AR-Internal-Tools Supabase project (`wvcthtmmcmhkybcesirb`).
+
+---
+
+## ADR-020: Migration files use Supabase's `YYYYMMDDHHmmss_<name>.sql` convention
+
+- **Date:** 2026-05-17
+- **Status:** Accepted (supersedes the sequential `NNNN_` convention in
+  the initial `schema/migrations/README.md`)
+- **Context:** Repo originally used sequential migration names
+  (`0001_initial_schema.sql`). Supabase's `apply_migration` MCP tool
+  records every migration server-side under its own scheme:
+  `YYYYMMDDHHmmss_<name>` (timestamp at apply time + the `name` we
+  pass). For migration 0001 specifically, Supabase recorded it as
+  `20260517185927_kw_clustering_initial_schema`. Two parallel naming
+  systems were guaranteed to drift: the repo's `NNNN_*.sql` and
+  Supabase's `supabase_migrations.schema_migrations` table. A
+  contributor authoring `0002_*.sql` and applying it would produce a
+  Supabase entry like `20260518...._<their_name>` with no shared
+  ordering key.
+- **Decision:** Migration files use Supabase's convention exactly.
+  Local file name: `YYYYMMDDHHmmss_<snake_case_description>.sql`,
+  where the timestamp is the UTC instant the migration was *authored*
+  (`date -u +%Y%m%d%H%M%S`). The `<name>` suffix matches what's
+  passed to `apply_migration`.
+
+  The file's authoring timestamp and Supabase's apply timestamp may
+  differ by minutes or hours (because the apply happens later) —
+  that's fine. The `<name>` suffix is the unifying identifier between
+  the file and the server-side record. Lexicographic ordering of file
+  names matches order of authoring, which approximately matches order
+  of intended application.
+
+  Renamed `0001_initial_schema.sql` → `20260517185927_kw_clustering_initial_schema.sql`
+  to match what Supabase already recorded.
+
+- **Consequences:**
+  - File names sort lexicographically by authoring time — naturally
+    chronological.
+  - `name` field is the canonical identifier across local file and
+    server record.
+  - Filenames are longer / less aesthetic than `0001_X.sql`, but the
+    timestamp is unambiguous and matches Supabase's display in
+    Studio.
+  - If a future migration runner gets built, it should accept either
+    the file's authoring timestamp as the version OR look up the
+    server-side timestamp by `name` match.
+  - This is also Supabase CLI's convention, so the eventual
+    `supabase db push`-style workflow drops in without rework.
+- **Alternatives considered:**
+  - Keep sequential `NNNN_` and document the divergence as a known
+    limitation. Rejected: drift is silent and accumulates.
+  - Use Supabase CLI exclusively, move migrations to
+    `supabase/migrations/`. Rejected: bigger restructure, currently
+    not using the CLI. Can adopt later without breaking the file
+    naming.
+- **Related:** [schema/migrations/README.md](../schema/migrations/README.md),
+  ADR-019 (every migration must also `SET LOCAL search_path`).
+
+---
+
+## ADR-021: Rename `update_updated_at_column` to `kw_clustering.set_updated_at` to avoid name collision
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** Adversarial review (finding M3) flagged that the trigger
+  function `update_updated_at_column` collides by name with two
+  pre-existing functions on the Supabase project:
+  `public.update_updated_at_column` (from the AR-Internal-Tools app)
+  and `storage.update_updated_at_column` (Supabase built-in). After
+  our deploy there were 3 functions of the same name in pg_proc.
+  Triggers bind by oid so the collision was functionally safe, but
+  anyone running `SELECT update_updated_at_column()` ad-hoc with
+  `search_path` covering multiple schemas would invoke whichever was
+  first — latent ambiguity, especially with the search_path-leak risks
+  flagged in M4.
+- **Decision:** Rename our function to `set_updated_at`. The schema
+  (`kw_clustering`) already namespaces it; the function name being
+  unique across schemas is defense in depth against ambiguous
+  search_path resolution.
+
+  - Canonical `schema/schema.sql` declares the function as
+    `set_updated_at` from the start.
+  - Migration `20260517185927_kw_clustering_initial_schema.sql` is
+    left as-is (it's history — what was applied). Editing applied
+    migrations is forbidden per the convention.
+  - New migration `20260517193436_rename_updated_at_function.sql`
+    runs `ALTER FUNCTION ... RENAME` on existing deploys. Idempotent
+    (no-op if the function is already named `set_updated_at`, e.g.
+    on a fresh deploy via schema.sql). `ALTER FUNCTION RENAME`
+    preserves the function oid, so triggers keep working without
+    needing to be dropped and recreated.
+
+- **Consequences:**
+  - Both fresh deploy paths (via `schema.sql` directly, or via
+    migrations in order) converge to the same end state:
+    `kw_clustering.set_updated_at` with both triggers bound. Verified
+    against fresh local Postgres.
+  - One additional migration on Supabase to apply.
+  - Future trigger functions in this project should follow the same
+    naming pattern — short, descriptive, no inheritance of vendor
+    or framework-style names that risk collision.
+
+- **Alternatives considered:**
+  - Leave the collision and document it as benign. Rejected: latent
+    ambiguity bites the first time someone invokes the function
+    ad-hoc.
+  - Drop and recreate both function and triggers in the rename
+    migration. Rejected: `ALTER FUNCTION RENAME` is cleaner and
+    doesn't break trigger bindings.
+  - Pick a name with explicit prefix like `kw_set_updated_at`.
+    Rejected: redundant with the schema name; `kw_clustering.set_updated_at`
+    is already unambiguous.
+
+- **Related:** ADR-019 (schema namespace),
+  [schema/migrations/20260517193436_rename_updated_at_function.sql](../schema/migrations/20260517193436_rename_updated_at_function.sql),
+  M3 from the prior adversarial review.
 
 ---
 
