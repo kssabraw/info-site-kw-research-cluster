@@ -148,27 +148,41 @@ via DataForSEO `keywords_for_site`.
 
 ## Phase 06: Relevance Filtering
 
-**Purpose:** Apply niche-relevance gate (must-match terms + semantic
-similarity) to all discovered keywords, marking included vs excluded.
+**Purpose:** Apply niche-relevance gate to all discovered keywords,
+marking included vs excluded. Two paths by source — see ADR-011.
 
-**OPEN** — answer when implementing:
+**Partially specified (ADR-011):**
 
-1. Filter applies to: keywords from Phase 01 (seed expansion) only,
-   keywords from `discovered_keywords` (Phase 04/05 staging) only, or
-   both?
-2. Must-match logic: any-of `filtering.niche_match_terms` (OR), or
-   all-of (AND)? The YAML doesn't disambiguate.
-3. Semantic similarity gate uses `discovery.semantic_relevance_threshold`
-   (0.65). Compared against what — embedding of the keyword vs.
-   embedding of the niche description? This requires the niche to be
-   embedded somewhere; where does that live?
-4. The known conflict with Phase 00: tangential discovery deliberately
-   surfaces keywords that lack `niche_match_terms`. How are tangential
-   keywords distinguished from organic discoveries when applying the
-   must-contain filter? (Suggestion: skip must-contain for keywords
-   with `tangential_distance >= 1`.)
-5. Promotion from `discovered_keywords` to `raw_keywords` happens here
-   (or in a sub-step) — define when and how.
+- **Source split:** `raw_keywords.tangential_distance` decides the
+  path. `0` = direct discovery (primary_seeds, URL mining, domain
+  mining). `>= 1` = tangential discovery (Phase 00 concepts and their
+  expansions).
+- **Direct-discovery path:** must contain at least one of
+  `filtering.niche_match_terms` (any-of, OR) AND clear
+  `discovery.semantic_relevance_threshold` against the site's niche
+  embedding.
+- **Tangential path:** semantic similarity threshold only.
+- **Both paths:** `filtering.exclusion_terms` is a hard reject (any
+  match → excluded).
+- **Exclusion writes:** `is_included = FALSE` plus
+  `exclusion_reason IN ('niche_match', 'semantic_threshold',
+  'exclusion_term')`. See ADR-007 — `tier` is not touched here.
+
+**OPEN** — remaining questions for implementation:
+
+1. Does the filter operate on `raw_keywords` (already promoted from
+   `discovered_keywords` by an earlier sub-step) or on the
+   `discovered_keywords` staging table directly?
+2. Promotion from `discovered_keywords` to `raw_keywords`: when and
+   how (this phase, or a separate Phase 05b)?
+3. The site's niche embedding (one vector per site) computed from
+   `site_metadata.niche_description`: stored where? Options: compute
+   on-the-fly each Phase 06 run; cache in `sites.runtime_state ->
+   'phase_06' -> 'niche_embedding'`; or add a typed column
+   `sites.niche_embedding HALFVEC(3072)`. Pick at implementation.
+4. Per-source weighting: should Phase 04 (URL mining) keywords with
+   high `source_url_frequency` get a more lenient threshold, or is
+   the binary threshold sufficient?
 
 ---
 

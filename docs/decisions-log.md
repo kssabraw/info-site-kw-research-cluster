@@ -535,6 +535,78 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-011: Phase 06 applies `niche_match_terms` only to direct-discovery keywords; tangential keywords pass on semantic similarity alone
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** Phase 00 (concept mapping) uses an LLM to generate
+  tangential concepts, deliberately broadening discovery beyond the
+  user's `discovery.primary_seeds`. The whole point is to surface
+  relevant queries like "Ozempic vs Wegovy for obesity" that don't
+  contain `retatrutide` or `triple agonist` but are topically
+  adjacent.
+
+  Phase 06 (relevance filtering) was specified to apply
+  `filtering.niche_match_terms` as a must-contain gate. Applied
+  uniformly, this gate would filter out exactly the tangential
+  keywords Phase 00 spent budget generating. The two phases were
+  fighting each other.
+
+- **Decision:** Phase 06 has two relevance paths, selected by
+  `raw_keywords.tangential_distance`:
+
+  1. **Direct-discovery path** (`tangential_distance = 0` —
+     keywords sourced from primary_seeds, URL mining, or domain
+     mining): apply both gates AND'd together — must contain at least
+     one of `filtering.niche_match_terms` AND clear the semantic
+     similarity threshold (`discovery.semantic_relevance_threshold`,
+     0.65 in retatrutide).
+  2. **Tangential path** (`tangential_distance >= 1` — keywords
+     sourced from Phase 00 concepts or their downstream expansions):
+     apply semantic similarity threshold only. The must-contain gate
+     is bypassed.
+
+  In both paths, `filtering.exclusion_terms` is applied as a hard
+  reject regardless of source.
+
+  Phase 09 (embedding generation) is a prerequisite for the semantic
+  similarity component. For the direct-discovery path during initial
+  filtering, an interim cosine against a niche embedding (computed
+  once per site from `site_metadata.niche_description`) is sufficient
+  — the full per-keyword embedding from Phase 09 isn't required.
+
+- **Consequences:**
+  - Tangential discoveries are no longer silently filtered by the
+    must-contain gate; Phase 00's budget pays off.
+  - The must-contain gate still protects direct-discovery from
+    obviously off-niche keywords surfaced by competitor mining
+    (e.g., a competitor that ranks for unrelated weight-loss queries).
+  - `raw_keywords.tangential_distance` becomes load-bearing in
+    Phase 06 — Phase 00 and any downstream phase that creates
+    keywords from tangential sources MUST set this column correctly
+    (0 for direct, 1 for first-order tangential, 2 for second-order,
+    capped at 3 by the existing CHECK).
+  - The interim niche embedding (one vector per site) needs a home.
+    Add `sites.niche_embedding HALFVEC(3072)` in a follow-up if it
+    isn't computed on-the-fly each run.
+
+- **Alternatives considered:**
+  - Apply must-contain to everything, accept the lost coverage.
+    Rejected: defeats Phase 00.
+  - Drop the must-contain gate entirely, rely on semantic similarity
+    everywhere. Rejected: must-contain is cheap and catches obvious
+    junk before the semantic step pays embedding cost. Effective
+    defense in depth for direct discovery.
+  - Add a separate `tangential_niche_match_terms` in config.
+    Rejected: more config knobs, more drift; the
+    `tangential_distance` column already carries the source signal.
+
+- **Related:** [pipeline-phases.md → Phase 06](pipeline-phases.md#phase-06-relevance-filtering),
+  [pipeline-phases.md → Phase 00](pipeline-phases.md#phase-00-concept-mapping),
+  ADR-006 (normalization affects both gates).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

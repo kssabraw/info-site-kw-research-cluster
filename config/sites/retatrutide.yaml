@@ -53,6 +53,11 @@ concept_mapping:
   volume_validation_required: true
 
 filtering:
+  # niche_match_terms is the must-contain gate applied to direct-discovery
+  # keywords (tangential_distance = 0): primary_seeds, URL mining, domain
+  # mining. ANY-OF match (one term is enough). Tangential keywords from
+  # Phase 00 bypass this gate and are filtered on semantic similarity
+  # only. See docs/decisions-log.md ADR-011.
   niche_match_terms:
     - retatrutide
     - ly3437943
@@ -60,6 +65,7 @@ filtering:
     - glp-1 gip glucagon
     - eli lilly weight
 
+  # Hard rejects applied to ALL keywords regardless of source.
   exclusion_terms:
     - raw research powder
     - bulk powder for sale
