@@ -1226,7 +1226,11 @@ status and link to the new ADR rather than editing the old one.
     lands in the pipeline schema.
   - `public` second so `HALFVEC` (pgvector type) and
     `halfvec_cosine_ops` (HNSW operator class) resolve without
-    qualification — pgvector installs into `public` on Supabase.
+    qualification. The schema deployment pins pgvector to `public`
+    via `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`
+    BEFORE the `SET search_path` (otherwise pgvector would install
+    into `kw_clustering` on a fresh DB — verified empirically and
+    initially shipped as a bug).
   - `extensions` last so Supabase's vault/jwt/etc. types are
     reachable if needed.
 

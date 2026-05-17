@@ -2,8 +2,9 @@
 -- Migration 0001: initial schema
 -- ============================================================================
 -- Why: First-time deployment of the multi-tenant keyword discovery and
--- clustering pipeline. Creates 14 tables, pgvector extension, RLS
--- enablement, and updated_at triggers.
+-- clustering pipeline. Creates 15 tables in the kw_clustering schema,
+-- the pgvector extension (in public), RLS enablement, and updated_at
+-- triggers.
 --
 -- Embeddings use HALFVEC(3072) rather than VECTOR(3072) so HNSW indexes
 -- work — pgvector HNSW caps VECTOR at 2000 dims, HALFVEC at 4000.
@@ -13,13 +14,16 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- Install pgvector into `public` BEFORE setting search_path. Without
+-- WITH SCHEMA, CREATE EXTENSION would install into the first writable
+-- schema in search_path (i.e. kw_clustering after the SET below) on a
+-- fresh DB where pgvector isn't pre-installed. See ADR-019 Consequences.
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+
 -- Schema isolation: all pipeline tables live in `kw_clustering` so they
 -- don't share namespace with other applications. See ADR-019.
 CREATE SCHEMA IF NOT EXISTS kw_clustering;
 SET search_path TO kw_clustering, public, extensions;
-
--- Extensions (pgvector typically installed in `public` on Supabase)
-CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================================
 -- Core: sites and job tracking

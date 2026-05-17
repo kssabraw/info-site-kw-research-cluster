@@ -16,6 +16,14 @@
 
 \set ON_ERROR_STOP on
 
+-- Install pgvector into `public` BEFORE setting search_path, and pin
+-- the schema with WITH SCHEMA public. Without WITH SCHEMA, CREATE
+-- EXTENSION installs into the first writable schema in search_path —
+-- which would be `kw_clustering` after we set the path below, causing
+-- environment drift (verified on a fresh local DB pre-fix: halfvec
+-- landed in kw_clustering, not public). See ADR-019 Consequences.
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+
 -- Schema isolation: all pipeline tables live in `kw_clustering` so they
 -- don't share namespace with other applications sitting in `public`.
 -- See docs/decisions-log.md ADR-019.
@@ -23,13 +31,10 @@ CREATE SCHEMA IF NOT EXISTS kw_clustering;
 
 -- search_path resolution order: new tables and unqualified type refs
 -- (HALFVEC, vector ops) resolve against this list left-to-right. We
--- need `public` (or wherever pgvector is installed) and `extensions`
--- (Supabase convention) in the path so HALFVEC and halfvec_cosine_ops
--- resolve without explicit schema qualification.
+-- need `public` (where pgvector lives, see above) and `extensions`
+-- (Supabase convention for vault/jwt/etc.) in the path so HALFVEC and
+-- halfvec_cosine_ops resolve without explicit schema qualification.
 SET search_path TO kw_clustering, public, extensions;
-
--- Extensions (pgvector typically installed in `public` on Supabase)
-CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================================
 -- Core: sites and job tracking
