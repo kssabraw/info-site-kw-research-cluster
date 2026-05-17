@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS topics (
     regulatory_sensitivity TEXT CHECK (regulatory_sensitivity IN ('low', 'medium', 'high')),
     freshness_tier TEXT CHECK (freshness_tier IN ('evergreen', 'medium', 'high')),
     parent_topic_id BIGINT REFERENCES topics(id),
-    depends_on_topic_ids BIGINT[],
+    -- topic-to-topic dependency edges live in topic_dependencies; see ADR-009
     status TEXT NOT NULL DEFAULT 'planned'
         CHECK (status IN ('planned', 'queued', 'drafting', 'review', 'published', 'archived')),
     total_search_volume INTEGER,
@@ -313,6 +313,22 @@ CREATE INDEX IF NOT EXISTS idx_topic_keywords_topic ON topic_keywords(topic_id);
 CREATE INDEX IF NOT EXISTS idx_topic_keywords_keyword ON topic_keywords(keyword_id);
 CREATE INDEX IF NOT EXISTS idx_topic_keywords_role ON topic_keywords(topic_id, role);
 CREATE INDEX IF NOT EXISTS idx_topic_keywords_site ON topic_keywords(site_id);
+
+-- Topic-to-topic dependency edges. Replaces the prior
+-- topics.depends_on_topic_ids BIGINT[] which had no referential
+-- integrity. See ADR-009.
+CREATE TABLE IF NOT EXISTS topic_dependencies (
+    topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    depends_on_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE RESTRICT,
+    site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (topic_id, depends_on_topic_id),
+    CHECK (topic_id != depends_on_topic_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_deps_topic ON topic_dependencies(topic_id);
+CREATE INDEX IF NOT EXISTS idx_topic_deps_depends_on ON topic_dependencies(depends_on_topic_id);
+CREATE INDEX IF NOT EXISTS idx_topic_deps_site ON topic_dependencies(site_id);
 
 CREATE TABLE IF NOT EXISTS topic_relationships (
     id BIGSERIAL PRIMARY KEY,
@@ -348,6 +364,7 @@ ALTER TABLE clusters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cluster_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE topics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE topic_keywords ENABLE ROW LEVEL SECURITY;
+ALTER TABLE topic_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE topic_relationships ENABLE ROW LEVEL SECURITY;
 
 -- Note: No policies defined initially. Service role bypasses RLS for

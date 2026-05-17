@@ -16,7 +16,9 @@ sites                          Root: every other table references this
 ├── discovered_keywords        URL/domain mining output (Phase 04-05)
 ├── clusters                   Pre-review clustering output
 ├── topics                     Approved clusters ready for content
-└── topic_keywords             Junction: keywords per topic with role
+├── topic_keywords             Junction: keywords per topic with role
+├── topic_dependencies         Junction: topic-to-topic ordering edges
+└── topic_relationships        Junction: typed topic-to-topic edges
 
 ## Core Tables
 
@@ -470,8 +472,9 @@ CREATE TABLE topics (
     
     -- Hierarchy
     parent_topic_id BIGINT REFERENCES topics(id),
-    depends_on_topic_ids BIGINT[],
-    
+    -- Dependency edges live in topic_dependencies, not as a column
+    -- on this table. See ADR-009.
+
     -- Lifecycle
     status TEXT NOT NULL DEFAULT 'planned'
         CHECK (status IN ('planned', 'queued', 'drafting', 'review', 'published', 'archived')),
@@ -503,8 +506,9 @@ CREATE INDEX idx_topics_parent ON topics(parent_topic_id);
 - `pillar_level` determines content depth: root = homepage tier,
   pillar = major section overview, sub_pillar = topic cluster overview,
   leaf = individual article
-- `depends_on_topic_ids` enables dependency-ordered generation (referenced
-  topics should exist first for internal linking)
+- Dependency-ordered generation reads from `topic_dependencies`
+  (see below), not from a column on this table. The previous shape
+  (`depends_on_topic_ids BIGINT[]`) had no referential integrity.
 - `freshness_tier` drives the refresh schedule
 
 ### topic_keywords
@@ -538,6 +542,42 @@ CREATE INDEX idx_topic_keywords_site ON topic_keywords(site_id);
   - `faq`: FAQ section question candidates (5-20 per topic)
 - `suggested_heading` is optional heading text the content generator
   can use directly
+
+### topic_dependencies
+
+Topic-to-topic dependency edges used by the downstream article
+generator to order article creation: an article that references its
+prerequisites can't be drafted before they exist.
+
+Replaces an earlier `topics.depends_on_topic_ids BIGINT[]` column;
+arrays carry no referential integrity in Postgres. See ADR-009.
+
+```sql
+CREATE TABLE topic_dependencies (
+    topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    depends_on_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE RESTRICT,
+    site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (topic_id, depends_on_topic_id),
+    CHECK (topic_id != depends_on_topic_id)
+);
+
+CREATE INDEX idx_topic_deps_topic ON topic_dependencies(topic_id);
+CREATE INDEX idx_topic_deps_depends_on ON topic_dependencies(depends_on_topic_id);
+CREATE INDEX idx_topic_deps_site ON topic_dependencies(site_id);
+```
+
+**Design notes:**
+- `ON DELETE RESTRICT` on `depends_on_topic_id` is deliberate: deleting
+  a topic that other topics depend on requires explicit cleanup of the
+  dependency rows first. This surfaces broken graphs at delete time
+  rather than letting them sit silently.
+- `ON DELETE CASCADE` on `topic_id` means deleting the dependent topic
+  cleans up its outgoing edges automatically.
+- Self-reference is forbidden via CHECK.
+- This table holds the *ordering* edge only. Other topical
+  relationships (parent/child/sibling/related/comparison/glossary)
+  live in `topic_relationships`.
 
 ### topic_relationships
 
@@ -682,6 +722,7 @@ clusters: ~500 KB
 cluster_members: ~2 MB
 topics: ~500 KB
 topic_keywords: ~5 MB
+topic_dependencies: ~200 KB
 topic_relationships: ~1 MB
 TOTAL per site: ~200-250 MB
 20 sites: ~4-5 GB

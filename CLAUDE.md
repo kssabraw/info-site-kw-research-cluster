@@ -110,6 +110,7 @@ Full schema in `docs/database-schema.md`. Core tables:
 - `clusters` — Clustering output before review
 - `topics` — Approved clusters ready for article generation
 - `topic_keywords` — Junction table: which keywords belong to which topic
+- `topic_dependencies` — Junction table: topic-to-topic ordering edges
 - `topic_relationships` — Pillar/leaf hierarchy
 
 ## Project Structure

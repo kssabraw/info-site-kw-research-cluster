@@ -67,7 +67,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/schema.sql
 Verify deployment:
 
 ```sql
--- Should list 14 tables
+-- Should list 15 tables
 SELECT table_name FROM information_schema.tables
 WHERE table_schema = 'public'
 ORDER BY table_name;

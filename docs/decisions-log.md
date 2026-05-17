@@ -412,6 +412,64 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-009: Replace `topics.depends_on_topic_ids` array with `topic_dependencies` junction table
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** `topics.depends_on_topic_ids BIGINT[]` had no
+  referential integrity — Postgres cannot enforce per-element FK
+  constraints on array elements. Empirically verified: inserting
+  `depends_on_topic_ids = ARRAY[99999, 88888]` (nonexistent IDs)
+  succeeds. The downstream article generator, which reads these to
+  order article creation by dependency, would hit dangling references
+  and either crash or silently skip.
+- **Decision:** Drop the array column. Add a junction table
+  `topic_dependencies` with proper FKs:
+
+  ```sql
+  CREATE TABLE topic_dependencies (
+      topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      depends_on_topic_id BIGINT NOT NULL REFERENCES topics(id) ON DELETE RESTRICT,
+      site_id BIGINT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (topic_id, depends_on_topic_id),
+      CHECK (topic_id != depends_on_topic_id)
+  );
+  ```
+
+  `ON DELETE RESTRICT` on `depends_on_topic_id` is intentional: you
+  cannot delete a topic that other topics depend on. The dependent
+  topics must either drop their dependency first or be deleted first.
+  This is the right default for a topic graph; explicit is better than
+  the silent dangling-reference behavior the array had.
+
+  The self-reference CHECK prevents `A depends on A`.
+
+- **Consequences:**
+  - Article generation can `JOIN topic_dependencies` and trust the
+    references resolve. No defensive checks needed downstream.
+  - Insertion is two-step for topics with deps: insert the topic,
+    then insert the dependency rows. Standard junction pattern.
+  - Deletion semantics are now safer (RESTRICT surfaces broken
+    references) but require explicit cleanup. Pre-launch this is
+    free; no production data depends on the old shape.
+  - The `topic_dependencies.site_id` denormalization shares the same
+    consistency caveat as other denormalized site_id columns (see the
+    Multi-Tenancy OPEN section in architecture.md). Out of scope for
+    this ADR.
+- **Alternatives considered:**
+  - Keep the array, add a trigger that validates references on
+    INSERT/UPDATE. Rejected: triggers are easy to miss and add
+    invisible behavior; junction tables are the standard pattern.
+  - Add an arbitrary `relationship_type` column to handle multiple
+    kinds of dependencies. Rejected: `topic_relationships` already
+    exists for that purpose; `topic_dependencies` is specifically the
+    ordering edge.
+- **Related:** [database-schema.md → topics](database-schema.md#topics),
+  [database-schema.md → topic_relationships](database-schema.md#topic_relationships).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:
