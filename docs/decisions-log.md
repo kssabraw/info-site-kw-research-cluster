@@ -317,6 +317,46 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-007: `is_included` is the sole exclusion signal; drop 'excluded' from `tier` enum
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** `raw_keywords` had two columns that could express
+  exclusion: `tier IN ('primary','secondary','longtail','branded','excluded')`
+  and `is_included BOOLEAN`. Nothing constrained them to agree —
+  empirically verified, `tier='excluded' AND is_included=TRUE` was
+  accepted by the schema. Two writers, two semantics, guaranteed
+  drift. Worse: downstream phases that filter on `is_included` would
+  silently include `excluded`-tier rows that some other phase had
+  already marked as excluded.
+- **Decision:** `is_included` is the single source of truth for
+  whether a keyword participates in downstream phases. `'excluded'`
+  is removed from the `tier` enum. `tier` now means "what *role*
+  does this keyword play in the topic taxonomy" (primary | secondary
+  | longtail | branded) — orthogonal to inclusion.
+
+  Phase 06 (relevance filtering) sets `is_included = FALSE` and
+  `exclusion_reason` for filtered-out keywords; it does not touch
+  `tier`.
+
+- **Consequences:**
+  - One signal for "is this keyword live?" — `is_included`.
+  - `tier` becomes a positive classification only; no more "is this
+    a role or a status?" confusion.
+  - Any existing-but-shouldn't-exist `tier='excluded'` rows would
+    fail to migrate. Pre-launch, nothing is deployed; no migration
+    needed beyond editing both schema files in place.
+- **Alternatives considered:**
+  - Add a CHECK enforcing `(tier = 'excluded') = (is_included = FALSE)`.
+    Rejected: redundant column with a tautological constraint is worse
+    than dropping the column value entirely.
+  - Drop `is_included` and use `tier = 'excluded'`. Rejected: boolean
+    is simpler and cheaper to filter on; the `exclusion_reason` TEXT
+    column already exists alongside `is_included` as a coherent pair.
+- **Related:** [database-schema.md → raw_keywords](database-schema.md#raw_keywords).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

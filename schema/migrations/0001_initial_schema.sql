@@ -98,7 +98,9 @@ CREATE TABLE IF NOT EXISTS raw_keywords (
     cpc NUMERIC(10, 2),
     competition NUMERIC(3, 2),
     keyword_difficulty INTEGER,
-    tier TEXT CHECK (tier IN ('primary', 'secondary', 'longtail', 'branded', 'excluded')),
+    -- tier = role in the topic taxonomy; orthogonal to inclusion.
+    -- For exclusion, set is_included = FALSE and exclusion_reason. See ADR-007.
+    tier TEXT CHECK (tier IN ('primary', 'secondary', 'longtail', 'branded')),
     primary_intent TEXT,
     intent_confidence NUMERIC(3, 2),
     suggested_subfolder TEXT,

@@ -142,9 +142,10 @@ CREATE TABLE raw_keywords (
     competition NUMERIC(3, 2),
     keyword_difficulty INTEGER,
     
-    -- Classification
+    -- Classification (tier = role in topic taxonomy; orthogonal to
+    -- inclusion. See ADR-007.)
     tier TEXT
-        CHECK (tier IN ('primary', 'secondary', 'longtail', 'branded', 'excluded')),
+        CHECK (tier IN ('primary', 'secondary', 'longtail', 'branded')),
     primary_intent TEXT,
     intent_confidence NUMERIC(3, 2),
     suggested_subfolder TEXT,
@@ -180,7 +181,12 @@ CREATE INDEX idx_keywords_tier ON raw_keywords(site_id, tier);
   'related_search', 'url_mining', 'domain_mining', 'manual'
 - `discovery_source` captures the specific source URL or domain that
   surfaced this keyword (when applicable)
-- `tier` is set during filtering phase, not at ingestion
+- `tier` is a role in the topic taxonomy
+  (primary / secondary / longtail / branded), set during Phase 06
+  filtering. It is **not** an exclusion signal — for that, see
+  `is_included` and ADR-007.
+- `is_included = FALSE` plus `exclusion_reason` is the sole way to
+  exclude a keyword from downstream phases.
 - All classification fields are nullable until their respective phases run
 
 ### keyword_serps
