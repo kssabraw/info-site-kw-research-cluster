@@ -726,6 +726,102 @@ status and link to the new ADR rather than editing the old one.
 
 ---
 
+## ADR-014: `MAX_RUN_COST_USD` is a running-total kill-switch, not a pre-flight estimate
+
+- **Date:** 2026-05-17
+- **Status:** Accepted
+- **Context:** `.env.example` declares `MAX_RUN_COST_USD=100` as a
+  "safety check" but no mechanism for computing the cost was
+  specified. The env var was decorative — the guardrail could never
+  fire because nothing tracked the running total. Two paths exist:
+  (a) build pre-flight estimation per phase (hard — DataForSEO
+  endpoints return variable result counts), or (b) make it a running-
+  total kill-switch that aborts the moment cumulative API spend
+  exceeds the cap.
+- **Decision:** `MAX_RUN_COST_USD` is a **running-total kill-switch**.
+  Every API client (DataForSEO, OpenAI, Anthropic) reports the
+  estimated cost of each call to a shared `CostTracker` that lives
+  in the pipeline run context. Before any API call the client checks
+  `tracker.would_exceed(estimated_cost)`; if so it raises
+  `CostBudgetExceeded`. The phase catches this, marks the
+  `pipeline_jobs` row as `failed`, and exits.
+
+  **Contract for each API client utility:**
+
+  - Has a constant per-call cost table (e.g.,
+    `OpenAIClient.COST_PER_1K_EMBEDDING_TOKENS = 0.00013`).
+  - Every public method computes the call's cost before issuing it.
+  - Every public method calls `cost_tracker.charge(method_name, cost)`
+    after a successful response (and `charge_failed` on failure if
+    the API charges for failed calls).
+  - Every public method first calls `cost_tracker.check(estimated_cost)`
+    which raises `CostBudgetExceeded` if it would put the run over.
+
+  **Contract for `CostTracker`:**
+
+  - One instance per pipeline run, threaded through phase context.
+  - Loaded with `MAX_RUN_COST_USD` from env at run start (default 100).
+  - Exposes `total`, `by_phase`, `by_endpoint` for reporting.
+  - On every charge, write the latest totals to the in-progress
+    `pipeline_jobs.output_summary` so a killed run still has the
+    cost breakdown.
+  - On `CostBudgetExceeded`, the message includes total spend, the
+    method that tripped the cap, and the env var name (so the
+    operator can decide whether to raise the cap or abort).
+
+  **What this is NOT:**
+
+  - Not a pre-flight estimate. We don't know in advance how many
+    keywords a DataForSEO `keyword_ideas` call will return.
+  - Not a per-phase cap (could be added later as `MAX_PHASE_COST_USD_*`
+    env vars if needed).
+  - Not retry-aware. A failed call that still costs money charges
+    once; a successful retry charges again. Both are reported.
+
+  **Cost table seed values** (to be refined with real billing data;
+  add a new ADR when tuning):
+
+  | Endpoint | Approx. cost |
+  |---|---|
+  | OpenAI `text-embedding-3-large`, per 1K tokens | $0.00013 |
+  | Anthropic Haiku 4.5, per 1K input tokens | ~$0.001 |
+  | Anthropic Haiku 4.5, per 1K output tokens | ~$0.005 |
+  | DataForSEO `keyword_ideas`, per request | ~$0.05 |
+  | DataForSEO `serp/google/organic`, per request | ~$0.0025 |
+  | DataForSEO `ranked_keywords`, per request | ~$0.01 |
+  | DataForSEO `keywords_for_site`, per request | ~$0.05 |
+  | DataForSEO `keyword_overview`, per 1K keywords | ~$0.075 |
+
+- **Consequences:**
+  - `MAX_RUN_COST_USD` becomes a real safety net rather than a
+    placeholder.
+  - The CostTracker is a small but real component every API client
+    depends on — adds coupling, but the alternative is unbounded
+    spend on a runaway phase.
+  - Killed runs preserve their partial cost breakdown in
+    `pipeline_jobs.output_summary`, which doubles as audit data
+    for tuning the cap.
+  - The cost table is a moving target. When DataForSEO or vendor
+    pricing changes, tune the constants and add a new ADR (don't
+    edit this one).
+- **Alternatives considered:**
+  - Pre-flight estimation per phase. Rejected: requires knowing the
+    output volume of API calls before making them; not feasible for
+    DataForSEO's variable-result endpoints. Could be added later as
+    a "soft" estimate alongside the hard kill-switch.
+  - Vendor-provided cost APIs (OpenAI's `usage` response field, etc.).
+    Rejected as the only source: works after-the-fact, doesn't help
+    if a single huge call would exceed the budget. Use as ground
+    truth for the cost table tuning, not as the live guardrail.
+  - Soft warning instead of hard abort. Rejected: warnings get
+    ignored. Operators can raise the cap if they want.
+
+- **Related:** [architecture.md → Cost Management](architecture.md#cost-management),
+  `pipeline/utils/{dataforseo,openai_client,claude_client}.py` (to be
+  written), `pipeline/utils/cost_tracker.py` (to be written).
+
+---
+
 ## How This Document Is Maintained
 
 Add a new ADR when:

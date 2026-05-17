@@ -148,17 +148,41 @@ placeholders accumulate; checklists either get ticked or get noticed.
 
 ## Cost Management
 
-**OPEN** — answer when the first API client is written.
+**Specified (ADR-014):** `MAX_RUN_COST_USD` is a running-total
+kill-switch, not a pre-flight estimate.
 
-1. `MAX_RUN_COST_USD` is currently decorative (env var declared, no
-   mechanism). Two paths: build pre-run estimation (hard) or convert
-   it into a kill-switch that aborts when running total exceeds
-   threshold (easier). Pick one.
-2. Where is per-call cost recorded — `pipeline_jobs.output_summary`,
-   a separate `api_calls` table, or both?
+- A single `CostTracker` instance lives in the pipeline run context.
+  Initialized at run start with the env var's value (default 100).
+- Every API client utility (`pipeline/utils/dataforseo.py`,
+  `pipeline/utils/openai_client.py`, `pipeline/utils/claude_client.py`)
+  has a constant per-call cost table and:
+  - Calls `cost_tracker.check(estimated_cost)` before issuing the
+    call — raises `CostBudgetExceeded` if it would put the run over.
+  - Calls `cost_tracker.charge(method_name, cost)` after a successful
+    response.
+  - Calls `cost_tracker.charge_failed(method_name, cost)` if the API
+    bills for failed calls.
+- On every charge, the tracker writes its latest totals to the
+  in-progress `pipeline_jobs.output_summary` so a killed run still
+  has its cost breakdown for audit.
+- On `CostBudgetExceeded`, the phase catches it, marks
+  `pipeline_jobs.status = 'failed'`, sets `error_message` to the
+  tracker's summary, and exits non-zero.
+
+The cost table in ADR-014 is the canonical reference and seed values.
+Tuning the constants requires a new ADR; don't edit ADR-014.
+
+**OPEN** — answer when the first API client utility is written.
+
+1. Where does `pipeline/utils/cost_tracker.py` live exactly, and what
+   is its public API? (Suggested: `class CostTracker` with
+   `check(cost)`, `charge(endpoint, cost)`, `total`, `summary()`.)
+2. How does the tracker get threaded through phase context? Global
+   singleton, dependency injection via phase entry args, or
+   contextvars? Decide once and apply consistently.
 3. The README claims ~$15-20 per site run; ADR-002 says ~$0.10 for
-   embeddings. Are these reconciled? When the first real run
-   happens, replace the rough estimates with actuals.
+   embeddings. When the first real run happens, replace the rough
+   estimates with actuals from `pipeline_jobs.output_summary`.
 
 ---
 
