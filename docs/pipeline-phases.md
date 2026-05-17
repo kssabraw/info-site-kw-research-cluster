@@ -202,10 +202,162 @@ sharing high SERP overlap; split clusters with low internal SERP overlap.
 
 ## Phase 12: Review Export and Import
 
-*To be documented when implemented.*
+**Purpose:** Export `pending` clusters for human review (Google Sheet
+or CSV). Import the reviewer's decisions back into Supabase, creating
+rows in `topics` and `topic_keywords` for approved clusters.
 
-**Purpose:** Export clusters for human review (Google Sheet or CSV).
-Import approved decisions back to Supabase, populating topics table.
+Phase 12 has two distinct modes:
+
+- **Export mode** (`--mode export`): read pending clusters, write a
+  review sheet.
+- **Import mode** (`--mode import`): read the reviewer's edited sheet,
+  apply actions to the database.
+
+### Export sheet structure
+
+One row per cluster with `review_status = 'pending'`. Already-actioned
+clusters (approved/rejected/merged/split) are excluded — re-running
+export does not re-surface them.
+
+| Column | Editable? | Purpose |
+|---|---|---|
+| `cluster_id` | No | Stable identifier; used to match rows on import. |
+| `intent` | No | From clustering. |
+| `confidence_score` | No | From ADR-004 formula. NULL for single-member clusters. |
+| `member_count` | No | From clustering. |
+| `total_search_volume` | No | Sum across members. |
+| `member_keywords` | No | All cluster members, comma-separated. Truncated to first 30 if larger. |
+| `suggested_subfolder` | Yes | From intent taxonomy. Reviewer can override. |
+| `primary_keyword` | Yes | Pre-filled with `clusters.primary_keyword_candidate` (the centroid keyword). Reviewer can change to any member. |
+| `review_action` | Yes | One of: `APPROVE`, `REJECT`, `MERGE`, `SPLIT`. Blank = `APPROVE` (the auto-approve default). |
+| `merge_target_cluster_id` | Yes | Required iff `review_action = MERGE`. The `cluster_id` to merge this cluster into. |
+| `split_into_groups` | Yes | Required iff `review_action = SPLIT`. Semicolon-separated keyword groups, each group comma-separated. Example: `kw1,kw2;kw3,kw4` becomes two new clusters. |
+| `reviewer_notes` | Yes | Free text, copied to `clusters.reviewer_notes`. |
+
+Clusters in `require_human_review_intents` (VENDOR/LEGAL/ACCESS for
+retatrutide) and clusters with `confidence_score IS NULL` are always
+included, even if their confidence is above
+`confidence_auto_approve_threshold`.
+
+Clusters with `confidence_score >= confidence_auto_approve_threshold`
+AND not in `require_human_review_intents` are *not* exported — they
+get auto-approved during import (see below).
+
+### Edit actions and import semantics
+
+Each action is applied inside a single transaction per cluster. If
+import fails on row N, rows 1..N-1 remain committed and the failure is
+logged to `pipeline_jobs.error_message` for resume.
+
+**`APPROVE`** (or blank action):
+1. Insert one `topics` row with the reviewer's `primary_keyword` and
+   `suggested_subfolder`. `source_cluster_id = clusters.id`.
+2. Insert `topic_keywords` rows for every cluster member with
+   `role = 'primary'` for the chosen primary keyword, then `secondary`
+   / `supporting` / `faq` assigned by Phase-12 heuristics (TBD —
+   simplest version: top-3 by volume become `secondary`, rest become
+   `supporting`).
+3. Set `clusters.review_status = 'approved'`, `reviewed_at = now()`,
+   `review_action = 'APPROVE'`.
+
+**`REJECT`**:
+1. No `topics` row created.
+2. Set `clusters.review_status = 'rejected'`, `reviewed_at = now()`,
+   `review_action = 'REJECT'`, copy `reviewer_notes`.
+
+**`MERGE`**:
+1. Validate that `merge_target_cluster_id` exists and belongs to the
+   same site. Reject the row if not.
+2. If the target was also marked `MERGE` to a third cluster, follow
+   the chain (idempotent). If the chain has a cycle, reject the whole
+   merge set and log to `pipeline_jobs`.
+3. Set `clusters.review_status = 'merged'`, `merged_into_cluster_id =
+   merge_target_cluster_id`.
+4. The merge target's keywords are unioned with this cluster's
+   keywords during *its own* APPROVE (the target row in the sheet is
+   what creates the eventual topic).
+5. If the merge target is itself marked `REJECT`, the merged keywords
+   are also rejected — flag as a warning in `output_summary`.
+
+**`SPLIT`**:
+1. Parse `split_into_groups`. Validate every keyword named appears in
+   the original cluster's members. Reject the row if not.
+2. Set the original `clusters.review_status = 'split'`,
+   `review_action = 'SPLIT'`.
+3. For each parsed group, insert a new `clusters` row with
+   `split_from_cluster_id = original_cluster_id`,
+   `review_status = 'pending'`, copying intent/subfolder from the
+   original. Move the relevant `cluster_members` rows to the new
+   cluster.
+4. The new pending clusters appear in the *next* Phase 12 export.
+
+**Deleted rows**: a row present in the export but missing from the
+imported sheet is treated as "no action" — the cluster stays
+`pending`. This is intentional: deleting a row is not a clear signal
+(was it deleted on purpose, or accidentally?). To reject a cluster,
+the reviewer must explicitly set `review_action = REJECT`.
+
+**Auto-approved clusters** (not in the export but eligible for direct
+approval): during import, after the sheet is processed, run a final
+sweep over `clusters` where `review_status = 'pending'` AND
+`confidence_score >= confidence_auto_approve_threshold` AND `intent
+NOT IN (require_human_review_intents)`. Apply `APPROVE` semantics to
+each. Log count to `output_summary.auto_approved`.
+
+### Inputs
+
+- `clusters` rows where `review_status = 'pending'`.
+- `cluster_members` joined to `raw_keywords` for the membership list
+  and primary-keyword candidates.
+- Config: `review.confidence_auto_approve_threshold`,
+  `review.require_human_review_intents`,
+  `review.google_sheets.sheet_id` (export destination, set after
+  first export so subsequent exports update the same sheet).
+
+### Outputs
+
+**Export mode:**
+- A Google Sheet (or local CSV if `google_sheets.sheet_id` is null).
+- `review.google_sheets.sheet_id` populated in the site YAML config
+  (and snapshotted into `pipeline_jobs.output_summary`) if a sheet was
+  newly created.
+
+**Import mode:**
+- `topics` rows for approved + merge-target clusters.
+- `topic_keywords` rows linking topics to their member keywords.
+- `clusters.review_status` updated to terminal states.
+- New `clusters` rows for SPLIT actions, with `review_status = 'pending'`.
+- `pipeline_jobs.output_summary` counts:
+  `{approved, rejected, merged, split, auto_approved, failed}`.
+
+### Failure modes
+
+- **Sheet edited while export was running**: detect via the
+  `cluster_id` mismatch; refuse to import. Reviewer must re-export.
+- **`merge_target_cluster_id` doesn't exist or belongs to another
+  site**: row is logged and skipped. Other rows still import.
+- **Merge cycle (A merges into B, B merges into A)**: detected
+  in the merge-chain walk; all clusters in the cycle are skipped and
+  logged.
+- **SPLIT group references a keyword not in the cluster**: row is
+  logged and skipped.
+- **APPROVE without setting `primary_keyword`**: reject — the cluster
+  must have an explicit primary keyword chosen by the reviewer.
+
+### Idempotency
+
+- **Export**: re-running export only exports clusters still in
+  `pending`. Already-actioned clusters are excluded. Safe to re-run.
+- **Import**: re-running import on the same sheet is a no-op — all
+  clusters in the sheet are already in terminal states. Re-running
+  with an edited sheet creates new actions only for clusters that
+  were still `pending`.
+
+### Configuration
+
+`review.*` block in site YAML. Sheet creation requires
+`GOOGLE_SHEETS_CREDENTIALS_PATH` env var set; without it, Phase 12
+falls back to local CSV in `output/{site_slug}/clusters_review.csv`.
 
 ---
 
