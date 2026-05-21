@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
   createSession,
@@ -8,6 +9,8 @@ import {
   finalizeSilos,
   getSession,
   overrideAudience,
+  type AddTopicBody,
+  type EditTopicBody,
   type RelationshipType,
   type Silo,
   type SiloDiscovery as Discovery,
@@ -17,12 +20,19 @@ import {
   RELATIONSHIP_OPTIONS,
 } from "../shared/relationshipTypes";
 
-type Step = "form" | "loading" | "disambiguation" | "review" | "done";
+type Step = "form" | "disambiguation" | "review" | "done";
+
+const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
 export function SiloDiscovery({ onExit }: { onExit: () => void }) {
+  const qc = useQueryClient();
   const [step, setStep] = useState<Step>("form");
   const [error, setError] = useState<string | null>(null);
-  const [discovery, setDiscovery] = useState<Discovery | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  // Degraded-mode notes belong to the discovery run, so keep them in state —
+  // refetches (after silo edits) must not clear the banners.
+  const [degradedNotes, setDegradedNotes] = useState<string[]>([]);
+  const [interpretations, setInterpretations] = useState<string[]>([]);
 
   // form state
   const [seed, setSeed] = useState("");
@@ -33,54 +43,46 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
   const [showOptional, setShowOptional] = useState(false);
 
   function applyResult(d: Discovery) {
-    setDiscovery(d);
-    setStep(d.needs_disambiguation ? "disambiguation" : "review");
+    setSessionId(d.session_id);
+    setDegradedNotes(d.degraded_notes);
+    if (d.needs_disambiguation) {
+      setInterpretations(d.interpretations);
+      setStep("disambiguation");
+    } else {
+      // Seed the cache so Review renders immediately without an extra fetch.
+      qc.setQueryData(["session", d.session_id], d);
+      setStep("review");
+    }
   }
 
-  async function reload(id: string) {
-    setDiscovery(await getSession(id));
-  }
+  const createMut = useMutation({
+    mutationFn: createSession,
+    onSuccess: applyResult,
+    onError: (e) => setError(msg(e)),
+  });
+  const disambigMut = useMutation({
+    mutationFn: (choice: string) => disambiguateSession(sessionId!, choice),
+    onSuccess: applyResult,
+    onError: (e) => setError(msg(e)),
+  });
+  const finalizeMut = useMutation({
+    mutationFn: () => finalizeSilos(sessionId!),
+    onSuccess: () => setStep("done"),
+    onError: (e) => setError(msg(e)),
+  });
 
-  async function onSubmitSeed(e: FormEvent) {
+  const busy = createMut.isPending || disambigMut.isPending;
+
+  function onSubmitSeed(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    setStep("loading");
-    try {
-      const d = await createSession({
-        seed_keyword: seed.trim(),
-        audience_hint: audience.trim() || undefined,
-        disambiguation_hint: disambHint.trim() || undefined,
-        topic_count: topicCount,
-        coverage_mode: mode,
-      });
-      applyResult(d);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Discovery failed");
-      setStep("form");
-    }
-  }
-
-  async function pickInterpretation(choice: string) {
-    if (!discovery) return;
-    setError(null);
-    setStep("loading");
-    try {
-      applyResult(await disambiguateSession(discovery.session_id, choice));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
-      setStep("disambiguation");
-    }
-  }
-
-  async function onFinalize() {
-    if (!discovery) return;
-    setError(null);
-    try {
-      await finalizeSilos(discovery.session_id);
-      setStep("done");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Finalize failed");
-    }
+    createMut.mutate({
+      seed_keyword: seed.trim(),
+      audience_hint: audience.trim() || undefined,
+      disambiguation_hint: disambHint.trim() || undefined,
+      topic_count: topicCount,
+      coverage_mode: mode,
+    });
   }
 
   return (
@@ -98,7 +100,13 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
       <main className="content">
         {error && <p className="form-error">{error}</p>}
 
-        {step === "form" && (
+        {busy && (
+          <div className="state-center" style={{ minHeight: "40vh" }}>
+            Discovering silos — grounding, demand sample, and competitor structure…
+          </div>
+        )}
+
+        {!busy && step === "form" && (
           <SeedForm
             {...{
               seed,
@@ -118,30 +126,31 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
 
-        {step === "loading" && (
-          <div className="state-center" style={{ minHeight: "40vh" }}>
-            Discovering silos — grounding, demand sample, and competitor structure…
-          </div>
-        )}
-
-        {step === "disambiguation" && discovery && (
+        {!busy && step === "disambiguation" && (
           <Disambiguation
             seed={seed}
-            interpretations={discovery.interpretations}
-            onPick={pickInterpretation}
+            interpretations={interpretations}
+            onPick={(choice) => {
+              setError(null);
+              disambigMut.mutate(choice);
+            }}
           />
         )}
 
-        {step === "review" && discovery && (
+        {!busy && step === "review" && sessionId && (
           <Review
-            discovery={discovery}
-            onReload={() => reload(discovery.session_id)}
-            onFinalize={onFinalize}
+            sessionId={sessionId}
+            degradedNotes={degradedNotes}
+            finalizing={finalizeMut.isPending}
+            onFinalize={() => {
+              setError(null);
+              finalizeMut.mutate();
+            }}
             setError={setError}
           />
         )}
 
-        {step === "done" && (
+        {!busy && step === "done" && (
           <div className="card">
             <h1 className="page-title">Silos finalized</h1>
             <p className="muted">
@@ -302,30 +311,55 @@ function Disambiguation(p: {
 
 // ---------------------------------------------------------------------------
 function Review(p: {
-  discovery: Discovery;
-  onReload: () => Promise<void>;
+  sessionId: string;
+  degradedNotes: string[];
+  finalizing: boolean;
   onFinalize: () => void;
   setError: (v: string | null) => void;
 }) {
-  const { discovery } = p;
-  const [audienceEdit, setAudienceEdit] = useState(discovery.detected_audience ?? "");
-  const [adding, setAdding] = useState(false);
+  const qc = useQueryClient();
+  const sessionQuery = useQuery({
+    queryKey: ["session", p.sessionId],
+    queryFn: () => getSession(p.sessionId),
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["session", p.sessionId] });
+  const onErr = (e: unknown) => p.setError(e instanceof Error ? e.message : "Action failed");
 
-  async function guard(fn: () => Promise<unknown>) {
-    p.setError(null);
-    try {
-      await fn();
-      await p.onReload();
-    } catch (err) {
-      p.setError(err instanceof Error ? err.message : "Action failed");
-    }
+  const audienceMut = useMutation({
+    mutationFn: (a: string) => overrideAudience(p.sessionId, a),
+    onSuccess: invalidate,
+    onError: onErr,
+  });
+  const addMut = useMutation({
+    mutationFn: (b: AddTopicBody) => addTopic(p.sessionId, b),
+    onSuccess: invalidate,
+    onError: onErr,
+  });
+  const editMut = useMutation({
+    mutationFn: (v: { id: string; body: EditTopicBody }) => editTopic(v.id, v.body),
+    onSuccess: invalidate,
+    onError: onErr,
+  });
+  const delMut = useMutation({
+    mutationFn: (id: string) => deleteTopic(id),
+    onSuccess: invalidate,
+    onError: onErr,
+  });
+
+  const data = sessionQuery.data;
+  const silos = data?.silos ?? [];
+  const [audienceEdit, setAudienceEdit] = useState<string | null>(null);
+  const audienceValue = audienceEdit ?? data?.detected_audience ?? "";
+
+  if (sessionQuery.isLoading) {
+    return <div className="state-center">Loading silos…</div>;
   }
 
   return (
     <>
       <h1 className="page-title">Review proposed silos</h1>
 
-      {discovery.degraded_notes.map((note) => (
+      {p.degradedNotes.map((note) => (
         <div className="banner" key={note}>
           {note}
         </div>
@@ -336,46 +370,38 @@ function Review(p: {
         <input
           className="input"
           style={{ maxWidth: 360 }}
-          value={audienceEdit}
+          value={audienceValue}
           onChange={(e) => setAudienceEdit(e.target.value)}
         />
         <button
           className="btn btn-ghost"
-          onClick={() =>
-            guard(() => overrideAudience(discovery.session_id, audienceEdit.trim()))
-          }
+          disabled={audienceMut.isPending}
+          onClick={() => audienceMut.mutate(audienceValue.trim())}
         >
           Save
         </button>
       </div>
 
-      {discovery.silos.map((silo) => (
-        <SiloCard key={silo.id} silo={silo} onChange={guard} />
+      {silos.map((silo) => (
+        <SiloCard
+          key={silo.id}
+          silo={silo}
+          onEdit={(body) => editMut.mutate({ id: silo.id, body })}
+          onDelete={() => delMut.mutate(silo.id)}
+        />
       ))}
 
-      {!adding && (
-        <button className="link-btn" onClick={() => setAdding(true)}>
-          + Add custom silo
-        </button>
-      )}
-      {adding && (
-        <AddSiloForm
-          sessionId={discovery.session_id}
-          onClose={() => setAdding(false)}
-          onSaved={p.onReload}
-          setError={p.setError}
-        />
-      )}
+      <AddSiloRow onAdd={(body) => addMut.mutate(body)} adding={addMut.isPending} />
 
       <div className="toolbar">
-        <span className="muted">{discovery.silos.length} silos</span>
+        <span className="muted">{silos.length} silos</span>
         <button
           className="btn btn-primary"
           style={{ width: "auto" }}
-          disabled={discovery.silos.length === 0}
+          disabled={silos.length === 0 || p.finalizing}
           onClick={p.onFinalize}
         >
-          Continue
+          {p.finalizing ? "Finalizing…" : "Continue"}
         </button>
       </div>
     </>
@@ -383,7 +409,11 @@ function Review(p: {
 }
 
 // ---------------------------------------------------------------------------
-function SiloCard(p: { silo: Silo; onChange: (fn: () => Promise<unknown>) => void }) {
+function SiloCard(p: {
+  silo: Silo;
+  onEdit: (body: EditTopicBody) => void;
+  onDelete: () => void;
+}) {
   const { silo } = p;
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(silo.name);
@@ -423,13 +453,7 @@ function SiloCard(p: { silo: Silo; onChange: (fn: () => Promise<unknown>) => voi
           <button
             className="link-btn"
             onClick={() => {
-              p.onChange(() =>
-                editTopic(silo.id, {
-                  name: name.trim(),
-                  rationale,
-                  relationship_type: rel,
-                }),
-              );
+              p.onEdit({ name: name.trim(), rationale, relationship_type: rel });
               setEditing(false);
             }}
           >
@@ -451,7 +475,7 @@ function SiloCard(p: { silo: Silo; onChange: (fn: () => Promise<unknown>) => voi
           <button className="link-btn" onClick={() => setEditing(true)}>
             Edit
           </button>
-          <button className="link-btn" onClick={() => p.onChange(() => deleteTopic(silo.id))}>
+          <button className="link-btn" onClick={p.onDelete}>
             Remove
           </button>
         </div>
@@ -459,7 +483,10 @@ function SiloCard(p: { silo: Silo; onChange: (fn: () => Promise<unknown>) => voi
       <div className="silo-badges">
         <span className="badge badge-rel">{RELATIONSHIP_LABELS[silo.relationship_type]}</span>
         {silo.is_broader_class && (
-          <span className="badge badge-warn" title="Category-level coverage; include only if niche-strategic">
+          <span
+            className="badge badge-warn"
+            title="Category-level coverage; include only if niche-strategic"
+          >
             broader class
           </span>
         )}
@@ -474,29 +501,18 @@ function SiloCard(p: { silo: Silo; onChange: (fn: () => Promise<unknown>) => voi
 }
 
 // ---------------------------------------------------------------------------
-function AddSiloForm(p: {
-  sessionId: string;
-  onClose: () => void;
-  onSaved: () => Promise<void>;
-  setError: (v: string | null) => void;
-}) {
+function AddSiloRow(p: { onAdd: (body: AddTopicBody) => void; adding: boolean }) {
+  const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [rationale, setRationale] = useState("");
   const [rel, setRel] = useState<RelationshipType>("property_or_mechanism");
 
-  async function save() {
-    p.setError(null);
-    try {
-      await addTopic(p.sessionId, {
-        name: name.trim(),
-        rationale: rationale.trim() || undefined,
-        relationship_type: rel,
-      });
-      await p.onSaved();
-      p.onClose();
-    } catch (err) {
-      p.setError(err instanceof Error ? err.message : "Failed to add silo");
-    }
+  if (!open) {
+    return (
+      <button className="link-btn" onClick={() => setOpen(true)}>
+        + Add custom silo
+      </button>
+    );
   }
 
   return (
@@ -528,10 +544,23 @@ function AddSiloForm(p: {
         </select>
       </label>
       <div className="silo-actions">
-        <button className="link-btn" disabled={!name.trim()} onClick={save}>
+        <button
+          className="link-btn"
+          disabled={!name.trim() || p.adding}
+          onClick={() => {
+            p.onAdd({
+              name: name.trim(),
+              rationale: rationale.trim() || undefined,
+              relationship_type: rel,
+            });
+            setOpen(false);
+            setName("");
+            setRationale("");
+          }}
+        >
           Add silo
         </button>
-        <button className="link-btn" onClick={p.onClose}>
+        <button className="link-btn" onClick={() => setOpen(false)}>
           Cancel
         </button>
       </div>

@@ -84,6 +84,7 @@ class OpenAILLM:
                 "prompt_tokens": getattr(usage, "input_tokens", None),
                 "completion_tokens": getattr(usage, "output_tokens", None),
                 "latency_ms": latency_ms,
+                "cost_usd": None,  # populated in M11 (PRD §16.4 cost attribution)
                 "status": "success",
             },
         )
@@ -171,6 +172,7 @@ class OpenAILLM:
                 "endpoint": "embeddings",
                 "result_count": len(texts),
                 "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+                "cost_usd": None,  # populated in M11 (PRD §16.4 cost attribution)
             },
         )
         return [d.embedding for d in resp.data]

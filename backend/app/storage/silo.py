@@ -19,6 +19,21 @@ _TOPIC_COLS = (
 )
 
 
+def project_visible_to_user(access_token: str, project_id: str) -> bool:
+    """True if RLS lets this user see the project (i.e. they may attach a
+    session to it). Prevents attaching a session to a project the caller does
+    not own (PRD §13: INSERTs gated by the same scope)."""
+    res = (
+        get_user_client(access_token)
+        .table("projects")
+        .select("id")
+        .eq("id", project_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
+
+
 def resolve_project_id(user_id: str, project_id: str | None) -> str:
     if project_id:
         return project_id
@@ -107,6 +122,7 @@ def list_topics(session_id: str) -> list[dict]:
         .select(_TOPIC_COLS)
         .eq("session_id", session_id)
         .order("created_at")
+        .order("id")
         .execute()
     )
     return res.data
@@ -135,7 +151,8 @@ def insert_custom_topic(
         )
         .execute()
     )
-    return res.data[0]
+    # Re-fetch with the restricted column set so the embedding is never returned.
+    return get_topic(res.data[0]["id"])
 
 
 def get_topic(topic_id: str) -> dict | None:
@@ -151,8 +168,9 @@ def get_topic(topic_id: str) -> dict | None:
 
 
 def update_topic(topic_id: str, fields: dict) -> dict:
-    res = get_service_client().table("topics").update(fields).eq("id", topic_id).execute()
-    return res.data[0]
+    get_service_client().table("topics").update(fields).eq("id", topic_id).execute()
+    # Re-fetch with the restricted column set so the embedding is never returned.
+    return get_topic(topic_id)
 
 
 def delete_topic(topic_id: str) -> None:

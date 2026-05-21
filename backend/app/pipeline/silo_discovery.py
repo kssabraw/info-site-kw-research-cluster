@@ -7,12 +7,44 @@ pass halts (the caller turns the raised error into a session error).
 """
 
 import logging
+import math
 
 from app.dataforseo import DataForSEOClient, DataForSEOError
 from app.llm import LLMError, OpenAILLM
 from app.pipeline.models import SiloDiscoveryResult
 
 logger = logging.getLogger(__name__)
+
+
+def _cosine_distance(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 1.0
+    return 1.0 - (dot / (na * nb))
+
+
+def _ambiguity_confirmed(
+    seed: str, interpretations: list[str], llm: OpenAILLM, threshold: float
+) -> bool:
+    """Corroborate the LLM's ambiguity signal with embedding separation
+    (PRD §7.1.2 / Q16). Confirmed only if the two most-distinct candidate
+    interpretations are well-separated (cosine distance >= threshold). If the
+    embeddings can't be computed, fall back to the LLM signal (ask the user)."""
+    distinct = [i.strip() for i in interpretations if i.strip()]
+    if len(distinct) < 2:
+        return False
+    try:
+        vectors = llm.embed([f"{seed}: {i}" for i in distinct])
+    except LLMError:
+        return True
+    max_distance = max(
+        _cosine_distance(vectors[i], vectors[j])
+        for i in range(len(vectors))
+        for j in range(i + 1, len(vectors))
+    )
+    return max_distance >= threshold
 
 
 def run_silo_discovery(
@@ -24,6 +56,7 @@ def run_silo_discovery(
     llm: OpenAILLM,
     dfs: DataForSEOClient,
     serp_top_n: int = 5,
+    ambiguity_separation_threshold: float = 0.5,
 ) -> SiloDiscoveryResult:
     # 1. Grounding — required. Failure halts the run (PRD §16.2).
     try:
@@ -37,8 +70,16 @@ def run_silo_discovery(
 
     detected_audience = audience_hint or grounding.detected_audience
 
-    # 2. Disambiguation gate (PRD §7.1.2). Pause before any further work.
-    if grounding.is_ambiguous and not disambiguation_hint:
+    # 2. Disambiguation gate (PRD §7.1.2). The LLM's ambiguity signal is
+    # corroborated by embedding separation before pausing, so a single
+    # over-eager LLM flag doesn't spuriously interrupt the user.
+    if (
+        grounding.is_ambiguous
+        and not disambiguation_hint
+        and _ambiguity_confirmed(
+            seed, grounding.interpretations, llm, ambiguity_separation_threshold
+        )
+    ):
         logger.info(
             "disambiguation_required",
             extra={

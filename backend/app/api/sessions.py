@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.auth import AuthedUser, require_user
+from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
@@ -89,6 +90,7 @@ def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
             llm=get_llm(),
             dfs=get_dataforseo(),
             serp_top_n=10 if coverage_mode == "comprehensive" else 5,
+            ambiguity_separation_threshold=get_settings().ambiguity_separation_threshold,
         )
     except LLMError as exc:
         store.update_session(session["id"], {"status": "error"})
@@ -127,6 +129,12 @@ def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
 def create_session(
     body: CreateSessionBody, user: AuthedUser = Depends(require_user)
 ) -> SiloDiscoveryResponse:
+    # A supplied project must be one the caller can see (RLS), else the session
+    # would attach to a project they don't own (PRD §13).
+    if body.project_id and not store.project_visible_to_user(
+        user.access_token, body.project_id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     project_id = store.resolve_project_id(user.id, body.project_id)
     session = store.create_session(
         user_id=user.id,
@@ -160,6 +168,7 @@ def get_session(
     session_id: str, user: AuthedUser = Depends(require_user)
 ) -> SiloDiscoveryResponse:
     session = _require_session(user, session_id)
+    bind_session_id(session_id)
     return SiloDiscoveryResponse(
         session_id=session_id,
         status=session["status"],
@@ -173,6 +182,7 @@ def override_audience(
     session_id: str, body: OverrideAudienceBody, user: AuthedUser = Depends(require_user)
 ) -> SiloDiscoveryResponse:
     session = _require_session(user, session_id)
+    bind_session_id(session_id)
     session = store.update_session(
         session_id, {"detected_audience": body.detected_audience.strip()}
     )
@@ -226,6 +236,7 @@ def add_topic(
     session_id: str, body: AddTopicBody, user: AuthedUser = Depends(require_user)
 ) -> dict:
     _require_session(user, session_id)
+    bind_session_id(session_id)
     return store.insert_custom_topic(
         session_id,
         name=body.name.strip(),
@@ -244,6 +255,7 @@ def edit_topic(
     if not topic:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic not found")
     _require_session(user, topic["session_id"])
+    bind_session_id(topic["session_id"])
 
     fields: dict = {}
     if body.name is not None:
@@ -268,6 +280,7 @@ def remove_topic(topic_id: str, user: AuthedUser = Depends(require_user)) -> Non
     if not topic:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic not found")
     _require_session(user, topic["session_id"])
+    bind_session_id(topic["session_id"])
     store.delete_topic(topic_id)
 
 

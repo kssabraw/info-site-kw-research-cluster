@@ -7,10 +7,12 @@ from app.pipeline.silo_discovery import run_silo_discovery
 
 
 class FakeLLM:
-    def __init__(self, grounding: GroundingResult, silos: list[ProposedSilo]):
+    def __init__(self, grounding: GroundingResult, silos: list[ProposedSilo], embed_fn=None):
         self._grounding = grounding
         self._silos = silos
+        self._embed_fn = embed_fn
         self.proposed = False
+        self.embed_called = False
 
     def ground_subject(self, seed, disambiguation_hint):
         return self._grounding
@@ -18,6 +20,13 @@ class FakeLLM:
     def propose_silos(self, **kwargs):
         self.proposed = True
         return self._silos
+
+    def embed(self, texts):
+        self.embed_called = True
+        if self._embed_fn:
+            return self._embed_fn(texts)
+        # Default: orthogonal unit vectors → maximally separated interpretations.
+        return [[1.0 if i == j else 0.0 for j in range(len(texts))] for i in range(len(texts))]
 
 
 class FakeDFS:
@@ -74,7 +83,8 @@ def test_audience_hint_overrides_detected():
     assert result.detected_audience == "biohackers"
 
 
-def test_disambiguation_gate_pauses_before_proposal():
+def test_disambiguation_gate_pauses_when_separation_confirmed():
+    # LLM flags ambiguity AND interpretations embed far apart -> confirmed.
     llm = FakeLLM(
         GroundingResult(is_ambiguous=True, interpretations=["planet", "element"]),
         [_silo("should-not-be-used")],
@@ -90,7 +100,47 @@ def test_disambiguation_gate_pauses_before_proposal():
     assert result.needs_disambiguation is True
     assert result.interpretations == ["planet", "element"]
     assert result.silos == []
+    assert llm.embed_called is True
     assert llm.proposed is False  # proposal must not run before disambiguation
+
+
+def test_ambiguity_not_confirmed_when_interpretations_are_similar():
+    # LLM flags ambiguity but interpretations embed close together -> not
+    # confirmed, so the run proceeds to proposal instead of pausing (PRD §7.1.2).
+    near_dup = lambda texts: [[1.0, 0.0], [0.99, 0.01]]  # noqa: E731
+    llm = FakeLLM(
+        GroundingResult(is_ambiguous=True, interpretations=["a", "a variant"]),
+        [_silo("real silo")],
+        embed_fn=near_dup,
+    )
+    result = run_silo_discovery(
+        seed="seed",
+        topic_count=5,
+        audience_hint=None,
+        disambiguation_hint=None,
+        llm=llm,
+        dfs=FakeDFS(),
+    )
+    assert result.needs_disambiguation is False
+    assert [s.name for s in result.silos] == ["real silo"]
+    assert llm.proposed is True
+
+
+def test_ambiguity_not_confirmed_with_single_interpretation():
+    llm = FakeLLM(
+        GroundingResult(is_ambiguous=True, interpretations=["only one"]),
+        [_silo("real silo")],
+    )
+    result = run_silo_discovery(
+        seed="seed",
+        topic_count=5,
+        audience_hint=None,
+        disambiguation_hint=None,
+        llm=llm,
+        dfs=FakeDFS(),
+    )
+    assert result.needs_disambiguation is False
+    assert llm.proposed is True
 
 
 def test_disambiguation_hint_skips_gate():

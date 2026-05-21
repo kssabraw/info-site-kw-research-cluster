@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # Responses API browsing tool type. Configurable so the exact name can be
     # corrected without a code change if OpenAI's differs (e.g. web_search_preview).
     openai_web_search_tool: str = "web_search"
+    # Disambiguation gate (PRD §7.1.2 / Q16). The LLM's ambiguity signal is
+    # corroborated by embedding separation between candidate interpretations:
+    # ambiguity is confirmed only if the two most-distinct interpretations have a
+    # cosine distance >= this threshold. Tunable during MVP testing.
+    ambiguity_separation_threshold: float = 0.5
 
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""
