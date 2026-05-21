@@ -25,3 +25,7 @@ frontend/dist/
 
 # TS build info
 *.tsbuildinfo
+
+# Vite config build output (emitted by tsc -b)
+frontend/vite.config.js
+frontend/vite.config.d.ts
