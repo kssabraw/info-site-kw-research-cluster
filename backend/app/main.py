@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health
+from app.api import health, projects
 from app.config import get_settings
 from app.logging import (
     bind_correlation_id,
@@ -64,3 +64,4 @@ async def correlation_and_access_log(request: Request, call_next):
 
 
 app.include_router(health.router)
+app.include_router(projects.router)
