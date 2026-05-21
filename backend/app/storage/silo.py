@@ -1,0 +1,167 @@
+"""Storage operations for sessions and topics (M2 silo discovery).
+
+Reads that serve a user and ownership checks go through the user-scoped client
+so RLS enforces visibility. Writes the backend orchestrates go through the
+service client after ownership has been verified.
+"""
+
+from app.pipeline.models import ProposedSilo
+from app.storage.supabase_client import (
+    ensure_scratch_project,
+    get_service_client,
+    get_user_client,
+)
+
+# Columns returned to the API — never the raw embedding vector.
+_TOPIC_COLS = (
+    "id, session_id, name, rationale, relationship_type, supporting_evidence, "
+    "source, is_broader_class, is_gated_for_competitor_mining, created_at"
+)
+
+
+def resolve_project_id(user_id: str, project_id: str | None) -> str:
+    if project_id:
+        return project_id
+    return ensure_scratch_project(user_id)["id"]
+
+
+def create_session(
+    *,
+    user_id: str,
+    project_id: str,
+    seed_keyword: str,
+    audience_hint: str | None,
+    disambiguation_hint: str | None,
+    settings: dict,
+) -> dict:
+    row = (
+        get_service_client()
+        .table("sessions")
+        .insert(
+            {
+                "user_id": user_id,
+                "project_id": project_id,
+                "seed_keyword": seed_keyword,
+                "audience_hint": audience_hint,
+                "disambiguation_hint": disambiguation_hint,
+                "settings": settings,
+                "status": "running_pre_review",
+            }
+        )
+        .execute()
+    )
+    return row.data[0]
+
+
+def session_visible_to_user(access_token: str, session_id: str) -> dict | None:
+    """Return the session if RLS lets this user see it, else None."""
+    res = (
+        get_user_client(access_token)
+        .table("sessions")
+        .select("*")
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def update_session(session_id: str, fields: dict) -> dict:
+    row = (
+        get_service_client()
+        .table("sessions")
+        .update(fields)
+        .eq("id", session_id)
+        .execute()
+    )
+    return row.data[0]
+
+
+def delete_topics_for_session(session_id: str) -> None:
+    get_service_client().table("topics").delete().eq("session_id", session_id).execute()
+
+
+def insert_proposed_topics(session_id: str, silos: list[ProposedSilo]) -> list[dict]:
+    if not silos:
+        return []
+    payload = [
+        {
+            "session_id": session_id,
+            "name": s.name,
+            "rationale": s.rationale,
+            "relationship_type": s.relationship_type.value,
+            "supporting_evidence": s.supporting_evidence,
+            "source": "llm_proposed",
+            "is_broader_class": s.is_broader_class,
+        }
+        for s in silos
+    ]
+    res = get_service_client().table("topics").insert(payload).execute()
+    return res.data
+
+
+def list_topics(session_id: str) -> list[dict]:
+    res = (
+        get_service_client()
+        .table("topics")
+        .select(_TOPIC_COLS)
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    return res.data
+
+
+def insert_custom_topic(
+    session_id: str,
+    *,
+    name: str,
+    rationale: str | None,
+    relationship_type: str,
+    is_broader_class: bool,
+) -> dict:
+    res = (
+        get_service_client()
+        .table("topics")
+        .insert(
+            {
+                "session_id": session_id,
+                "name": name,
+                "rationale": rationale,
+                "relationship_type": relationship_type,
+                "source": "user_added",
+                "is_broader_class": is_broader_class,
+            }
+        )
+        .execute()
+    )
+    return res.data[0]
+
+
+def get_topic(topic_id: str) -> dict | None:
+    res = (
+        get_service_client()
+        .table("topics")
+        .select(_TOPIC_COLS)
+        .eq("id", topic_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def update_topic(topic_id: str, fields: dict) -> dict:
+    res = get_service_client().table("topics").update(fields).eq("id", topic_id).execute()
+    return res.data[0]
+
+
+def delete_topic(topic_id: str) -> None:
+    get_service_client().table("topics").delete().eq("id", topic_id).execute()
+
+
+def set_topic_embedding(topic_id: str, vector: list[float]) -> None:
+    # pgvector accepts its text form "[a,b,c]".
+    literal = "[" + ",".join(repr(float(x)) for x in vector) + "]"
+    get_service_client().table("topics").update({"embedding": literal}).eq(
+        "id", topic_id
+    ).execute()
