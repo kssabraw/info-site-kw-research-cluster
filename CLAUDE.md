@@ -144,18 +144,27 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M1 — Foundation** (in progress)
+**M2 — Front-half pipeline: silo discovery + user review** (in progress)
 
-M1 Done state (per PRD §15.1):
-- Owner and VA can sign in via Supabase Auth.
-- `fanout.user_profiles`, `fanout.projects`, `fanout.sessions`, `fanout.workspace_settings` tables exist with RLS enforced per PRD §11.2 and §13.
-- Owner sees empty project list; VA sees empty project list scoped to themselves.
-- Scratch project auto-created on first login.
-- Monorepo structure scaffolded (`backend/`, `frontend/`, `supabase/`, `docs/`).
-- Minimal FastAPI service with `/healthz` endpoint and structured logging deployed to Railway.
-- Minimal React app handling login and showing empty project list.
+M1 — Foundation: **complete** (signed off 2026-05-21). `fanout` schema with
+`user_profiles`/`projects`/`sessions`/`workspace_settings` + RLS applied to the
+AR-Internal-Tools Supabase project; FastAPI `/healthz` + `/me` + `/projects`
+deployed to Railway; React login + project list deployed. Built on branch
+`m1-foundation`.
 
-When M1 is complete and approved, update this section to reflect M2 as the active milestone.
+M2 Done state (per PRD §15.1):
+- User enters a seed, optional `audience_hint`, optional `disambiguation_hint`.
+- Pipeline runs the grounding pass, `keyword_ideas` demand sample, SERP structure
+  scrape, and LLM silo proposal (GPT-5.4 with browsing).
+- Disambiguation gate triggers on ambiguous seeds (e.g. `mercury`).
+- User sees proposed silos with rationale, evidence, relationship_type, and the
+  detected audience.
+- User can remove silos, add custom silos, edit names/rationales, override audience.
+- Finalized silos persist to the `topics` table with embeddings
+  (`text-embedding-3-small` against `seed + rationale + detected_audience`).
+- **No expansion yet** — pipeline halts after silo review (expansion is M3).
+
+When M2 is complete and approved, update this section to reflect M3 as the active milestone.
 
 ---
 
