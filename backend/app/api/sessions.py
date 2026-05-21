@@ -94,7 +94,7 @@ def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
         store.update_session(session["id"], {"status": "error"})
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Silo discovery could not complete (grounding unavailable). Try again.",
+            detail=f"Silo discovery could not complete: {exc}",
         ) from exc
 
     store.update_session(session["id"], {"detected_audience": result.detected_audience})

@@ -50,16 +50,23 @@ def _extract_json(text: str):
 
 
 class OpenAILLM:
-    def __init__(self, api_key: str, silo_model: str, embedding_model: str):
+    def __init__(
+        self,
+        api_key: str,
+        silo_model: str,
+        embedding_model: str,
+        web_search_tool: str = "web_search",
+    ):
         self._client = OpenAI(api_key=api_key)
         self._silo_model = silo_model
         self._embedding_model = embedding_model
+        self._web_search_tool = web_search_tool
 
     def _respond(self, prompt: str, purpose: str, *, browsing: bool) -> str:
         started = time.perf_counter()
         kwargs: dict = {"model": self._silo_model, "input": prompt}
         if browsing:
-            kwargs["tools"] = [{"type": "web_search"}]
+            kwargs["tools"] = [{"type": self._web_search_tool}]
         try:
             resp = self._client.responses.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 — surfaced as LLMError to caller

@@ -14,4 +14,5 @@ def get_llm() -> OpenAILLM:
         api_key=s.openai_api_key,
         silo_model=s.openai_silo_model,
         embedding_model=s.openai_embedding_model,
+        web_search_tool=s.openai_web_search_tool,
     )

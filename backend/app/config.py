@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_silo_model: str = "gpt-5.4"
     openai_embedding_model: str = "text-embedding-3-small"
+    # Responses API browsing tool type. Configurable so the exact name can be
+    # corrected without a code change if OpenAI's differs (e.g. web_search_preview).
+    openai_web_search_tool: str = "web_search"
 
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""
