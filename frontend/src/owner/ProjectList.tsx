@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getMe, getProjects } from "../shared/api";
 import { useAuth } from "../shared/auth";
 
-export function ProjectList() {
+export function ProjectList({ onNewSession }: { onNewSession: () => void }) {
   const { signOut } = useAuth();
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects });
@@ -28,7 +28,14 @@ export function ProjectList() {
       </header>
 
       <main className="content">
-        <h1 className="page-title">Projects</h1>
+        <div className="silo-head" style={{ marginBottom: 20 }}>
+          <h1 className="page-title" style={{ margin: 0 }}>
+            Projects
+          </h1>
+          <button className="btn btn-primary" style={{ width: "auto" }} onClick={onNewSession}>
+            New research session
+          </button>
+        </div>
 
         {projects.isLoading && (
           <div className="project-grid">
