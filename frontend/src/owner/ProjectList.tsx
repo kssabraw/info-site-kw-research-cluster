@@ -8,32 +8,60 @@ export function ProjectList() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects });
 
   return (
-    <main style={{ maxWidth: 640, margin: "5vh auto", fontFamily: "system-ui" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Projects</h1>
-        <button onClick={() => signOut()}>Sign out</button>
+    <>
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="brand-name">Topic Fanout</span>
+        </div>
+        <div className="topbar-user">
+          {me.data && (
+            <>
+              <span>{me.data.email}</span>
+              <span className="role-badge">{me.data.role}</span>
+            </>
+          )}
+          <button className="btn btn-ghost" onClick={() => signOut()}>
+            Sign out
+          </button>
+        </div>
       </header>
 
-      {me.data && (
-        <p style={{ color: "#555" }}>
-          Signed in as {me.data.email} ({me.data.role})
-        </p>
-      )}
+      <main className="content">
+        <h1 className="page-title">Projects</h1>
 
-      {projects.isLoading && <p>Loading projects…</p>}
-      {projects.isError && <p style={{ color: "crimson" }}>Failed to load projects.</p>}
+        {projects.isLoading && (
+          <div className="project-grid">
+            <div className="skeleton" />
+            <div className="skeleton" />
+            <div className="skeleton" />
+          </div>
+        )}
 
-      {projects.data && (
-        <ul>
-          {projects.data.map((p) => (
-            <li key={p.id}>
-              {p.name}
-              {p.is_scratch ? " (Scratch)" : ""}
-            </li>
-          ))}
-        </ul>
-      )}
-      {projects.data && projects.data.length === 0 && <p>No projects yet.</p>}
-    </main>
+        {projects.isError && (
+          <p className="form-error">Failed to load projects. Please try again.</p>
+        )}
+
+        {projects.data && projects.data.length > 0 && (
+          <div className="project-grid">
+            {projects.data.map((p) => (
+              <div className="project-card" key={p.id}>
+                <p className="project-card-name">
+                  {p.name}
+                  {p.is_scratch && <span className="tag-scratch">Scratch</span>}
+                </p>
+                <span className="project-card-meta">
+                  Created {new Date(p.created_at).toLocaleDateString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {projects.data && projects.data.length === 0 && (
+          <p className="muted">No projects yet.</p>
+        )}
+      </main>
+    </>
   );
 }

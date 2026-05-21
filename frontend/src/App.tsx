@@ -8,7 +8,7 @@ export default function App() {
   const { session, loading } = useAuth();
 
   if (loading) {
-    return <p style={{ fontFamily: "system-ui", margin: "10vh auto", textAlign: "center" }}>Loading…</p>;
+    return <div className="state-center">Loading…</div>;
   }
 
   return session ? <ProjectList /> : <Login />;

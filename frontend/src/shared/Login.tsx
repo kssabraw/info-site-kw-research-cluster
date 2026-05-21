@@ -22,34 +22,44 @@ export function Login() {
   }
 
   return (
-    <main style={{ maxWidth: 320, margin: "10vh auto", fontFamily: "system-ui" }}>
-      <h1>Topic Fanout Tool</h1>
-      <form onSubmit={onSubmit}>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          Email
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{ width: "100%" }}
-          />
-        </label>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            style={{ width: "100%" }}
-          />
-        </label>
-        <button type="submit" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
-    </main>
+    <div className="login-wrap">
+      <div className="login-card">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="brand-name">Topic Fanout</span>
+        </div>
+        <p className="login-sub">Sign in to your workspace</p>
+
+        <form onSubmit={onSubmit}>
+          <label className="field">
+            <span className="field-label">Email</span>
+            <input
+              className="input"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Password</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </label>
+          <button className="btn btn-primary" type="submit" disabled={busy}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </div>
   );
 }
