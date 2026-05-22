@@ -6,11 +6,14 @@ queries can run as the user with RLS enforced.
 """
 
 from dataclasses import dataclass
+import logging
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.storage import get_service_client
+
+logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=True)
 
@@ -28,7 +31,13 @@ def require_user(
     token = creds.credentials
     try:
         result = get_service_client().auth.get_user(token)
-    except Exception:
+    except Exception as exc:
+        # Log the real reason (token rejected vs. a server/config error) but
+        # don't leak it to the client.
+        logger.warning(
+            "auth_verification_failed",
+            extra={"event": "auth_verification_failed", "reason": repr(exc)},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
