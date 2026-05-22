@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,10 +14,20 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Supabase
+    # Supabase. The service-role and anon keys accept the AR Tools project-level
+    # names (SUPABASE_SERVICE_KEY / SUPABASE_KEY) as aliases so the service works
+    # with the inherited env without renaming shared variables.
     supabase_url: str = ""
-    supabase_service_role_key: str = ""
-    supabase_anon_key: str = ""
+    supabase_service_role_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY"
+        ),
+    )
+    supabase_anon_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("SUPABASE_ANON_KEY", "SUPABASE_KEY"),
+    )
 
     # The Postgres schema all this app's tables live under (PRD §14.3).
     fanout_schema: str = "fanout"
