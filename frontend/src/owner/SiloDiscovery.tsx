@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
@@ -100,11 +100,7 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
       <main className="content">
         {error && <p className="form-error">{error}</p>}
 
-        {busy && (
-          <div className="state-center" style={{ minHeight: "40vh" }}>
-            Discovering silos — grounding, demand sample, and competitor structure…
-          </div>
-        )}
+        {busy && <DiscoveryProgress />}
 
         {!busy && step === "form" && (
           <SeedForm
@@ -167,6 +163,51 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
         )}
       </main>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The grounding→proposal pipeline runs as a single request, so there's no live
+// per-step signal. We show an elapsed timer, a soft progress bar, and step the
+// caption through the known stages (PRD §7.1.1) by elapsed time.
+const DISCOVERY_STAGES: { until: number; label: string }[] = [
+  { until: 10, label: "Reading top-ranking content for your seed" },
+  { until: 16, label: "Sampling search demand" },
+  { until: 22, label: "Analyzing competitor site structure" },
+  { until: Infinity, label: "Proposing silos" },
+];
+const DISCOVERY_TARGET_S = 35;
+
+function DiscoveryProgress() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const stage =
+    DISCOVERY_STAGES.find((s) => elapsed < s.until) ??
+    DISCOVERY_STAGES[DISCOVERY_STAGES.length - 1];
+  // Approach but never reach 100% until the request actually resolves.
+  const pct = Math.min(92, Math.round((elapsed / DISCOVERY_TARGET_S) * 100));
+
+  return (
+    <div className="progress-wrap">
+      <div className="spinner" aria-hidden="true" />
+      <div className="progress-stage">{stage.label}…</div>
+      <div
+        className="progress-track"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+      >
+        <div className="progress-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="progress-meta">
+        Elapsed {elapsed}s · usually 20–40 seconds
+      </div>
+    </div>
   );
 }
 
