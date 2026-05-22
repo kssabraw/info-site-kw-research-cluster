@@ -410,3 +410,47 @@ body {
   padding: 16px;
   margin-top: 8px;
 }
+
+/* ---------- Discovery progress ---------- */
+.progress-wrap {
+  max-width: 420px;
+  margin: 12vh auto;
+  text-align: center;
+}
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 18px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.progress-track {
+  height: 6px;
+  background: var(--accent-soft);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 16px 0 10px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.5s ease;
+}
+.progress-stage {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.progress-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
