@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
+from app.pipeline.expansion import ExpansionTopic, run_expansion
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
@@ -228,6 +229,61 @@ def finalize_silos(session_id: str, user: AuthedUser = Depends(require_user)) ->
         extra={"event": "step_complete", "step": "silo_finalize", "topic_count": len(topics)},
     )
     return {"finalized": True, "topic_count": len(topics)}
+
+
+# ---- M3 expansion ---------------------------------------------------------
+@router.post("/sessions/{session_id}/expand")
+def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    topics = store.list_topics(session_id)
+    if not topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No silos to expand. Finalize at least one silo first.",
+        )
+
+    store.update_session(session_id, {"status": "running"})
+    s = get_settings()
+    result = run_expansion(
+        topics=[ExpansionTopic(id=t["id"], anchor=t["name"]) for t in topics],
+        dfs=get_dataforseo(),
+        keyword_ideas_limit=s.keyword_ideas_limit,
+        keyword_suggestions_limit=s.keyword_suggestions_limit,
+        query_fanouts_limit=s.query_fanouts_limit,
+        paa_tier1_seeds=s.paa_tier1_seeds,
+        paa_tier2_cap=s.paa_tier2_cap,
+        autocomplete_max=s.autocomplete_max,
+        max_workers=s.expansion_max_workers,
+    )
+
+    store.delete_keywords_for_session(session_id)
+    count = store.insert_keywords(session_id, result.per_topic)
+    # M3 is the current pipeline terminus; later milestones move this downstream.
+    store.update_session(session_id, {"status": "complete"})
+
+    names = {t["id"]: t["name"] for t in topics}
+    return {
+        "expanded": True,
+        "keyword_count": count,
+        "degraded_notes": result.degraded_notes,
+        "topics": [
+            {"topic_id": tid, "name": names.get(tid, ""), "keyword_count": len(kws)}
+            for tid, kws in result.per_topic.items()
+        ],
+    }
+
+
+@router.get("/sessions/{session_id}/keywords")
+def get_keywords(
+    session_id: str,
+    user: AuthedUser = Depends(require_user),
+    topic_id: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict]:
+    _require_session(user, session_id)
+    return store.list_keywords(session_id, topic_id=topic_id, limit=min(limit, 500), offset=offset)
 
 
 # ---- Topic review actions (PRD §7.1.4) ------------------------------------

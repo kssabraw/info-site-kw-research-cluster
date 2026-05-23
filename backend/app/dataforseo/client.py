@@ -81,6 +81,80 @@ class DataForSEOClient:
                 keywords.append(kw)
         return keywords
 
+    # ----- M3 expansion endpoints (PRD §7.3 / §7.5) -----------------------
+    @staticmethod
+    def _extract_labs_keywords(task: dict) -> list[str]:
+        """Pull keyword strings from a Labs result, tolerating shape variance
+        (`items[].keyword` or `items[].keyword_data.keyword`)."""
+        items = (task.get("result") or [{}])[0].get("items") or []
+        out: list[str] = []
+        for item in items:
+            kw = item.get("keyword")
+            if not kw and isinstance(item.get("keyword_data"), dict):
+                kw = item["keyword_data"].get("keyword")
+            if kw:
+                out.append(kw)
+        return out
+
+    def keyword_ideas(self, anchor: str, limit: int = 1000) -> list[str]:
+        task = self._post(
+            "/v3/dataforseo_labs/google/keyword_ideas/live",
+            [{"keywords": [anchor], "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE, "limit": limit}],
+        )
+        return self._extract_labs_keywords(task)
+
+    def keyword_suggestions(self, anchor: str, limit: int = 500) -> list[str]:
+        task = self._post(
+            "/v3/dataforseo_labs/google/keyword_suggestions/live",
+            [{"keyword": anchor, "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE, "limit": limit}],
+        )
+        return self._extract_labs_keywords(task)
+
+    def query_fanouts(self, anchor: str, limit: int = 300) -> list[str]:
+        # Long-tail variations. DataForSEO Labs `related_keywords` is the closest
+        # endpoint; swap here if a better fit is found during MVP testing.
+        task = self._post(
+            "/v3/dataforseo_labs/google/related_keywords/live",
+            [{"keyword": anchor, "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE, "depth": 2, "limit": limit}],
+        )
+        return self._extract_labs_keywords(task)
+
+    def people_also_ask(self, anchor: str) -> list[str]:
+        """PAA questions from the SERP for `anchor` (one tier)."""
+        task = self._post(
+            "/v3/serp/google/organic/live/advanced",
+            [{"keyword": anchor, "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE, "depth": 20,
+              "people_also_ask_click_depth": 1}],
+        )
+        items = (task.get("result") or [{}])[0].get("items") or []
+        questions: list[str] = []
+        for item in items:
+            if item.get("type") != "people_also_ask":
+                continue
+            for q in item.get("items") or []:
+                title = q.get("title")
+                if title:
+                    questions.append(title)
+        return questions
+
+    def autocomplete(self, keyword: str) -> list[str]:
+        task = self._post(
+            "/v3/serp/google/autocomplete/live/advanced",
+            [{"keyword": keyword, "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE}],
+        )
+        items = (task.get("result") or [{}])[0].get("items") or []
+        out: list[str] = []
+        for item in items:
+            sug = item.get("suggestion") or item.get("keyword")
+            if sug:
+                out.append(sug)
+        return out
+
     def serp_competitor_paths(self, seed: str, top_n: int = 5) -> list[str]:
         """URL path patterns from the top organic domains for the seed."""
         task = self._post(

@@ -177,6 +177,41 @@ def delete_topic(topic_id: str) -> None:
     get_service_client().table("topics").delete().eq("id", topic_id).execute()
 
 
+# ---- M3 keyword expansion -------------------------------------------------
+_KEYWORD_COLS = "id, topic_id, keyword, sources, status, created_at"
+
+
+def delete_keywords_for_session(session_id: str) -> None:
+    get_service_client().table("keywords").delete().eq("session_id", session_id).execute()
+
+
+def insert_keywords(session_id: str, per_topic: dict[str, dict[str, list[str]]]) -> int:
+    rows = [
+        {"session_id": session_id, "topic_id": tid, "keyword": kw, "sources": sources}
+        for tid, kws in per_topic.items()
+        for kw, sources in kws.items()
+    ]
+    client = get_service_client()
+    for start in range(0, len(rows), 500):
+        client.table("keywords").insert(rows[start : start + 500]).execute()
+    return len(rows)
+
+
+def list_keywords(
+    session_id: str, topic_id: str | None = None, limit: int = 200, offset: int = 0
+) -> list[dict]:
+    q = (
+        get_service_client()
+        .table("keywords")
+        .select(_KEYWORD_COLS)
+        .eq("session_id", session_id)
+    )
+    if topic_id:
+        q = q.eq("topic_id", topic_id)
+    res = q.order("created_at").range(offset, offset + limit - 1).execute()
+    return res.data
+
+
 def set_topic_embedding(topic_id: str, vector: list[float]) -> None:
     # pgvector accepts its text form "[a,b,c]".
     literal = "[" + ",".join(repr(float(x)) for x in vector) + "]"

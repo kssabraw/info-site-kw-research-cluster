@@ -6,11 +6,14 @@ import {
   deleteTopic,
   disambiguateSession,
   editTopic,
+  expandSession,
   finalizeSilos,
+  getKeywords,
   getSession,
   overrideAudience,
   type AddTopicBody,
   type EditTopicBody,
+  type ExpansionResult,
   type RelationshipType,
   type Silo,
   type SiloDiscovery as Discovery,
@@ -20,7 +23,7 @@ import {
   RELATIONSHIP_OPTIONS,
 } from "../shared/relationshipTypes";
 
-type Step = "form" | "disambiguation" | "review" | "done";
+type Step = "form" | "disambiguation" | "review" | "finalized" | "expanded";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
@@ -67,7 +70,17 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
   });
   const finalizeMut = useMutation({
     mutationFn: () => finalizeSilos(sessionId!),
-    onSuccess: () => setStep("done"),
+    onSuccess: () => setStep("finalized"),
+    onError: (e) => setError(msg(e)),
+  });
+
+  const [expansion, setExpansion] = useState<ExpansionResult | null>(null);
+  const expandMut = useMutation({
+    mutationFn: () => expandSession(sessionId!),
+    onSuccess: (r) => {
+      setExpansion(r);
+      setStep("expanded");
+    },
     onError: (e) => setError(msg(e)),
   });
 
@@ -100,7 +113,13 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
       <main className="content">
         {error && <p className="form-error">{error}</p>}
 
-        {busy && <DiscoveryProgress />}
+        {busy && (
+          <WorkingProgress
+            stages={DISCOVERY_STAGES}
+            targetS={35}
+            estimate="usually 20–40 seconds"
+          />
+        )}
 
         {!busy && step === "form" && (
           <SeedForm
@@ -146,20 +165,42 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
 
-        {!busy && step === "done" && (
+        {step === "finalized" && expandMut.isPending && (
+          <WorkingProgress
+            stages={EXPANSION_STAGES}
+            targetS={90}
+            estimate="usually 1–3 minutes"
+          />
+        )}
+
+        {step === "finalized" && !expandMut.isPending && (
           <div className="card">
             <h1 className="page-title">Silos finalized</h1>
             <p className="muted">
-              Your silos are locked and embedded. Keyword expansion runs in the next
-              milestone (M3).
+              Your silos are locked and embedded. Next, expand each silo into a keyword
+              pool (DataForSEO ideas, suggestions, fan-outs, People-Also-Ask, and
+              autocomplete).
             </p>
             <div className="toolbar">
-              <span />
-              <button className="btn btn-primary" style={{ width: "auto" }} onClick={onExit}>
-                Done
+              <button className="btn btn-ghost" onClick={onExit}>
+                Back to projects
+              </button>
+              <button
+                className="btn btn-primary"
+                style={{ width: "auto" }}
+                onClick={() => {
+                  setError(null);
+                  expandMut.mutate();
+                }}
+              >
+                Run keyword expansion
               </button>
             </div>
           </div>
+        )}
+
+        {step === "expanded" && expansion && sessionId && (
+          <ExpansionResults expansion={expansion} sessionId={sessionId} onExit={onExit} />
         )}
       </main>
     </>
@@ -167,29 +208,42 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// The grounding→proposal pipeline runs as a single request, so there's no live
-// per-step signal. We show an elapsed timer, a soft progress bar, and step the
-// caption through the known stages (PRD §7.1.1) by elapsed time.
-const DISCOVERY_STAGES: { until: number; label: string }[] = [
+// These pipelines run as a single request, so there's no live per-step signal.
+// We show an elapsed timer, a soft progress bar, and step the caption through
+// the known stages by elapsed time.
+type Stage = { until: number; label: string };
+
+const DISCOVERY_STAGES: Stage[] = [
   { until: 10, label: "Reading top-ranking content for your seed" },
   { until: 16, label: "Sampling search demand" },
   { until: 22, label: "Analyzing competitor site structure" },
   { until: Infinity, label: "Proposing silos" },
 ];
-const DISCOVERY_TARGET_S = 35;
 
-function DiscoveryProgress() {
+const EXPANSION_STAGES: Stage[] = [
+  { until: 30, label: "Pulling keyword ideas, suggestions, and fan-outs per silo" },
+  { until: 55, label: "Mining People-Also-Ask questions" },
+  { until: Infinity, label: "Autocomplete enrichment" },
+];
+
+function WorkingProgress({
+  stages,
+  targetS,
+  estimate,
+}: {
+  stages: Stage[];
+  targetS: number;
+  estimate: string;
+}) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const stage =
-    DISCOVERY_STAGES.find((s) => elapsed < s.until) ??
-    DISCOVERY_STAGES[DISCOVERY_STAGES.length - 1];
+  const stage = stages.find((s) => elapsed < s.until) ?? stages[stages.length - 1];
   // Approach but never reach 100% until the request actually resolves.
-  const pct = Math.min(92, Math.round((elapsed / DISCOVERY_TARGET_S) * 100));
+  const pct = Math.min(92, Math.round((elapsed / targetS) * 100));
 
   return (
     <div className="progress-wrap">
@@ -205,7 +259,85 @@ function DiscoveryProgress() {
         <div className="progress-fill" style={{ width: `${pct}%` }} />
       </div>
       <div className="progress-meta">
-        Elapsed {elapsed}s · usually 20–40 seconds
+        Elapsed {elapsed}s · {estimate}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+function ExpansionResults(p: {
+  expansion: ExpansionResult;
+  sessionId: string;
+  onExit: () => void;
+}) {
+  const { expansion } = p;
+  const [openTopic, setOpenTopic] = useState<string | null>(null);
+
+  return (
+    <>
+      <h1 className="page-title">Keyword expansion complete</h1>
+      <p className="muted">
+        {expansion.keyword_count.toLocaleString()} keywords across{" "}
+        {expansion.topics.length} silos.
+      </p>
+
+      {expansion.degraded_notes.map((note) => (
+        <div className="banner" key={note}>
+          {note}
+        </div>
+      ))}
+
+      {expansion.topics.map((t) => (
+        <div className="silo-card" key={t.topic_id}>
+          <div className="silo-head">
+            <p className="silo-name">{t.name}</p>
+            <div className="silo-actions">
+              <span className="muted">{t.keyword_count.toLocaleString()} keywords</span>
+              <button
+                className="link-btn"
+                onClick={() => setOpenTopic(openTopic === t.topic_id ? null : t.topic_id)}
+              >
+                {openTopic === t.topic_id ? "Hide" : "View keywords"}
+              </button>
+            </div>
+          </div>
+          {openTopic === t.topic_id && (
+            <KeywordList sessionId={p.sessionId} topicId={t.topic_id} />
+          )}
+        </div>
+      ))}
+
+      <div className="toolbar">
+        <span className="muted">Expansion done — clustering arrives in a later milestone.</span>
+        <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
+          Done
+        </button>
+      </div>
+    </>
+  );
+}
+
+function KeywordList(p: { sessionId: string; topicId: string }) {
+  const q = useQuery({
+    queryKey: ["keywords", p.sessionId, p.topicId],
+    queryFn: () => getKeywords(p.sessionId, p.topicId, 200),
+  });
+
+  if (q.isLoading) return <p className="muted">Loading keywords…</p>;
+  if (q.isError) return <p className="form-error">Failed to load keywords.</p>;
+  const rows = q.data ?? [];
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <p className="silo-text">Showing first {rows.length} (newest sources tagged):</p>
+      <div className="keyword-grid">
+        {rows.map((k) => (
+          <div className="keyword-row" key={k.id}>
+            <span>{k.keyword}</span>
+            <span className="keyword-sources">{k.sources.join(", ")}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
