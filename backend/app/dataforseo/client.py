@@ -42,7 +42,12 @@ class DataForSEOClient:
         if resp.status_code >= 400:
             raise DataForSEOError(f"DataForSEO {resp.status_code} for {path}")
 
-        body = resp.json()
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            # A 200 with a non-JSON body (HTML error/maintenance page, gateway
+            # interstitial). Treat as a DataForSEO failure so callers can degrade.
+            raise DataForSEOError(f"DataForSEO returned non-JSON for {path}") from exc
         task = (body.get("tasks") or [{}])[0]
         logger.info(
             "external_call",

@@ -89,6 +89,20 @@ def test_endpoint_failure_degrades_not_blocks():
     assert any("keyword_ideas unavailable" in n for n in r.degraded_notes)
 
 
+class _ValueErrorIdeasDFS(FakeDFS):
+    def keyword_ideas(self, anchor, limit=0):
+        raise ValueError("malformed result shape")  # NOT a DataForSEOError
+
+
+def test_non_dataforseo_error_degrades_not_crashes():
+    # A parsing/JSON error (e.g. a 200 with an HTML body) must degrade the
+    # source, not abort the whole run.
+    dfs = _ValueErrorIdeasDFS(suggestions=["b"])
+    r = _run(dfs)
+    assert "b" in r.per_topic["t1"]
+    assert any("keyword_ideas unavailable" in n for n in r.degraded_notes)
+
+
 def test_autocomplete_merges_suggestions():
     dfs = FakeDFS(ideas=["a"], autocomplete_map={"a": ["a x", "a y"]})
     r = _run(dfs)
