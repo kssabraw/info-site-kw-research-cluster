@@ -144,27 +144,26 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M2 — Front-half pipeline: silo discovery + user review** (in progress)
+**M3 — Expansion pipeline** (in progress)
 
-M1 — Foundation: **complete** (signed off 2026-05-21). `fanout` schema with
-`user_profiles`/`projects`/`sessions`/`workspace_settings` + RLS applied to the
-AR-Internal-Tools Supabase project; FastAPI `/healthz` + `/me` + `/projects`
-deployed to Railway; React login + project list deployed. Built on branch
-`m1-foundation`.
+M1 — Foundation: **complete** (signed off 2026-05-21). Built on `m1-foundation`.
 
-M2 Done state (per PRD §15.1):
-- User enters a seed, optional `audience_hint`, optional `disambiguation_hint`.
-- Pipeline runs the grounding pass, `keyword_ideas` demand sample, SERP structure
-  scrape, and LLM silo proposal (GPT-5.4 with browsing).
-- Disambiguation gate triggers on ambiguous seeds (e.g. `mercury`).
-- User sees proposed silos with rationale, evidence, relationship_type, and the
-  detected audience.
-- User can remove silos, add custom silos, edit names/rationales, override audience.
-- Finalized silos persist to the `topics` table with embeddings
-  (`text-embedding-3-small` against `seed + rationale + detected_audience`).
-- **No expansion yet** — pipeline halts after silo review (expansion is M3).
+M2 — Silo discovery + user review: **complete** (signed off 2026-05-23). Grounding
+pass + demand sample + SERP-structure scrape + GPT-5.4 silo proposal; disambiguation
+gate; silo review (remove/add/edit/override audience); finalize embeds silos into
+`topics`. Validated against `retatrutide` (clean silos, zero peer-entity leakage)
+and `mercury` (disambiguation gate fires). Built on `m2-silo-discovery`; M1+M2 then
+merged to `main`, which is now the single deploy branch for Railway and Netlify.
+Backend env reads `SUPABASE_SERVICE_KEY`/`SUPABASE_KEY` aliases (AR Tools naming).
 
-When M2 is complete and approved, update this section to reflect M3 as the active milestone.
+M3 Done state (per PRD §15.1):
+- Per-silo DataForSEO expansion (`keyword_ideas`, `keyword_suggestions`,
+  `query_fanouts`, PAA two tiers deep) runs in parallel for all finalized silos.
+- Autocomplete enrichment runs on the surfaced (deduped) keyword pool.
+- All keywords persist to the `keywords` table with source attribution.
+- **No competitor mining / relevance gate / clustering yet** — those are M4.
+
+When M3 is complete and approved, update this section to reflect M4 as the active milestone.
 
 ---
 
