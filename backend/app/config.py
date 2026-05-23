@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     dataforseo_password: str = ""
     dataforseo_base_url: str = "https://api.dataforseo.com"
 
+    # M3 expansion knobs (PRD §7.3 / §7.5).
+    keyword_ideas_limit: int = 1000
+    keyword_suggestions_limit: int = 500
+    query_fanouts_limit: int = 300
+    paa_tier1_seeds: int = 8          # tier-1 questions used as tier-2 seeds
+    paa_tier2_cap: int = 40           # max tier-2 questions per silo (PRD §7.3)
+    autocomplete_max: int = 1500      # safety cap on autocomplete calls per run
+    expansion_max_workers: int = 8    # parallel endpoint/silo workers
+
     # Observability (PRD §16.3)
     log_level: str = "INFO"
 
