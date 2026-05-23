@@ -13,7 +13,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from app.dataforseo import DataForSEOClient, DataForSEOError
+from app.dataforseo import DataForSEOClient
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ def run_expansion(
                 break
             try:
                 tier2.extend(dfs.people_also_ask(q))
-            except DataForSEOError:
+            except Exception:
                 continue
         return tier1, tier2[:paa_tier2_cap]
 
@@ -91,7 +91,9 @@ def run_expansion(
             topic, source = futures[fut]
             try:
                 data = fut.result()
-            except DataForSEOError as exc:
+            except Exception as exc:
+                # Any failure (HTTP error, non-JSON body, unexpected result
+                # shape) degrades this source only; the others still land (§16.2).
                 result.degraded_notes.append(
                     f"Partial expansion for silo “{topic.anchor}”: {source} unavailable."
                 )
@@ -112,10 +114,17 @@ def run_expansion(
                     _add(pools[topic.id], kw, source)
 
     # ----- Phase 2: autocomplete on the deduped pool (§7.5) -----------------
-    # (topic_id, keyword) pairs, capped globally to bound cost.
-    seeds: list[tuple[str, str]] = [
-        (tid, kw) for tid, kws in pools.items() for kw in kws.keys()
-    ][:autocomplete_max]
+    # (topic_id, keyword) pairs, capped globally to bound cost. Interleave
+    # round-robin across topics so the cap is shared fairly (a large first silo
+    # doesn't starve later silos of autocomplete).
+    per_topic_keys = [(tid, list(kws.keys())) for tid, kws in pools.items()]
+    seeds: list[tuple[str, str]] = []
+    longest = max((len(ks) for _, ks in per_topic_keys), default=0)
+    for i in range(longest):
+        for tid, ks in per_topic_keys:
+            if i < len(ks):
+                seeds.append((tid, ks[i]))
+    seeds = seeds[:autocomplete_max]
 
     if seeds:
         ok = 0
@@ -128,7 +137,7 @@ def run_expansion(
                 try:
                     suggestions = fut.result()
                     ok += 1
-                except DataForSEOError:
+                except Exception:
                     fail += 1
                     continue
                 for sug in suggestions:

@@ -327,10 +327,11 @@ function KeywordList(p: { sessionId: string; topicId: string }) {
   if (q.isLoading) return <p className="muted">Loading keywords…</p>;
   if (q.isError) return <p className="form-error">Failed to load keywords.</p>;
   const rows = q.data ?? [];
+  if (rows.length === 0) return <p className="muted">No keywords for this silo.</p>;
 
   return (
     <div style={{ marginTop: 12 }}>
-      <p className="silo-text">Showing first {rows.length} (newest sources tagged):</p>
+      <p className="silo-text">Showing first {rows.length} (sources tagged):</p>
       <div className="keyword-grid">
         {rows.map((k) => (
           <div className="keyword-row" key={k.id}>

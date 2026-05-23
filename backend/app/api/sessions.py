@@ -245,20 +245,31 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
 
     store.update_session(session_id, {"status": "running"})
     s = get_settings()
-    result = run_expansion(
-        topics=[ExpansionTopic(id=t["id"], anchor=t["name"]) for t in topics],
-        dfs=get_dataforseo(),
-        keyword_ideas_limit=s.keyword_ideas_limit,
-        keyword_suggestions_limit=s.keyword_suggestions_limit,
-        query_fanouts_limit=s.query_fanouts_limit,
-        paa_tier1_seeds=s.paa_tier1_seeds,
-        paa_tier2_cap=s.paa_tier2_cap,
-        autocomplete_max=s.autocomplete_max,
-        max_workers=s.expansion_max_workers,
-    )
+    try:
+        result = run_expansion(
+            topics=[ExpansionTopic(id=t["id"], anchor=t["name"]) for t in topics],
+            dfs=get_dataforseo(),
+            keyword_ideas_limit=s.keyword_ideas_limit,
+            keyword_suggestions_limit=s.keyword_suggestions_limit,
+            query_fanouts_limit=s.query_fanouts_limit,
+            paa_tier1_seeds=s.paa_tier1_seeds,
+            paa_tier2_cap=s.paa_tier2_cap,
+            autocomplete_max=s.autocomplete_max,
+            max_workers=s.expansion_max_workers,
+        )
+        store.delete_keywords_for_session(session_id)
+        count = store.insert_keywords(session_id, result.per_topic)
+    except Exception as exc:
+        store.update_session(session_id, {"status": "error"})
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "expansion", "reason": repr(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Keyword expansion failed. The session was marked as errored; try again.",
+        ) from exc
 
-    store.delete_keywords_for_session(session_id)
-    count = store.insert_keywords(session_id, result.per_topic)
     # M3 is the current pipeline terminus; later milestones move this downstream.
     store.update_session(session_id, {"status": "complete"})
 
