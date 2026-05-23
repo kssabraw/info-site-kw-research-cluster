@@ -135,3 +135,33 @@ export const editTopic = (topicId: string, body: EditTopicBody) =>
 
 export const deleteTopic = (topicId: string) =>
   request<void>(`/topics/${topicId}`, { method: "DELETE" });
+
+export interface ExpansionTopicCount {
+  topic_id: string;
+  name: string;
+  keyword_count: number;
+}
+
+export interface ExpansionResult {
+  expanded: boolean;
+  keyword_count: number;
+  degraded_notes: string[];
+  topics: ExpansionTopicCount[];
+}
+
+export interface Keyword {
+  id: string;
+  topic_id: string;
+  keyword: string;
+  sources: string[];
+  status: string;
+  created_at: string;
+}
+
+export const expandSession = (id: string) =>
+  request<ExpansionResult>(`/sessions/${id}/expand`, { method: "POST" });
+
+export const getKeywords = (id: string, topicId: string, limit = 200) =>
+  request<Keyword[]>(
+    `/sessions/${id}/keywords?topic_id=${encodeURIComponent(topicId)}&limit=${limit}`,
+  );
