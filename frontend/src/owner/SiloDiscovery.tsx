@@ -419,7 +419,7 @@ function Review(p: {
           disabled={audienceMut.isPending}
           onClick={() => audienceMut.mutate(audienceValue.trim())}
         >
-          Save
+          {audienceMut.isPending ? "Saving…" : "Save"}
         </button>
       </div>
 
@@ -442,7 +442,14 @@ function Review(p: {
           disabled={silos.length === 0 || p.finalizing}
           onClick={p.onFinalize}
         >
-          {p.finalizing ? "Finalizing…" : "Continue"}
+          {p.finalizing ? (
+            <>
+              <span className="spinner-sm" aria-hidden="true" />
+              Finalizing…
+            </>
+          ) : (
+            "Continue"
+          )}
         </button>
       </div>
     </>
@@ -599,7 +606,7 @@ function AddSiloRow(p: { onAdd: (body: AddTopicBody) => void; adding: boolean })
             setRationale("");
           }}
         >
-          Add silo
+          {p.adding ? "Adding…" : "Add silo"}
         </button>
         <button className="link-btn" onClick={() => setOpen(false)}>
           Cancel
