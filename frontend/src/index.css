@@ -454,3 +454,15 @@ body {
   color: var(--text-muted);
   margin-top: 6px;
 }
+/* Small inline spinner for buttons mid-action (on the accent/primary button). */
+.spinner-sm {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 8px;
+  animation: spin 0.8s linear infinite;
+}
