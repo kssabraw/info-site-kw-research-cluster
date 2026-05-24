@@ -144,7 +144,7 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M4 — SERP competitor mining + relevance gate + statistical clustering** (next; awaiting kickoff)
+**M5 — Article planning orchestrator + cross-topic dedup** (next; awaiting kickoff)
 
 M1 — Foundation: **complete** (signed off 2026-05-21). Built on `m1-foundation`.
 
@@ -162,21 +162,49 @@ attribution. Resolved a zero-yield bug: `keyword_suggestions` and `query_fanouts
 are phrase/seed-match endpoints that return near-zero on a silo-qualified anchor, so
 they now run **once on the bare seed and fan out to every silo** (M4's relevance gate
 sorts them per-silo); `keyword_ideas` and PAA keep their per-silo broad anchor.
-Verified live on `retatrutide` (per silo: 500 suggestions + 79 fan-outs + ~1000 ideas
-+ ~2000–3500 autocomplete + PAA). Temporary `/debug/dataforseo` probe removed after
-tuning. **Known/accepted:** PAA tier-1 uses the broad silo anchor and returns 0 on
-silos whose anchor isn't a natural Google query — PAA is the smallest contributor, so
-this was left as-is (revisit in M4 if needed). Built on `claude/blissful-cray-Hm9tY`;
-merged to `main`.
+Temporary `/debug/dataforseo` probe removed after tuning. Built on
+`claude/blissful-cray-Hm9tY`; merged to `main`.
 
-M4 Done state (per PRD §15.1):
-- User deep-mine selection UI exists; SERP competitor mining runs on gated silos.
-- Relevance gate filters keywords against the per-silo embedding (§7.6).
-- Statistical clustering (Louvain) produces candidate groupings, persisted to
-  `statistical_clustering_log`.
-- End state: per-silo statistical groupings exist but are not yet user-facing.
+M4 — Competitor mining + relevance gate + clustering: **complete** (signed off
+2026-05-24). Deep-mine selection (§7.2, `POST /sessions/{id}/deep-mine`); SERP
+competitor mining on gated silos + the always-mined seed fanned to all silos
+(§7.4); relevance gate with junk filter + cross-silo embedding dedup, tagging
+`active`/`filtered_relevance`/`filtered_junk` and writing `relevance_score` (§7.6);
+per-silo Louvain clustering with medoid representatives, persisted to
+`statistical_clustering_log` (§7.9). `/expand` runs the full pipeline behind an
+atomic run guard (409 if already running); clustering memory bounded (float32 +
+`clustering_max_nodes=2500`). Verified live on `retatrutide` (one gated silo:
+3,953 competitor kw, 1,341 active / 8,522 filtered_relevance / 43 junk, 4 groupings
+@ cohesion 0.784). `autocomplete_max` lowered 1500→500 (autocomplete is the
+noisiest/slowest source; the gate discards most of it). Built on
+`m4-competitor-clustering`; merged to `main`.
 
-When M4 is complete and approved, update this section to reflect M5 as the active milestone.
+**M4 carried-forward (accepted, not blocking):**
+- **Synchronous 5-min wall (→ M11):** the whole pipeline runs in one request; large
+  runs exceed Railway's 5-min edge cap. The backend completes and persists anyway
+  (sync `def` → threadpool, not cancelled on client disconnect), but the UI may
+  error and there's no session-resume until M7. Internal per-stage 240s budgets are
+  a safety valve to return before the cap; they truncate the lowest-yield tail
+  (mostly autocomplete) and surface a "partial mining" banner. **Real fix = async +
+  polling, deferred to M11** (confirm M11's scope folds this in — PRD §15.1 M11 is
+  literally "cost + observability").
+- **Hygiene leftovers (low):** dead `insert_keywords` in `storage/silo.py` (#7);
+  no unfinalized-run guard on `/expand` (#10, gracefully degrades); duplicate
+  `ranked_keywords` calls when two gated silos share a domain (#12).
+- **Tuning notes (later/calibration):** clustering yields few large communities
+  (4 groupings, edge threshold 0.55) — raise the threshold / Louvain resolution if
+  M5 wants finer granularity; relevance threshold 0.62 filters hard on a single
+  broad silo (~10–14% retained).
+- **Stuck-running edge:** a hard crash / deploy mid-run leaves status `running`, so
+  re-running that session 409s; recovery is to start a new session (no resume yet).
+
+M5 Done state (per PRD §15.1 / §7.10): SERP fetches for candidate primary keywords;
+per-silo editorial orchestrator (Claude Opus 4.7, tool-use/strict-schema) converts
+statistical groupings into article plans (merge/split/promote-demote/route/drop);
+cross-topic dedup pass; `clusters` table populated with article-level records;
+coverage gaps persist to `coverage_gaps`.
+
+When M5 is complete and approved, update this section to reflect M6 as the active milestone.
 
 ---
 
