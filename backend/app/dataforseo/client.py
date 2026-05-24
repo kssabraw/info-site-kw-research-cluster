@@ -118,14 +118,26 @@ class DataForSEOClient:
         return self._extract_labs_keywords(task)
 
     def query_fanouts(self, anchor: str, limit: int = 300) -> list[str]:
-        # Long-tail variations. DataForSEO Labs `related_keywords` is the closest
-        # endpoint; swap here if a better fit is found during MVP testing.
+        # Long-tail variations via DataForSEO Labs `related_keywords`. Each item
+        # carries a node keyword (keyword_data.keyword) AND a related_keywords[]
+        # array of strings — harvest both (the array is the bulk of the fan-out).
         task = self._post(
             "/v3/dataforseo_labs/google/related_keywords/live",
             [{"keyword": anchor, "location_code": _LOCATION_CODE,
               "language_code": _LANGUAGE_CODE, "depth": 2, "limit": limit}],
         )
-        return self._extract_labs_keywords(task)
+        items = (task.get("result") or [{}])[0].get("items") or []
+        out: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kd = item.get("keyword_data") or {}
+            if isinstance(kd, dict) and kd.get("keyword"):
+                out.append(kd["keyword"])
+            for rk in item.get("related_keywords") or []:
+                if rk:
+                    out.append(rk)
+        return out
 
     def people_also_ask(self, anchor: str) -> list[str]:
         """PAA questions from the SERP for `anchor` (one tier)."""

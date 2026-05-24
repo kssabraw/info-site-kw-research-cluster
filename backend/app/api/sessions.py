@@ -15,7 +15,7 @@ from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
-from app.pipeline.expansion import ExpansionTopic, run_expansion
+from app.pipeline.expansion import ExpansionTopic, build_anchor, run_expansion
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
@@ -234,7 +234,7 @@ def finalize_silos(session_id: str, user: AuthedUser = Depends(require_user)) ->
 # ---- M3 expansion ---------------------------------------------------------
 @router.post("/sessions/{session_id}/expand")
 def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
     bind_session_id(session_id)
     topics = store.list_topics(session_id)
     if not topics:
@@ -243,11 +243,15 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             detail="No silos to expand. Finalize at least one silo first.",
         )
 
+    seed = session["seed_keyword"]
     store.update_session(session_id, {"status": "running"})
     s = get_settings()
     try:
         result = run_expansion(
-            topics=[ExpansionTopic(id=t["id"], anchor=t["name"]) for t in topics],
+            topics=[
+                ExpansionTopic(id=t["id"], anchor=build_anchor(seed, t["name"]))
+                for t in topics
+            ],
             dfs=get_dataforseo(),
             keyword_ideas_limit=s.keyword_ideas_limit,
             keyword_suggestions_limit=s.keyword_suggestions_limit,

@@ -40,6 +40,18 @@ def _normalize(kw: str) -> str:
     return " ".join(kw.strip().lower().split())
 
 
+def build_anchor(seed: str, silo_name: str) -> str:
+    """Seed-qualify the expansion anchor so DataForSEO returns seed-relevant
+    keywords. If the silo name already contains the seed (e.g. "how retatrutide
+    works") it's used as-is; otherwise the seed is prepended (e.g. "weight loss
+    use" -> "retatrutide weight loss use")."""
+    seed = seed.strip()
+    silo_name = silo_name.strip()
+    if seed.lower() in silo_name.lower():
+        return silo_name
+    return f"{seed} {silo_name}".strip()
+
+
 def _add(pool: dict[str, set[str]], keyword: str, source: str) -> None:
     norm = _normalize(keyword)
     if norm:
