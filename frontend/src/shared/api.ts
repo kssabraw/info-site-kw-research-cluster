@@ -178,6 +178,30 @@ export const setDeepMine = (id: string, topic_ids: string[]) =>
 export const expandSession = (id: string) =>
   request<ExpansionResult>(`/sessions/${id}/expand`, { method: "POST" });
 
+export interface PlanTopicCount {
+  topic_id: string;
+  name: string;
+  articles: number;
+  gaps: number;
+  dropped: number;
+  degraded: boolean;
+}
+
+export interface PlanResult {
+  planned: boolean;
+  clusters: number;
+  dropped: number;
+  gaps: number;
+  degraded: boolean;
+  degraded_notes: string[];
+  timed_out: boolean;
+  collisions: number;
+  topics: PlanTopicCount[];
+}
+
+export const planArticles = (id: string) =>
+  request<PlanResult>(`/sessions/${id}/plan-articles`, { method: "POST" });
+
 export const getKeywords = (id: string, topicId: string, limit = 200, status = "active") =>
   request<Keyword[]>(
     `/sessions/${id}/keywords?topic_id=${encodeURIComponent(topicId)}` +
