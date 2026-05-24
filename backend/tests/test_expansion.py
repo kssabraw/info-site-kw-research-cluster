@@ -1,7 +1,33 @@
 import time
 
-from app.dataforseo import DataForSEOError
-from app.pipeline.expansion import ExpansionTopic, run_expansion
+from app.dataforseo import DataForSEOClient, DataForSEOError
+from app.pipeline.expansion import ExpansionTopic, build_anchor, run_expansion
+
+
+def test_build_anchor_seed_qualifies():
+    # Seed already in the name -> unchanged.
+    assert build_anchor("retatrutide", "how retatrutide works") == "how retatrutide works"
+    # Generic silo name -> seed prepended.
+    assert build_anchor("retatrutide", "weight loss use") == "retatrutide weight loss use"
+    # Case-insensitive containment.
+    assert build_anchor("Mercury", "mercury toxicity") == "mercury toxicity"
+
+
+def test_query_fanouts_harvests_related_keyword_arrays(monkeypatch):
+    c = DataForSEOClient(base_url="http://x", login="l", password="p")
+    fake_task = {
+        "result": [
+            {
+                "items": [
+                    {"keyword_data": {"keyword": "node1"}, "related_keywords": ["r1", "r2"]},
+                    {"keyword_data": {"keyword": "node2"}, "related_keywords": ["r3"]},
+                ]
+            }
+        ]
+    }
+    monkeypatch.setattr(c, "_post", lambda path, payload: fake_task)
+    out = c.query_fanouts("anchor")
+    assert set(out) == {"node1", "r1", "r2", "node2", "r3"}
 
 
 class FakeDFS:
