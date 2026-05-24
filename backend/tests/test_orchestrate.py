@@ -90,6 +90,21 @@ def test_competitor_source_tag_present_on_mined_keyword():
     assert by_kw["gated competitor kw"].sources == ["competitor"]
 
 
+def test_clustering_node_cap_bounds_per_topic_input():
+    # With max_nodes=1, each topic clusters at most one keyword even though the
+    # gate produced several actives (the rest stay active but unclustered).
+    r = run_refinement_pipeline(
+        seed="retatrutide", topics=_topics(), dfs=FakeDFS(), embed_fn=_embed,
+        clustering_max_nodes=1,
+    )
+    for tid in ("t1", "t2"):
+        active = [g for g in r.per_topic_gated[tid] if g.status == "active"]
+        assert len(active) > 1  # gate kept several
+        log = r.clustering_log["topics"][tid]
+        clustered = sum(g["size"] for g in log["groupings"])
+        assert clustered == 1  # but only one fed into clustering
+
+
 def test_ungated_session_still_mines_seed_only():
     topics = [PipelineTopic(id="t1", name="Benefits", embedding=[1.0, 0.0], gated=False)]
     r = run_refinement_pipeline(

@@ -88,6 +88,7 @@ def run_refinement_pipeline(
     relevance_threshold: float = 0.62,
     relevance_embed_batch: int = 1000,
     clustering_edge_threshold: float = 0.55,
+    clustering_max_nodes: int = 2500,
 ) -> PipelineResult:
     result = PipelineResult()
     topic_names = {t.id: t.name for t in topics}
@@ -167,17 +168,22 @@ def run_refinement_pipeline(
     result.per_topic_gated = gate.per_topic
 
     # ----- 4. Statistical clustering on the survivors ----------------------
+    # Only scored actives carry an embedding. Cap the per-topic node count (the
+    # similarity graph is O(n^2)) by keeping the most-relevant actives; the
+    # long-tail remainder stays active in the DB but isn't clustered.
     active_keywords: dict[str, list[str]] = {}
     active_embeddings: dict[str, list[list[float]]] = {}
     for tid, gated_kws in gate.per_topic.items():
-        kws: list[str] = []
-        embs: list[list[float]] = []
-        for g in gated_kws:
-            if g.status == "active" and g.embedding is not None:
-                kws.append(g.keyword)
-                embs.append(g.embedding)
-        active_keywords[tid] = kws
-        active_embeddings[tid] = embs
+        scored = [
+            (g.relevance_score if g.relevance_score is not None else 0.0, g.keyword, g.embedding)
+            for g in gated_kws
+            if g.status == "active" and g.embedding is not None
+        ]
+        if len(scored) > clustering_max_nodes:
+            scored.sort(key=lambda x: x[0], reverse=True)
+            scored = scored[:clustering_max_nodes]
+        active_keywords[tid] = [kw for _, kw, _ in scored]
+        active_embeddings[tid] = [emb for _, _, emb in scored]
 
     cluster = run_clustering(
         per_topic_keywords=active_keywords,

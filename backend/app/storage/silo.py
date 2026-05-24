@@ -95,6 +95,23 @@ def update_session(session_id: str, fields: dict) -> dict:
     return row.data[0]
 
 
+def try_mark_running(session_id: str) -> bool:
+    """Atomically claim a session for a pipeline run: set status='running' only
+    if it isn't already running. Returns True if this caller acquired the run,
+    False if a run was already in progress. The `neq` makes the check-and-set a
+    single guarded UPDATE, so two concurrent callers can't both proceed
+    (prevents duplicate rows + double API spend on a double-submit/retry)."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update({"status": "running"})
+        .eq("id", session_id)
+        .neq("status", "running")
+        .execute()
+    )
+    return bool(res.data)
+
+
 def delete_topics_for_session(session_id: str) -> None:
     get_service_client().table("topics").delete().eq("session_id", session_id).execute()
 

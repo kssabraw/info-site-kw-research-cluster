@@ -271,9 +271,17 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             detail="No silos to expand. Finalize at least one silo first.",
         )
 
+    # Atomically claim the run; reject if one is already in progress. This
+    # guards against a double-submit or a retry-after-timeout (the prior run may
+    # still be executing server-side) creating duplicate rows + double spend.
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A pipeline run is already in progress for this session.",
+        )
+
     seed = session["seed_keyword"]
     embeddings = store.get_topic_embeddings(session_id)
-    store.update_session(session_id, {"status": "running"})
     s = get_settings()
     coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
     top_n = (
@@ -311,6 +319,7 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             relevance_threshold=s.relevance_threshold,
             relevance_embed_batch=s.relevance_embed_batch,
             clustering_edge_threshold=s.clustering_edge_threshold,
+            clustering_max_nodes=s.clustering_max_nodes,
         )
         store.delete_keywords_for_session(session_id)
         count = store.insert_classified_keywords(session_id, result.per_topic_gated)

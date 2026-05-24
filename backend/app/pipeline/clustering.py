@@ -85,7 +85,9 @@ def cluster_topic(
     if n == 1:
         return [Grouping(f"{topic_id}:g0", [keywords[0]], keywords[0], 1.0, 1)]
 
-    vn = _normalized(np.asarray(embeddings, dtype=np.float64))
+    # float32 halves the n x n similarity matrix's footprint (the dominant
+    # allocation here); precision is ample for a 0.55 cosine threshold.
+    vn = _normalized(np.asarray(embeddings, dtype=np.float32))
     sims = vn @ vn.T  # cosine similarity matrix (rows are unit vectors)
 
     graph = nx.Graph()

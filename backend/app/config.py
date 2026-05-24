@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     relevance_threshold: float = 0.62        # cosine cutoff vs parent topic embedding
     relevance_embed_batch: int = 1000        # keywords per embedding request
     clustering_edge_threshold: float = 0.55  # min cosine for a graph edge
+    # Cap on keywords clustered per topic. The similarity graph is O(n^2), so
+    # bound n to keep memory in check; the top-N most-relevant actives are
+    # clustered, the long-tail remainder stays active but unclustered.
+    clustering_max_nodes: int = 2500
 
     # Observability (PRD §16.3)
     log_level: str = "INFO"
