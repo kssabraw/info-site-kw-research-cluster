@@ -192,7 +192,7 @@ def test_time_budget_caps_the_run():
         time_budget_s=0.1,
     )
     assert time.monotonic() - started < 5.0  # returned promptly, didn't hang
-    assert any("stopped at the time limit" in n for n in r.degraded_notes)
+    assert any("reached its time limit" in n for n in r.degraded_notes)
 
 
 def test_autocomplete_skipped_when_majority_fail():
