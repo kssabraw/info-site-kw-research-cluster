@@ -72,6 +72,7 @@ def gate_and_cluster(
     relevance_threshold: float = 0.62,
     relevance_embed_batch: int = 1000,
     clustering_edge_threshold: float = 0.55,
+    clustering_resolution: float = 1.0,
     clustering_max_nodes: int = 2500,
 ) -> PipelineResult:
     """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
@@ -90,12 +91,25 @@ def gate_and_cluster(
     result.degraded_notes.extend(gate.degraded_notes)
     result.per_topic_gated = gate.per_topic
 
-    # Only scored actives carry an embedding. Cap the per-topic node count (the
-    # similarity graph is O(n^2)) by keeping the most-relevant actives; the
-    # long-tail remainder stays active in the DB but isn't clustered.
+    active_keywords, active_embeddings = _active_for_clustering(
+        gate.per_topic, clustering_max_nodes
+    )
+    cluster = run_clustering(
+        per_topic_keywords=active_keywords,
+        per_topic_embeddings=active_embeddings,
+        edge_threshold=clustering_edge_threshold,
+        resolution=clustering_resolution,
+    )
+    result.clustering_log = cluster.to_log()
+    return result
+
+
+def _active_for_clustering(per_topic_gated, clustering_max_nodes):
+    """Active keywords + their gate-computed embeddings, per topic, capped at the
+    most-relevant `clustering_max_nodes` (the similarity graph is O(n^2))."""
     active_keywords: dict[str, list[str]] = {}
     active_embeddings: dict[str, list[list[float]]] = {}
-    for tid, gated_kws in gate.per_topic.items():
+    for tid, gated_kws in per_topic_gated.items():
         scored = [
             (g.relevance_score if g.relevance_score is not None else 0.0, g.keyword, g.embedding)
             for g in gated_kws
@@ -106,14 +120,68 @@ def gate_and_cluster(
             scored = scored[:clustering_max_nodes]
         active_keywords[tid] = [kw for _, kw, _ in scored]
         active_embeddings[tid] = [emb for _, _, emb in scored]
+    return active_keywords, active_embeddings
 
-    cluster = run_clustering(
-        per_topic_keywords=active_keywords,
-        per_topic_embeddings=active_embeddings,
-        edge_threshold=clustering_edge_threshold,
+
+def cluster_preview(
+    *,
+    per_topic_lists: dict[str, dict[str, list[str]]],
+    topic_names: dict[str, str],
+    topic_embeddings: dict[str, list[float] | None],
+    embed_fn,
+    relevance_threshold: float,
+    configs: list[tuple[float, float]],
+    relevance_embed_batch: int = 1000,
+    clustering_max_nodes: int = 2500,
+) -> dict:
+    """Embed + gate once, then cluster under each (edge_threshold, resolution)
+    config and report granularity stats — without persisting anything. The
+    granularity sweep tool: one embed pass, many configs, so we can find the
+    settings that yield ~150-200 substantial groupings before committing a run."""
+    gate = run_relevance_gate(
+        per_topic=per_topic_lists,
+        topic_embeddings=topic_embeddings,
+        embed_fn=embed_fn,
+        topic_names=topic_names,
+        threshold=relevance_threshold,
+        batch_size=relevance_embed_batch,
     )
-    result.clustering_log = cluster.to_log()
-    return result
+    active_keywords, active_embeddings = _active_for_clustering(
+        gate.per_topic, clustering_max_nodes
+    )
+    active_total = sum(len(v) for v in active_keywords.values())
+
+    results = []
+    for edge_threshold, resolution in configs:
+        cluster = run_clustering(
+            per_topic_keywords=active_keywords,
+            per_topic_embeddings=active_embeddings,
+            edge_threshold=edge_threshold,
+            resolution=resolution,
+        )
+        sizes = [g.size for groupings in cluster.per_topic.values() for g in groupings]
+        sizes.sort()
+        n = len(sizes)
+        median = sizes[n // 2] if n else 0
+        results.append({
+            "edge_threshold": edge_threshold,
+            "resolution": resolution,
+            "groupings": n,
+            "median_size": median,
+            "singletons": sum(1 for s in sizes if s == 1),
+            "size_buckets": {
+                "1": sum(1 for s in sizes if s == 1),
+                "2-4": sum(1 for s in sizes if 2 <= s <= 4),
+                "5-9": sum(1 for s in sizes if 5 <= s <= 9),
+                "10-19": sum(1 for s in sizes if 10 <= s <= 19),
+                "20+": sum(1 for s in sizes if s >= 20),
+            },
+        })
+    return {
+        "relevance_threshold": relevance_threshold,
+        "active_keywords": active_total,
+        "configs": results,
+    }
 
 
 def run_refinement_pipeline(
@@ -141,6 +209,7 @@ def run_refinement_pipeline(
     relevance_threshold: float = 0.62,
     relevance_embed_batch: int = 1000,
     clustering_edge_threshold: float = 0.55,
+    clustering_resolution: float = 1.0,
     clustering_max_nodes: int = 2500,
 ) -> PipelineResult:
     result = PipelineResult()
@@ -217,6 +286,7 @@ def run_refinement_pipeline(
         relevance_threshold=relevance_threshold,
         relevance_embed_batch=relevance_embed_batch,
         clustering_edge_threshold=clustering_edge_threshold,
+        clustering_resolution=clustering_resolution,
         clustering_max_nodes=clustering_max_nodes,
     )
     result.degraded_notes.extend(gc.degraded_notes)

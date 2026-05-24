@@ -206,6 +206,42 @@ export const planArticles = (id: string) =>
 export const getSummary = (id: string) =>
   request<PipelineSummary>(`/sessions/${id}/summary`);
 
+export interface RegateBody {
+  relevance_threshold?: number;
+  clustering_edge_threshold?: number;
+  clustering_resolution?: number;
+}
+
+export const regate = (id: string, body: RegateBody = {}) =>
+  request<AsyncAck>(`/sessions/${id}/regate`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export interface ClusterPreviewConfig {
+  edge_threshold: number;
+  resolution: number;
+  groupings: number;
+  median_size: number;
+  singletons: number;
+  size_buckets: Record<string, number>;
+}
+
+export interface ClusterPreview {
+  relevance_threshold: number;
+  active_keywords: number;
+  configs: ClusterPreviewConfig[];
+}
+
+export const clusterPreview = (
+  id: string,
+  body: { relevance_threshold?: number; configs?: [number, number][] } = {},
+) =>
+  request<ClusterPreview>(`/sessions/${id}/cluster-preview`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 export const getKeywords = (id: string, topicId: string, limit = 200, status = "active") =>
   request<Keyword[]>(
     `/sessions/${id}/keywords?topic_id=${encodeURIComponent(topicId)}` +

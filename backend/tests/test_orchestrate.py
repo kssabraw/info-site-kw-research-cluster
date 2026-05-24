@@ -3,6 +3,7 @@ import math
 from app.dataforseo import DataForSEOClient
 from app.pipeline.orchestrate import (
     PipelineTopic,
+    cluster_preview,
     gate_and_cluster,
     run_refinement_pipeline,
 )
@@ -106,6 +107,28 @@ def test_gate_and_cluster_threshold_sensitivity():
     assert actives(strict) == {"kw high"}              # only the near-anchor kw
     assert actives(loose) == {"kw high", "kw mid"}     # lowering admits the mid kw
     assert loose.clustering_log["topics"]["t1"]["grouping_count"] >= 1
+
+
+def test_cluster_preview_granularity_sweep():
+    # alpha · beta cosine ~0.894: connected at edge 0.55 (1 grouping), split at 0.9.
+    vecs = {"alpha kw": _unit(1.0, 0.0), "beta kw": _unit(1.0, 0.5)}
+
+    def embed(texts):
+        return [vecs[t] for t in texts]
+
+    out = cluster_preview(
+        per_topic_lists={"t1": {"alpha kw": ["s"], "beta kw": ["s"]}},
+        topic_names={"t1": "T1"},
+        topic_embeddings={"t1": _unit(1.0, 0.0)},
+        embed_fn=embed,
+        relevance_threshold=0.5,
+        configs=[(0.55, 1.0), (0.9, 1.0)],
+    )
+    assert out["active_keywords"] == 2
+    by_edge = {c["edge_threshold"]: c["groupings"] for c in out["configs"]}
+    assert by_edge[0.55] == 1          # coarse: one grouping
+    assert by_edge[0.9] == 2           # finer: edges drop, splits into two
+    assert out["configs"][0]["size_buckets"]["2-4"] == 1
 
 
 def test_pipeline_clusters_and_counts():

@@ -76,9 +76,12 @@ def cluster_topic(
     embeddings: list[list[float]],
     *,
     edge_threshold: float = _EDGE_THRESHOLD,
+    resolution: float = 1.0,
 ) -> list[Grouping]:
     """Louvain groupings for one topic's surviving keywords. `keywords[i]` is
-    described by `embeddings[i]`."""
+    described by `embeddings[i]`. `edge_threshold` and `resolution` control
+    granularity: a higher threshold keeps only very-similar edges and a higher
+    resolution favors more, smaller communities — both yield finer (more) groupings."""
     n = len(keywords)
     if n == 0:
         return []
@@ -101,7 +104,7 @@ def cluster_topic(
     graph.add_weighted_edges_from(zip(rows, cols, weights))
 
     partition = community_louvain.best_partition(
-        graph, weight="weight", random_state=_RANDOM_STATE
+        graph, weight="weight", resolution=resolution, random_state=_RANDOM_STATE
     )
 
     members: dict[int, list[int]] = defaultdict(list)
@@ -139,6 +142,7 @@ def run_clustering(
     per_topic_keywords: dict[str, list[str]],
     per_topic_embeddings: dict[str, list[list[float]]],
     edge_threshold: float = _EDGE_THRESHOLD,
+    resolution: float = 1.0,
 ) -> ClusterResult:
     """Cluster each topic independently. Inputs are the active keywords and their
     (gate-computed) embeddings, aligned per topic."""
@@ -146,7 +150,7 @@ def run_clustering(
     for tid, keywords in per_topic_keywords.items():
         embeddings = per_topic_embeddings.get(tid, [])
         result.per_topic[tid] = cluster_topic(
-            tid, keywords, embeddings, edge_threshold=edge_threshold
+            tid, keywords, embeddings, edge_threshold=edge_threshold, resolution=resolution
         )
 
     total_groupings = sum(len(g) for g in result.per_topic.values())

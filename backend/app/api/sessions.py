@@ -18,6 +18,7 @@ from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
+from app.pipeline.orchestrate import cluster_preview
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -59,9 +60,21 @@ class EditTopicBody(BaseModel):
 
 
 class RegateBody(BaseModel):
-    # Optional per-call override so a threshold can be swept without changing the
-    # Railway env. Falls back to the configured relevance_threshold when omitted.
+    # Optional per-call overrides so threshold + clustering granularity can be
+    # tuned without changing the Railway env. Omitted values fall back to config.
     relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
+
+
+class ClusterPreviewBody(BaseModel):
+    # Granularity sweep: gate once, then report cluster stats for each
+    # (edge_threshold, resolution) config. Read-only — nothing is persisted.
+    relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    configs: list[tuple[float, float]] = Field(
+        default_factory=lambda: [(0.55, 1.0), (0.7, 1.0), (0.75, 1.5), (0.8, 2.0)],
+        max_length=12,
+    )
 
 
 class DeepMineBody(BaseModel):
@@ -322,8 +335,59 @@ def regate_session(
         if body.relevance_threshold is not None
         else s.relevance_threshold
     )
-    jobs.submit_regate(session_id, threshold)
-    return {"status": "running", "session_id": session_id, "relevance_threshold": threshold}
+    edge = (
+        body.clustering_edge_threshold
+        if body.clustering_edge_threshold is not None
+        else s.clustering_edge_threshold
+    )
+    resolution = (
+        body.clustering_resolution
+        if body.clustering_resolution is not None
+        else s.clustering_resolution
+    )
+    jobs.submit_regate(session_id, threshold, edge, resolution)
+    return {
+        "status": "running",
+        "session_id": session_id,
+        "relevance_threshold": threshold,
+        "clustering_edge_threshold": edge,
+        "clustering_resolution": resolution,
+    }
+
+
+@router.post("/sessions/{session_id}/cluster-preview")
+def cluster_preview_endpoint(
+    session_id: str, body: ClusterPreviewBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Granularity sweep (read-only): embed + gate the stored keyword pool once,
+    then report cluster-size stats for each (edge_threshold, resolution) config.
+    Synchronous (no persistence, no status change) — it's a quick analysis call
+    used to pick clustering settings before committing a /regate."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    pool = store.list_all_keyword_pool(session_id)
+    if not pool:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No keywords to preview. Run /expand first.",
+        )
+    s = get_settings()
+    threshold = (
+        body.relevance_threshold
+        if body.relevance_threshold is not None
+        else s.relevance_threshold
+    )
+    topics = store.list_topics(session_id)
+    return cluster_preview(
+        per_topic_lists=pool,
+        topic_names={t["id"]: t["name"] for t in topics},
+        topic_embeddings=store.get_topic_embeddings(session_id),
+        embed_fn=get_llm().embed,
+        relevance_threshold=threshold,
+        configs=[(float(e), float(r)) for e, r in body.configs],
+        relevance_embed_batch=s.relevance_embed_batch,
+        clustering_max_nodes=s.clustering_max_nodes,
+    )
 
 
 @router.post("/sessions/{session_id}/plan-articles", status_code=status.HTTP_202_ACCEPTED)
