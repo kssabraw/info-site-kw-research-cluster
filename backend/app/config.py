@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     paa_tier2_cap: int = 40           # max tier-2 questions per silo (PRD §7.3)
     autocomplete_max: int = 1500      # safety cap on autocomplete calls per run
     expansion_max_workers: int = 8    # parallel endpoint/silo workers
+    expansion_time_budget_s: int = 240  # hard cap on a single expansion run (4 min)
 
     # Observability (PRD §16.3)
     log_level: str = "INFO"

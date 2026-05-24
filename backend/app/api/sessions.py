@@ -256,6 +256,7 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             paa_tier2_cap=s.paa_tier2_cap,
             autocomplete_max=s.autocomplete_max,
             max_workers=s.expansion_max_workers,
+            time_budget_s=s.expansion_time_budget_s,
         )
         store.delete_keywords_for_session(session_id)
         count = store.insert_keywords(session_id, result.per_topic)
