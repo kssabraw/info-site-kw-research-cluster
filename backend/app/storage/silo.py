@@ -5,7 +5,10 @@ so RLS enforces visibility. Writes the backend orchestrates go through the
 service client after ownership has been verified.
 """
 
+import json
+
 from app.pipeline.models import ProposedSilo
+from app.pipeline.relevance import GatedKeyword
 from app.storage.supabase_client import (
     ensure_scratch_project,
     get_service_client,
@@ -90,6 +93,23 @@ def update_session(session_id: str, fields: dict) -> dict:
         .execute()
     )
     return row.data[0]
+
+
+def try_mark_running(session_id: str) -> bool:
+    """Atomically claim a session for a pipeline run: set status='running' only
+    if it isn't already running. Returns True if this caller acquired the run,
+    False if a run was already in progress. The `neq` makes the check-and-set a
+    single guarded UPDATE, so two concurrent callers can't both proceed
+    (prevents duplicate rows + double API spend on a double-submit/retry)."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update({"status": "running"})
+        .eq("id", session_id)
+        .neq("status", "running")
+        .execute()
+    )
+    return bool(res.data)
 
 
 def delete_topics_for_session(session_id: str) -> None:
@@ -178,7 +198,7 @@ def delete_topic(topic_id: str) -> None:
 
 
 # ---- M3 keyword expansion -------------------------------------------------
-_KEYWORD_COLS = "id, topic_id, keyword, sources, status, created_at"
+_KEYWORD_COLS = "id, topic_id, keyword, sources, status, relevance_score, created_at"
 
 
 def delete_keywords_for_session(session_id: str) -> None:
@@ -198,7 +218,11 @@ def insert_keywords(session_id: str, per_topic: dict[str, dict[str, list[str]]])
 
 
 def list_keywords(
-    session_id: str, topic_id: str | None = None, limit: int = 200, offset: int = 0
+    session_id: str,
+    topic_id: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
 ) -> list[dict]:
     q = (
         get_service_client()
@@ -208,8 +232,69 @@ def list_keywords(
     )
     if topic_id:
         q = q.eq("topic_id", topic_id)
+    if status:
+        q = q.eq("status", status)
     res = q.order("created_at").range(offset, offset + limit - 1).execute()
     return res.data
+
+
+# ---- M4 deep-mine gating, relevance, clustering ---------------------------
+def set_topics_gating(session_id: str, gated_topic_ids: list[str]) -> None:
+    """Mark which silos are gated for competitor mining (PRD §7.2). Clears the
+    flag on all of the session's topics, then sets it on the selected ones."""
+    client = get_service_client()
+    client.table("topics").update({"is_gated_for_competitor_mining": False}).eq(
+        "session_id", session_id
+    ).execute()
+    if gated_topic_ids:
+        client.table("topics").update({"is_gated_for_competitor_mining": True}).eq(
+            "session_id", session_id
+        ).in_("id", gated_topic_ids).execute()
+
+
+def get_topic_embeddings(session_id: str) -> dict[str, list[float] | None]:
+    """topic_id -> embedding vector (parsed from pgvector's text form), for the
+    relevance gate. Never exposed through the API."""
+    res = (
+        get_service_client()
+        .table("topics")
+        .select("id, embedding")
+        .eq("session_id", session_id)
+        .execute()
+    )
+    out: dict[str, list[float] | None] = {}
+    for row in res.data:
+        emb = row.get("embedding")
+        if isinstance(emb, str):
+            try:
+                emb = json.loads(emb)
+            except (ValueError, TypeError):
+                emb = None
+        out[row["id"]] = emb
+    return out
+
+
+def insert_classified_keywords(
+    session_id: str, per_topic: dict[str, list[GatedKeyword]]
+) -> int:
+    """Persist gate output: every keyword with its status (active /
+    filtered_relevance / filtered_junk) and relevance_score. Nothing is dropped."""
+    rows = [
+        {
+            "session_id": session_id,
+            "topic_id": tid,
+            "keyword": g.keyword,
+            "sources": g.sources,
+            "status": g.status,
+            "relevance_score": g.relevance_score,
+        }
+        for tid, kws in per_topic.items()
+        for g in kws
+    ]
+    client = get_service_client()
+    for start in range(0, len(rows), 500):
+        client.table("keywords").insert(rows[start : start + 500]).execute()
+    return len(rows)
 
 
 def set_topic_embedding(topic_id: str, vector: list[float]) -> None:

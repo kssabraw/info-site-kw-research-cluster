@@ -1,0 +1,222 @@
+"""Relevance gate + dedup + junk filter (PRD §7.6).
+
+Every candidate keyword is checked against its parent topic's embedding by
+cosine similarity. This is the pipeline's volume control point — and the step
+that finally sorts the seed-level keyword pool (suggestions/fan-outs were fanned
+to every silo in §7.3) into the silo each keyword actually belongs to.
+
+- Cross-source dedup happens upstream: the per-topic pools are keyed by the
+  normalized keyword, so duplicate surfacings already merged while preserving
+  source attribution. Here we only score and classify.
+- Embedding dedup happens here: because the seed-level pool fans the same
+  keyword into many silos, we embed each *unique* keyword once across all silos
+  (not once per silo) and reuse the vector.
+- Junk filter (cheap, pre-embedding): blocked tokens + length sanity.
+- Relevance: cosine >= threshold (default 0.62) -> active, else
+  filtered_relevance. Junk -> filtered_junk. Nothing is deleted; failures are
+  tagged and stored for v1 calibration.
+
+Resilience: a per-batch embedding failure (or a short/mismatched batch) degrades
+only that batch's keywords — they're kept `active` and unscored — rather than
+aborting the whole run. Embeddings for surviving keywords are returned so the
+clustering step (§7.9) can reuse them rather than re-embedding.
+"""
+
+import logging
+import re
+from dataclasses import dataclass, field
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Blocked tokens (PRD §7.6): unambiguously off-niche / adult / spam terms that
+# are junk regardless of the seed. Kept deliberately tight — topical filtering is
+# the relevance gate's job, so words that are legitimate in some niches (e.g.
+# "sex" for sexual-health, "bet"/"slots" in other contexts) are NOT blocked here
+# to avoid false positives. Brand-name detection (the third §7.6 sub-rule) needs
+# a brand DB and is left out of v1.
+_BLOCKED_TOKENS = frozenset({
+    "porn", "porno", "pornography", "xxx", "nsfw", "casino", "casinos",
+    "gambling", "viagra", "cialis",
+})
+_MIN_CHARS = 2
+_MAX_WORDS = 12
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+@dataclass
+class GatedKeyword:
+    keyword: str
+    sources: list[str]
+    status: str  # 'active' | 'filtered_relevance' | 'filtered_junk'
+    relevance_score: float | None = None
+    embedding: list[float] | None = None  # kept only for scored 'active' (for §7.9)
+
+
+@dataclass
+class RelevanceResult:
+    # topic_id -> list of classified keywords
+    per_topic: dict[str, list[GatedKeyword]] = field(default_factory=dict)
+    degraded_notes: list[str] = field(default_factory=list)
+
+    def counts(self) -> dict[str, int]:
+        out = {"active": 0, "filtered_relevance": 0, "filtered_junk": 0}
+        for kws in self.per_topic.values():
+            for k in kws:
+                out[k.status] = out.get(k.status, 0) + 1
+        return out
+
+
+def _is_junk(keyword: str) -> bool:
+    if len(keyword) < _MIN_CHARS:
+        return True
+    words = _WORD_RE.findall(keyword)
+    if not words or len(words) > _MAX_WORDS:
+        return True
+    return any(w in _BLOCKED_TOKENS for w in words)
+
+
+def _cosine_to_anchor(vectors: np.ndarray, anchor: np.ndarray) -> np.ndarray:
+    """Cosine similarity of each row in `vectors` to `anchor`. Zero vectors yield 0."""
+    anchor_norm = np.linalg.norm(anchor)
+    if anchor_norm == 0:
+        return np.zeros(vectors.shape[0])
+    row_norms = np.linalg.norm(vectors, axis=1)
+    safe = np.where(row_norms == 0, 1.0, row_norms)
+    sims = (vectors @ anchor) / (safe * anchor_norm)
+    return np.where(row_norms == 0, 0.0, sims)
+
+
+def _embed_unique(
+    keywords: list[str], embed_fn, batch_size: int
+) -> tuple[dict[str, np.ndarray], bool]:
+    """Embed each keyword once. Returns (keyword -> vector, degraded?). A failed
+    or count-mismatched batch is skipped (those keywords get no vector); it never
+    raises, so a transient embedding error can't abort the pipeline."""
+    out: dict[str, np.ndarray] = {}
+    degraded = False
+    for start in range(0, len(keywords), batch_size):
+        batch = keywords[start : start + batch_size]
+        try:
+            vectors = embed_fn(batch)
+        except Exception as exc:  # noqa: BLE001 — degrade this batch, keep going
+            degraded = True
+            logger.warning(
+                "degraded",
+                extra={"event": "degraded", "step": "relevance_gate",
+                       "phase": "embed", "reason": str(exc)},
+            )
+            continue
+        if len(vectors) != len(batch):
+            # Never zip-truncate silently: drop the whole batch and degrade.
+            degraded = True
+            logger.warning(
+                "degraded",
+                extra={"event": "degraded", "step": "relevance_gate", "phase": "embed",
+                       "reason": f"embedding count mismatch ({len(vectors)} != {len(batch)})"},
+            )
+            continue
+        arr = np.asarray(vectors, dtype=np.float32)
+        for kw, row in zip(batch, arr):
+            out[kw] = row.copy()
+    return out, degraded
+
+
+def run_relevance_gate(
+    *,
+    per_topic: dict[str, dict[str, list[str]]],
+    topic_embeddings: dict[str, list[float] | None],
+    embed_fn,
+    topic_names: dict[str, str] | None = None,
+    threshold: float = 0.62,
+    batch_size: int = 1000,
+) -> RelevanceResult:
+    """Classify every keyword in `per_topic` as active / filtered_relevance /
+    filtered_junk. `embed_fn(list[str]) -> list[list[float]]` embeds keywords.
+    A topic with no embedding can't be scored — its keywords are kept active
+    (score null) and the run is flagged degraded for that silo."""
+    result = RelevanceResult()
+    topic_names = topic_names or {}
+
+    # 1. Junk filter per topic; collect the unique non-junk keywords to embed.
+    #    Only embed keywords that belong to at least one topic that HAS an
+    #    embedding (a keyword living only in unembeddable silos is never scored).
+    junk_by_topic: dict[str, list[GatedKeyword]] = {}
+    cands_by_topic: dict[str, list[tuple[str, list[str]]]] = {}
+    unique: dict[str, None] = {}  # insertion-ordered unique keyword set
+    for tid, pool in per_topic.items():
+        has_anchor = bool(topic_embeddings.get(tid))
+        junk: list[GatedKeyword] = []
+        cands: list[tuple[str, list[str]]] = []
+        for kw, sources in pool.items():
+            srt = sorted(sources)
+            if _is_junk(kw):
+                junk.append(GatedKeyword(kw, srt, "filtered_junk"))
+            else:
+                cands.append((kw, srt))
+                if has_anchor:
+                    unique.setdefault(kw, None)
+        junk_by_topic[tid] = junk
+        cands_by_topic[tid] = cands
+
+    # 2. Embed every unique keyword once (dedup across silos), resilient to
+    #    per-batch failures.
+    emb_by_kw, embed_degraded = _embed_unique(list(unique), embed_fn, batch_size)
+    if embed_degraded:
+        result.degraded_notes.append(
+            "Some keywords could not be scored for relevance (embedding service "
+            "degraded); they were kept active."
+        )
+
+    # 3. Score per topic against that topic's own anchor.
+    for tid, cands in cands_by_topic.items():
+        classified: list[GatedKeyword] = list(junk_by_topic[tid])
+        anchor = topic_embeddings.get(tid)
+
+        if not anchor:
+            if cands:
+                label = topic_names.get(tid) or tid
+                result.degraded_notes.append(
+                    f"Relevance gate skipped for silo “{label}”: no topic embedding."
+                )
+            for kw, sources in cands:
+                classified.append(GatedKeyword(kw, sources, "active"))
+            result.per_topic[tid] = classified
+            continue
+
+        anchor_vec = np.asarray(anchor, dtype=np.float64)
+        scorable = [(kw, src, emb_by_kw[kw]) for kw, src in cands if kw in emb_by_kw]
+        # Candidates whose batch failed to embed: keep active, unscored.
+        for kw, src in cands:
+            if kw not in emb_by_kw:
+                classified.append(GatedKeyword(kw, src, "active"))
+
+        if scorable:
+            vectors = np.asarray([e for _, _, e in scorable], dtype=np.float64)
+            sims = _cosine_to_anchor(vectors, anchor_vec)
+            for (kw, src, emb), sim in zip(scorable, sims):
+                score = float(sim)
+                if score >= threshold:
+                    classified.append(
+                        GatedKeyword(kw, src, "active",
+                                     relevance_score=score, embedding=emb.tolist())
+                    )
+                else:
+                    classified.append(
+                        GatedKeyword(kw, src, "filtered_relevance", relevance_score=score)
+                    )
+        result.per_topic[tid] = classified
+
+    counts = result.counts()
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "relevance_gate",
+               "active": counts["active"],
+               "filtered_relevance": counts["filtered_relevance"],
+               "filtered_junk": counts["filtered_junk"],
+               "unique_embedded": len(emb_by_kw),
+               "threshold": threshold},
+    )
+    return result

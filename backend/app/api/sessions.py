@@ -1,8 +1,9 @@
-"""Silo-discovery endpoints (M2).
+"""Session endpoints: silo discovery (M2) + keyword pipeline (M3/M4).
 
-Lifecycle: create a session (runs grounding + proposal), optionally resolve a
-disambiguation choice, review/edit the proposed silos, then finalize — which
-embeds each silo and halts (expansion is M3).
+Lifecycle: create a session (grounding + proposal), optionally resolve
+disambiguation, review/edit silos, finalize (embeds each silo), pick which silos
+to deep-mine (§7.2), then run /expand — which now runs the full refinement
+pipeline: expansion + competitor mining + relevance gate + statistical clustering.
 """
 
 import logging
@@ -15,8 +16,8 @@ from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
-from app.pipeline.expansion import ExpansionTopic, build_anchor, run_expansion
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
+from app.pipeline.orchestrate import PipelineTopic, run_refinement_pipeline
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -55,6 +56,12 @@ class EditTopicBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     rationale: str | None = None
     relationship_type: RelationshipType | None = None
+
+
+class DeepMineBody(BaseModel):
+    # Silos the user chose to mine for competitor keywords (PRD §7.2). The seed
+    # is always mined regardless; an empty list means "seed only".
+    topic_ids: list[str] = Field(default_factory=list)
 
 
 class SiloDiscoveryResponse(BaseModel):
@@ -231,7 +238,28 @@ def finalize_silos(session_id: str, user: AuthedUser = Depends(require_user)) ->
     return {"finalized": True, "topic_count": len(topics)}
 
 
-# ---- M3 expansion ---------------------------------------------------------
+# ---- M4 deep-mine selection (PRD §7.2) ------------------------------------
+@router.post("/sessions/{session_id}/deep-mine")
+def set_deep_mine(
+    session_id: str, body: DeepMineBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Record which silos to mine for competitor keywords. The seed is always
+    mined; this only gates the additional silos."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    valid_ids = {t["id"] for t in store.list_topics(session_id)}
+    requested = list(dict.fromkeys(body.topic_ids))  # dedupe, preserve order
+    invalid = [tid for tid in requested if tid not in valid_ids]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Topics do not belong to this session: {', '.join(invalid)}",
+        )
+    store.set_topics_gating(session_id, requested)
+    return {"gated_topic_ids": requested, "topics": store.list_topics(session_id)}
+
+
+# ---- M3 expansion + M4 mining/relevance/clustering ------------------------
 @router.post("/sessions/{session_id}/expand")
 def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
     session = _require_session(user, session_id)
@@ -243,52 +271,94 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             detail="No silos to expand. Finalize at least one silo first.",
         )
 
+    # Atomically claim the run; reject if one is already in progress. This
+    # guards against a double-submit or a retry-after-timeout (the prior run may
+    # still be executing server-side) creating duplicate rows + double spend.
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A pipeline run is already in progress for this session.",
+        )
+
     seed = session["seed_keyword"]
-    store.update_session(session_id, {"status": "running"})
+    embeddings = store.get_topic_embeddings(session_id)
     s = get_settings()
+    coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
+    top_n = (
+        s.competitor_top_n_comprehensive
+        if coverage_mode == "comprehensive"
+        else s.competitor_top_n_standard
+    )
     try:
-        result = run_expansion(
+        result = run_refinement_pipeline(
             seed=seed,
             topics=[
-                ExpansionTopic(
-                    id=t["id"], anchor=build_anchor(seed, t["name"]), name=t["name"]
+                PipelineTopic(
+                    id=t["id"],
+                    name=t["name"],
+                    embedding=embeddings.get(t["id"]),
+                    gated=bool(t.get("is_gated_for_competitor_mining")),
                 )
                 for t in topics
             ],
             dfs=get_dataforseo(),
+            embed_fn=get_llm().embed,
             keyword_ideas_limit=s.keyword_ideas_limit,
             keyword_suggestions_limit=s.keyword_suggestions_limit,
             query_fanouts_limit=s.query_fanouts_limit,
             paa_tier1_seeds=s.paa_tier1_seeds,
             paa_tier2_cap=s.paa_tier2_cap,
             autocomplete_max=s.autocomplete_max,
-            max_workers=s.expansion_max_workers,
-            time_budget_s=s.expansion_time_budget_s,
+            expansion_max_workers=s.expansion_max_workers,
+            expansion_time_budget_s=s.expansion_time_budget_s,
+            competitor_top_n=top_n,
+            ranked_keywords_limit=s.ranked_keywords_limit,
+            competitor_max_position=s.competitor_max_position,
+            competitor_max_workers=s.competitor_max_workers,
+            competitor_time_budget_s=s.competitor_time_budget_s,
+            relevance_threshold=s.relevance_threshold,
+            relevance_embed_batch=s.relevance_embed_batch,
+            clustering_edge_threshold=s.clustering_edge_threshold,
+            clustering_max_nodes=s.clustering_max_nodes,
         )
         store.delete_keywords_for_session(session_id)
-        count = store.insert_keywords(session_id, result.per_topic)
+        count = store.insert_classified_keywords(session_id, result.per_topic_gated)
+        store.update_session(
+            session_id, {"statistical_clustering_log": result.clustering_log}
+        )
     except Exception as exc:
         store.update_session(session_id, {"status": "error"})
         logger.error(
             "step_failed",
-            extra={"event": "step_failed", "step": "expansion", "reason": repr(exc)},
+            extra={"event": "step_failed", "step": "refinement_pipeline",
+                   "reason": repr(exc)},
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Keyword expansion failed. The session was marked as errored; try again.",
+            detail="The keyword pipeline failed. The session was marked as errored; try again.",
         ) from exc
 
-    # M3 is the current pipeline terminus; later milestones move this downstream.
+    # M4 is the current pipeline terminus; M5 (orchestrator) moves this downstream.
     store.update_session(session_id, {"status": "complete"})
 
+    counts = result.counts()
     names = {t["id"]: t["name"] for t in topics}
+    groupings = result.clustering_log.get("topics", {})
     return {
         "expanded": True,
         "keyword_count": count,
+        "counts": counts,
         "degraded_notes": result.degraded_notes,
+        "timed_out": result.timed_out,
         "topics": [
-            {"topic_id": tid, "name": names.get(tid, ""), "keyword_count": len(kws)}
-            for tid, kws in result.per_topic.items()
+            {
+                "topic_id": tid,
+                "name": names.get(tid, ""),
+                "active": sum(1 for g in kws if g.status == "active"),
+                "total": len(kws),
+                "grouping_count": groupings.get(tid, {}).get("grouping_count", 0),
+            }
+            for tid, kws in result.per_topic_gated.items()
         ],
     }
 
@@ -298,11 +368,14 @@ def get_keywords(
     session_id: str,
     user: AuthedUser = Depends(require_user),
     topic_id: str | None = None,
+    status: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
     _require_session(user, session_id)
-    return store.list_keywords(session_id, topic_id=topic_id, limit=min(limit, 500), offset=offset)
+    return store.list_keywords(
+        session_id, topic_id=topic_id, status=status, limit=min(limit, 500), offset=offset
+    )
 
 
 # ---- Topic review actions (PRD §7.1.4) ------------------------------------

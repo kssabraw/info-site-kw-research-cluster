@@ -136,17 +136,27 @@ export const editTopic = (topicId: string, body: EditTopicBody) =>
 export const deleteTopic = (topicId: string) =>
   request<void>(`/topics/${topicId}`, { method: "DELETE" });
 
-export interface ExpansionTopicCount {
+export interface PipelineTopicCount {
   topic_id: string;
   name: string;
-  keyword_count: number;
+  active: number;
+  total: number;
+  grouping_count: number;
+}
+
+export interface PipelineCounts {
+  active: number;
+  filtered_relevance: number;
+  filtered_junk: number;
 }
 
 export interface ExpansionResult {
   expanded: boolean;
   keyword_count: number;
+  counts: PipelineCounts;
   degraded_notes: string[];
-  topics: ExpansionTopicCount[];
+  timed_out: boolean;
+  topics: PipelineTopicCount[];
 }
 
 export interface Keyword {
@@ -155,13 +165,21 @@ export interface Keyword {
   keyword: string;
   sources: string[];
   status: string;
+  relevance_score: number | null;
   created_at: string;
 }
+
+export const setDeepMine = (id: string, topic_ids: string[]) =>
+  request<{ gated_topic_ids: string[]; topics: Silo[] }>(`/sessions/${id}/deep-mine`, {
+    method: "POST",
+    body: JSON.stringify({ topic_ids }),
+  });
 
 export const expandSession = (id: string) =>
   request<ExpansionResult>(`/sessions/${id}/expand`, { method: "POST" });
 
-export const getKeywords = (id: string, topicId: string, limit = 200) =>
+export const getKeywords = (id: string, topicId: string, limit = 200, status = "active") =>
   request<Keyword[]>(
-    `/sessions/${id}/keywords?topic_id=${encodeURIComponent(topicId)}&limit=${limit}`,
+    `/sessions/${id}/keywords?topic_id=${encodeURIComponent(topicId)}` +
+      `&status=${encodeURIComponent(status)}&limit=${limit}`,
   );
