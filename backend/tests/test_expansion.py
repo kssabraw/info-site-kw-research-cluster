@@ -117,6 +117,24 @@ def test_endpoint_failure_degrades_not_blocks():
     assert any("keyword_ideas unavailable" in n for n in r.degraded_notes)
 
 
+def test_non_string_keyword_is_skipped_not_crashed():
+    # A malformed (non-string) element in a source result must be skipped, not
+    # abort the whole run.
+    dfs = FakeDFS(ideas=["good", {"k": "v"}, None], suggestions=["b"])  # type: ignore[list-item]
+    r = _run(dfs)
+    assert set(r.per_topic["t1"]) == {"good", "b"}
+
+
+def test_degraded_note_uses_silo_name_not_anchor():
+    dfs = FakeDFS(fail=("keyword_ideas",))
+    r = run_expansion(
+        topics=[ExpansionTopic(id="t1", anchor="retatrutide weight loss use", name="weight loss use")],
+        dfs=dfs,
+    )
+    assert any("“weight loss use”" in n for n in r.degraded_notes)
+    assert not any("retatrutide weight loss use" in n for n in r.degraded_notes)
+
+
 class _ValueErrorIdeasDFS(FakeDFS):
     def keyword_ideas(self, anchor, limit=0):
         raise ValueError("malformed result shape")  # NOT a DataForSEOError
