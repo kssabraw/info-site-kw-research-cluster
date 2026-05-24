@@ -11,6 +11,7 @@ import {
   getKeywords,
   getSession,
   overrideAudience,
+  setDeepMine,
   type AddTopicBody,
   type EditTopicBody,
   type ExpansionResult,
@@ -76,7 +77,11 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
 
   const [expansion, setExpansion] = useState<ExpansionResult | null>(null);
   const expandMut = useMutation({
-    mutationFn: () => expandSession(sessionId!),
+    // The deep-mine selection (§7.2) is saved, then the full pipeline runs.
+    mutationFn: async (gatedTopicIds: string[]) => {
+      await setDeepMine(sessionId!, gatedTopicIds);
+      return expandSession(sessionId!);
+    },
     onSuccess: (r) => {
       setExpansion(r);
       setStep("expanded");
@@ -168,35 +173,20 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
         {step === "finalized" && expandMut.isPending && (
           <WorkingProgress
             stages={EXPANSION_STAGES}
-            targetS={90}
-            estimate="usually 2–4 minutes"
+            targetS={150}
+            estimate="usually 3–6 minutes"
           />
         )}
 
-        {step === "finalized" && !expandMut.isPending && (
-          <div className="card">
-            <h1 className="page-title">Silos finalized</h1>
-            <p className="muted">
-              Your silos are locked and embedded. Next, expand each silo into a keyword
-              pool (DataForSEO ideas, suggestions, fan-outs, People-Also-Ask, and
-              autocomplete).
-            </p>
-            <div className="toolbar">
-              <button className="btn btn-ghost" onClick={onExit}>
-                Back to projects
-              </button>
-              <button
-                className="btn btn-primary"
-                style={{ width: "auto" }}
-                onClick={() => {
-                  setError(null);
-                  expandMut.mutate();
-                }}
-              >
-                Run keyword expansion
-              </button>
-            </div>
-          </div>
+        {step === "finalized" && !expandMut.isPending && sessionId && (
+          <DeepMineSelection
+            sessionId={sessionId}
+            onExit={onExit}
+            onRun={(gatedIds) => {
+              setError(null);
+              expandMut.mutate(gatedIds);
+            }}
+          />
         )}
 
         {step === "expanded" && expansion && sessionId && (
@@ -221,9 +211,11 @@ const DISCOVERY_STAGES: Stage[] = [
 ];
 
 const EXPANSION_STAGES: Stage[] = [
-  { until: 30, label: "Pulling keyword ideas, suggestions, and fan-outs per silo" },
-  { until: 55, label: "Mining People-Also-Ask questions" },
-  { until: Infinity, label: "Autocomplete enrichment" },
+  { until: 40, label: "Pulling keyword ideas, suggestions, fan-outs, and PAA per silo" },
+  { until: 70, label: "Autocomplete enrichment" },
+  { until: 110, label: "Mining competitor ranked keywords" },
+  { until: 150, label: "Scoring relevance against each silo" },
+  { until: Infinity, label: "Clustering keywords per silo" },
 ];
 
 function WorkingProgress({
@@ -273,15 +265,25 @@ function ExpansionResults(p: {
 }) {
   const { expansion } = p;
   const [openTopic, setOpenTopic] = useState<string | null>(null);
+  const c = expansion.counts;
 
   return (
     <>
-      <h1 className="page-title">Keyword expansion complete</h1>
+      <h1 className="page-title">Keyword pipeline complete</h1>
       <p className="muted">
-        {expansion.keyword_count.toLocaleString()} keywords across{" "}
-        {expansion.topics.length} silos.
+        {c.active.toLocaleString()} relevant keywords across {expansion.topics.length} silos
+        {" · "}
+        {(c.filtered_relevance + c.filtered_junk).toLocaleString()} filtered out (
+        {c.filtered_relevance.toLocaleString()} off-topic, {c.filtered_junk.toLocaleString()}{" "}
+        junk).
       </p>
 
+      {expansion.timed_out && (
+        <div className="banner">
+          The run hit its time budget — some silos may be partially mined. The keywords
+          collected so far were saved.
+        </div>
+      )}
       {expansion.degraded_notes.map((note) => (
         <div className="banner" key={note}>
           {note}
@@ -293,7 +295,9 @@ function ExpansionResults(p: {
           <div className="silo-head">
             <p className="silo-name">{t.name}</p>
             <div className="silo-actions">
-              <span className="muted">{t.keyword_count.toLocaleString()} keywords</span>
+              <span className="muted">
+                {t.active.toLocaleString()} keywords · {t.grouping_count} groupings
+              </span>
               <button
                 className="link-btn"
                 onClick={() => setOpenTopic(openTopic === t.topic_id ? null : t.topic_id)}
@@ -309,12 +313,92 @@ function ExpansionResults(p: {
       ))}
 
       <div className="toolbar">
-        <span className="muted">Expansion done — clustering arrives in a later milestone.</span>
+        <span className="muted">
+          Groupings are an internal signal — article planning arrives in the next milestone.
+        </span>
         <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
           Done
         </button>
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Deep-mine selection (PRD §7.2): the user picks which silos to mine for
+// competitor keywords. The seed is always mined and shown as a locked row.
+function DeepMineSelection(p: {
+  sessionId: string;
+  onRun: (gatedTopicIds: string[]) => void;
+  onExit: () => void;
+}) {
+  const q = useQuery({
+    queryKey: ["session", p.sessionId],
+    queryFn: () => getSession(p.sessionId),
+  });
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  if (q.isLoading) return <p className="muted">Loading silos…</p>;
+  if (q.isError) return <p className="form-error">Failed to load silos.</p>;
+  const silos = q.data?.silos ?? [];
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div className="card">
+      <h1 className="page-title">Choose silos to deep-mine</h1>
+      <p className="muted">
+        Competitor mining pulls the keywords competitors already rank for. The seed is always
+        mined; pick the silos worth the extra SERP cost (2–3 is a good budget). You can also
+        run with none selected.
+      </p>
+
+      <div className="keyword-grid" style={{ marginTop: 16 }}>
+        <label className="keyword-row" style={{ opacity: 0.7 }}>
+          <span>
+            <input type="checkbox" checked disabled style={{ marginRight: 8 }} />
+            Seed keyword (always mined)
+          </span>
+          <span className="keyword-sources">required</span>
+        </label>
+        {silos.map((s) => (
+          <label className="keyword-row" key={s.id} style={{ cursor: "pointer" }}>
+            <span>
+              <input
+                type="checkbox"
+                checked={selected.has(s.id)}
+                onChange={() => toggle(s.id)}
+                style={{ marginRight: 8 }}
+              />
+              {s.name}
+            </span>
+            <span className="keyword-sources">
+              {RELATIONSHIP_LABELS[s.relationship_type]}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className="toolbar" style={{ marginTop: 16 }}>
+        <button className="btn btn-ghost" onClick={p.onExit}>
+          Back to projects
+        </button>
+        <button
+          className="btn btn-primary"
+          style={{ width: "auto" }}
+          onClick={() => p.onRun([...selected])}
+        >
+          Run keyword pipeline
+          {selected.size > 0 ? ` (mine ${selected.size + 1} silos)` : " (seed only)"}
+        </button>
+      </div>
+    </div>
   );
 }
 

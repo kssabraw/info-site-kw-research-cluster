@@ -358,11 +358,14 @@ def get_keywords(
     session_id: str,
     user: AuthedUser = Depends(require_user),
     topic_id: str | None = None,
+    status: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
     _require_session(user, session_id)
-    return store.list_keywords(session_id, topic_id=topic_id, limit=min(limit, 500), offset=offset)
+    return store.list_keywords(
+        session_id, topic_id=topic_id, status=status, limit=min(limit, 500), offset=offset
+    )
 
 
 # ---- Topic review actions (PRD §7.1.4) ------------------------------------
