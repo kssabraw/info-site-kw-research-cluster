@@ -60,6 +60,19 @@ class Settings(BaseSettings):
     expansion_max_workers: int = 8    # parallel endpoint/silo workers
     expansion_time_budget_s: int = 240  # hard cap on a single expansion run (4 min)
 
+    # M4 competitor mining (PRD §7.4).
+    competitor_top_n_standard: int = 5       # top organic URLs mined per silo
+    competitor_top_n_comprehensive: int = 10
+    ranked_keywords_limit: int = 500         # ranked keywords pulled per domain
+    competitor_max_position: int = 20        # organic rank ceiling (1..N)
+    competitor_max_workers: int = 8
+    competitor_time_budget_s: int = 240
+
+    # M4 relevance gate (PRD §7.6) + clustering (§7.9).
+    relevance_threshold: float = 0.62        # cosine cutoff vs parent topic embedding
+    relevance_embed_batch: int = 1000        # keywords per embedding request
+    clustering_edge_threshold: float = 0.55  # min cosine for a graph edge
+
     # Observability (PRD §16.3)
     log_level: str = "INFO"
 
