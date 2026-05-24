@@ -30,16 +30,6 @@ class DataForSEOClient:
         self._base_url = base_url.rstrip("/")
         self._auth = (login, password)
 
-    def raw(self, path: str, payload: list[dict]) -> dict:
-        """Raw POST returning the parsed JSON without the status-code guard.
-        For diagnostics only — lets a debug endpoint inspect the real response
-        shape (including task-level warnings)."""
-        resp = httpx.post(f"{self._base_url}{path}", json=payload, auth=self._auth, timeout=60.0)
-        try:
-            return resp.json()
-        except ValueError:
-            return {"_http_status": resp.status_code, "_text": resp.text[:500]}
-
     def _post(self, path: str, payload: list[dict]) -> dict:
         url = f"{self._base_url}{path}"
         started = time.perf_counter()
