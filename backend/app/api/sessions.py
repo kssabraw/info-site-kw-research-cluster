@@ -248,14 +248,15 @@ def set_deep_mine(
     _require_session(user, session_id)
     bind_session_id(session_id)
     valid_ids = {t["id"] for t in store.list_topics(session_id)}
-    selected = [tid for tid in body.topic_ids if tid in valid_ids]
-    if len(selected) != len(set(body.topic_ids)):
+    requested = list(dict.fromkeys(body.topic_ids))  # dedupe, preserve order
+    invalid = [tid for tid in requested if tid not in valid_ids]
+    if invalid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="One or more topic_ids do not belong to this session.",
+            detail=f"Topics do not belong to this session: {', '.join(invalid)}",
         )
-    store.set_topics_gating(session_id, selected)
-    return {"gated_topic_ids": selected, "topics": store.list_topics(session_id)}
+    store.set_topics_gating(session_id, requested)
+    return {"gated_topic_ids": requested, "topics": store.list_topics(session_id)}
 
 
 # ---- M3 expansion + M4 mining/relevance/clustering ------------------------
