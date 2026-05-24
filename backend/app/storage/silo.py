@@ -287,6 +287,33 @@ def get_topic_embeddings(session_id: str) -> dict[str, list[float] | None]:
     return out
 
 
+def list_all_keyword_pool(session_id: str) -> dict[str, dict[str, list[str]]]:
+    """Reconstruct the pre-gate candidate pool (topic_id -> {keyword: sources})
+    from every stored keyword row, regardless of current status. Used by the
+    re-gate path to re-run the relevance gate + clustering on the already-
+    collected keywords without re-hitting DataForSEO. Paged for large pools."""
+    client = get_service_client()
+    pool: dict[str, dict[str, list[str]]] = {}
+    offset = 0
+    page = 1000
+    while True:
+        res = (
+            client.table("keywords")
+            .select("topic_id, keyword, sources")
+            .eq("session_id", session_id)
+            .order("id")
+            .range(offset, offset + page - 1)
+            .execute()
+        )
+        rows = res.data or []
+        for r in rows:
+            pool.setdefault(r["topic_id"], {})[r["keyword"]] = r.get("sources") or []
+        if len(rows) < page:
+            break
+        offset += page
+    return pool
+
+
 def insert_classified_keywords(
     session_id: str, per_topic: dict[str, list[GatedKeyword]]
 ) -> int:

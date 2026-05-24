@@ -22,7 +22,11 @@ from app.pipeline.article_planning.orchestrate_articles import (
     run_article_planning,
 )
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
-from app.pipeline.orchestrate import PipelineTopic, run_refinement_pipeline
+from app.pipeline.orchestrate import (
+    PipelineTopic,
+    gate_and_cluster,
+    run_refinement_pipeline,
+)
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -61,6 +65,12 @@ class EditTopicBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     rationale: str | None = None
     relationship_type: RelationshipType | None = None
+
+
+class RegateBody(BaseModel):
+    # Optional per-call override so a threshold can be swept without changing the
+    # Railway env. Falls back to the configured relevance_threshold when omitted.
+    relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class DeepMineBody(BaseModel):
@@ -365,6 +375,92 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
                 "grouping_count": groupings.get(tid, {}).get("grouping_count", 0),
             }
             for tid, kws in result.per_topic_gated.items()
+        ],
+    }
+
+
+@router.post("/sessions/{session_id}/regate")
+def regate_session(
+    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Re-run the relevance gate + clustering on a session's already-collected
+    keywords at a (possibly different) threshold, skipping all DataForSEO calls.
+    Reuses the stored keyword pool, re-embeds + re-scores + re-clusters, clears
+    any prior article plan, and returns the session to awaiting_article_planning.
+    A calibration tool: lets us tune the relevance threshold in ~1-2 min/iteration
+    without re-paying for expansion + competitor mining (or hitting the 5-min wall)."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+
+    pool = store.list_all_keyword_pool(session_id)
+    if not pool:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No keywords to re-gate. Run /expand first.",
+        )
+
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+
+    s = get_settings()
+    threshold = body.relevance_threshold if body.relevance_threshold is not None \
+        else s.relevance_threshold
+    topics = store.list_topics(session_id)
+    topic_names = {t["id"]: t["name"] for t in topics}
+    topic_embeddings = store.get_topic_embeddings(session_id)
+    try:
+        gc = gate_and_cluster(
+            per_topic_lists=pool,
+            topic_names=topic_names,
+            topic_embeddings=topic_embeddings,
+            embed_fn=get_llm().embed,
+            relevance_threshold=threshold,
+            relevance_embed_batch=s.relevance_embed_batch,
+            clustering_edge_threshold=s.clustering_edge_threshold,
+            clustering_max_nodes=s.clustering_max_nodes,
+        )
+        # Clear any prior article plan (clusters reference keywords), then re-tag
+        # the keyword pool with the new gate output.
+        store.reset_article_planning(session_id)
+        store.delete_keywords_for_session(session_id)
+        count = store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        store.update_session(
+            session_id,
+            {"statistical_clustering_log": gc.clustering_log, "orchestrator_log": None},
+        )
+    except Exception as exc:
+        store.update_session(session_id, {"status": "error"})
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "regate", "reason": repr(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Re-gate failed. The session was marked errored; try again.",
+        ) from exc
+
+    store.update_session(session_id, {"status": "awaiting_article_planning"})
+
+    counts = gc.counts()
+    groupings = gc.clustering_log.get("topics", {})
+    return {
+        "regated": True,
+        "relevance_threshold": threshold,
+        "keyword_count": count,
+        "counts": counts,
+        "degraded_notes": gc.degraded_notes,
+        "topics": [
+            {
+                "topic_id": tid,
+                "name": topic_names.get(tid, ""),
+                "active": sum(1 for g in kws if g.status == "active"),
+                "total": len(kws),
+                "grouping_count": groupings.get(tid, {}).get("grouping_count", 0),
+            }
+            for tid, kws in gc.per_topic_gated.items()
         ],
     }
 
