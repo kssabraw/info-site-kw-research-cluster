@@ -15,7 +15,12 @@ from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
-from app.pipeline.expansion import ExpansionTopic, build_anchor, run_expansion
+from app.pipeline.expansion import (
+    ExpansionTopic,
+    build_anchor,
+    build_tight_anchor,
+    run_expansion,
+)
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
@@ -250,7 +255,10 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
         result = run_expansion(
             topics=[
                 ExpansionTopic(
-                    id=t["id"], anchor=build_anchor(seed, t["name"]), name=t["name"]
+                    id=t["id"],
+                    anchor=build_anchor(seed, t["name"]),
+                    name=t["name"],
+                    suggest_anchor=build_tight_anchor(seed, t["name"]),
                 )
                 for t in topics
             ],
