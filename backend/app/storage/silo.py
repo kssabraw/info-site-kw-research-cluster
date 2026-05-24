@@ -110,16 +110,31 @@ def try_mark_running(session_id: str) -> bool:
     if it isn't already running. Returns True if this caller acquired the run,
     False if a run was already in progress. The `neq` makes the check-and-set a
     single guarded UPDATE, so two concurrent callers can't both proceed
-    (prevents duplicate rows + double API spend on a double-submit/retry)."""
+    (prevents duplicate rows + double API spend on a double-submit/retry).
+    Clears any stale last_error from a prior failed run."""
     res = (
         get_service_client()
         .table("sessions")
-        .update({"status": "running"})
+        .update({"status": "running", "last_error": None})
         .eq("id", session_id)
         .neq("status", "running")
         .execute()
     )
     return bool(res.data)
+
+
+def get_session(session_id: str) -> dict | None:
+    """Service-side session fetch (no RLS), for background jobs that run after the
+    request has returned and have no user token."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select("*")
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
 
 
 def delete_topics_for_session(session_id: str) -> None:
@@ -518,6 +533,79 @@ def list_clusters(session_id: str) -> list[dict]:
         .execute()
     )
     return res.data
+
+
+def _count(table: str, **eqs) -> int:
+    q = get_service_client().table(table).select("id", count="exact", head=True)
+    for col, val in eqs.items():
+        q = q.eq(col, val)
+    return q.execute().count or 0
+
+
+def get_pipeline_summary(session_id: str) -> dict:
+    """Status + expansion/plan counts for polling and the result views. Computed
+    with count queries (cheap, indexed) so it scales past the 1000-row read cap.
+    `plan` is null until the article-planning orchestrator has run."""
+    session = get_session(session_id) or {}
+    topics = list_topics(session_id)
+    clog_topics = (session.get("statistical_clustering_log") or {}).get("topics") or {}
+    olog = session.get("orchestrator_log") or {}
+
+    clusters = list_clusters(session_id)
+    gaps = list_coverage_gaps(session_id)
+    clusters_by_topic: dict[str, int] = {}
+    gaps_by_topic: dict[str, int] = {}
+    for c in clusters:
+        clusters_by_topic[c["topic_id"]] = clusters_by_topic.get(c["topic_id"], 0) + 1
+    for g in gaps:
+        gaps_by_topic[g["topic_id"]] = gaps_by_topic.get(g["topic_id"], 0) + 1
+
+    expansion_topics = []
+    for t in topics:
+        tid = t["id"]
+        expansion_topics.append({
+            "topic_id": tid,
+            "name": t["name"],
+            "active": _count("keywords", topic_id=tid, status="active"),
+            "total": _count("keywords", topic_id=tid),
+            "grouping_count": (clog_topics.get(tid) or {}).get("grouping_count", 0),
+        })
+
+    has_plan = bool(clusters) or bool(olog)
+    plan = None
+    if has_plan:
+        plan = {
+            "clusters": len(clusters),
+            "gaps": len(gaps),
+            "dropped": _count("keywords", session_id=session_id,
+                              status="dropped_by_orchestrator"),
+            "collisions": len((olog.get("dedup") or {}).get("collisions") or []),
+            "topics": [
+                {
+                    "topic_id": t["id"],
+                    "name": t["name"],
+                    "articles": clusters_by_topic.get(t["id"], 0),
+                    "gaps": gaps_by_topic.get(t["id"], 0),
+                }
+                for t in topics
+            ],
+        }
+
+    return {
+        "status": session.get("status"),
+        "last_error": session.get("last_error"),
+        "expansion": {
+            "counts": {
+                "active": _count("keywords", session_id=session_id, status="active"),
+                "filtered_relevance": _count("keywords", session_id=session_id,
+                                             status="filtered_relevance"),
+                "filtered_junk": _count("keywords", session_id=session_id,
+                                        status="filtered_junk"),
+            },
+            "topics": expansion_topics,
+        },
+        "plan": plan,
+    }
 
 
 def list_coverage_gaps(session_id: str) -> list[dict]:

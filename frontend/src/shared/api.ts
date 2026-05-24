@@ -150,13 +150,35 @@ export interface PipelineCounts {
   filtered_junk: number;
 }
 
-export interface ExpansionResult {
-  expanded: boolean;
-  keyword_count: number;
-  counts: PipelineCounts;
-  degraded_notes: string[];
-  timed_out: boolean;
-  topics: PipelineTopicCount[];
+// The long pipeline steps run in the background and return this immediately;
+// the UI then polls getSummary for status (running -> terminal).
+export interface AsyncAck {
+  status: string;
+  session_id: string;
+  relevance_threshold?: number;
+}
+
+export interface SummaryPlanTopic {
+  topic_id: string;
+  name: string;
+  articles: number;
+  gaps: number;
+}
+
+export interface PipelineSummary {
+  status: string;
+  last_error: string | null;
+  expansion: {
+    counts: PipelineCounts;
+    topics: PipelineTopicCount[];
+  };
+  plan: {
+    clusters: number;
+    gaps: number;
+    dropped: number;
+    collisions: number;
+    topics: SummaryPlanTopic[];
+  } | null;
 }
 
 export interface Keyword {
@@ -176,31 +198,13 @@ export const setDeepMine = (id: string, topic_ids: string[]) =>
   });
 
 export const expandSession = (id: string) =>
-  request<ExpansionResult>(`/sessions/${id}/expand`, { method: "POST" });
-
-export interface PlanTopicCount {
-  topic_id: string;
-  name: string;
-  articles: number;
-  gaps: number;
-  dropped: number;
-  degraded: boolean;
-}
-
-export interface PlanResult {
-  planned: boolean;
-  clusters: number;
-  dropped: number;
-  gaps: number;
-  degraded: boolean;
-  degraded_notes: string[];
-  timed_out: boolean;
-  collisions: number;
-  topics: PlanTopicCount[];
-}
+  request<AsyncAck>(`/sessions/${id}/expand`, { method: "POST" });
 
 export const planArticles = (id: string) =>
-  request<PlanResult>(`/sessions/${id}/plan-articles`, { method: "POST" });
+  request<AsyncAck>(`/sessions/${id}/plan-articles`, { method: "POST" });
+
+export const getSummary = (id: string) =>
+  request<PipelineSummary>(`/sessions/${id}/summary`);
 
 export const getKeywords = (id: string, topicId: string, limit = 200, status = "active") =>
   request<Keyword[]>(
