@@ -2,7 +2,7 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-_Last updated: 2026-05-24. Current `main` HEAD: `db9c470`._
+_Last updated: 2026-05-24. Current `main` HEAD: `1ac3cbf`._
 
 ---
 
@@ -10,18 +10,15 @@ _Last updated: 2026-05-24. Current `main` HEAD: `db9c470`._
 
 - **M1 — Foundation:** ✅ complete & signed off. Auth, roles, `projects`/`sessions`/`workspace_settings`/`user_profiles` under the `fanout` schema with RLS; FastAPI `/healthz` + `/me` + `/projects`; React login + project list.
 - **M2 — Silo discovery + review:** ✅ complete & signed off. Validated on `retatrutide` (clean silos, zero peer-entity leakage) and `mercury` (disambiguation gate fires).
-- **M3 — Expansion pipeline:** ✅ complete & signed off (2026-05-24). Per-silo expansion + autocomplete + keyword persistence with source attribution. The `keyword_suggestions`/`query_fanouts` zero-yield bug is fixed (see §2/§4). Verified live on `retatrutide`.
-- **M4+ — not started.** M4 = SERP competitor mining + relevance gate + statistical clustering (PRD §15.1, §7.4/§7.6/§7.9).
+- **M3 — Expansion pipeline:** ✅ complete & signed off (2026-05-24). Per-silo expansion + autocomplete + keyword persistence with source attribution. `keyword_suggestions`/`query_fanouts` run once on the bare seed, fanned to all silos.
+- **M4 — Competitor mining + relevance gate + clustering:** ✅ complete & signed off (2026-05-24). Deep-mine selection (§7.2), SERP competitor mining on gated silos + always-mined seed (§7.4), relevance gate w/ junk filter + cross-silo embedding dedup (§7.6), per-silo Louvain clustering → `statistical_clustering_log` (§7.9). Verified live on `retatrutide` (1 gated silo: 3,953 competitor kw, 1,341 active, 4 groupings @ cohesion 0.784). `autocomplete_max` lowered 1500→500. Built on `m4-competitor-clustering`; merged to `main`.
+- **M5+ — not started.** M5 = article planning orchestrator + cross-topic dedup (PRD §15.1, §7.10).
 
 ## 2. Immediate next action (resume here)
 
-**M3 is done. Next is M4 — do not start it without a human go-ahead** (milestone discipline: stop for review between milestones). When kicking off M4, read PRD §7.2 (deep-mine selection), §7.4 (SERP competitor mining), §7.6 (relevance gate + dedup), §7.9 (Louvain clustering) first.
+**M4 is done. Next is M5 — do not start it without a human go-ahead** (milestone discipline: stop for review between milestones). When kicking off M5, read PRD §7.10 (editorial orchestrator: merge/split/promote-demote/route/drop), §7.10.1–.2 (inputs/decisions), the cross-topic dedup pass, and the `clusters` + `coverage_gaps` schema in §13. The orchestrator is **Claude Opus 4.7** in tool-use/strict-schema mode (per locked decisions), run once per silo, consuming each silo's groupings from `statistical_clustering_log` + a SERP fetch per candidate primary keyword.
 
-How the M3 `keyword_suggestions`/`query_fanouts` bug was resolved (for context):
-- Diagnosed with a temporary owner-only `/debug/dataforseo` probe (now removed). Confirmed both are phrase/seed-match endpoints: the long silo-qualified anchor (`"retatrutide Obesity & Metabolic Uses"`) matched nothing → 0; the bare seed returns rich results; the `related_keywords` parser was already correct.
-- An intermediate "tight anchor" (seed + first salient silo token) was tried and **failed live** — single-digit suggestions, 0 fan-outs on 4/5 silos — because a constructed phrase like `retatrutide weight` is rarely a real, searched keyword.
-- **Final fix:** `keyword_suggestions` + `query_fanouts` run **once on the bare seed** and their results attach to **every** silo; `keyword_ideas` + PAA keep the per-silo broad anchor. The M4 relevance gate (§7.6) is what sorts the seed-level pool into silos. Verified: 500 suggestions + 79 fan-outs land on every silo.
-- The temporary debug endpoint + `DataForSEOClient.raw()` were removed afterward.
+**Before M5, decide on #1 (the 5-min wall).** M4 runs the full pipeline synchronously; M5 adds per-candidate SERP fetches + an LLM call per silo, making the synchronous request even longer. The human chose to defer the async fix to **M11** and accept that large runs error in the UI while completing server-side (verify via Supabase). If M5's added latency makes that untenable, revisit (see §4).
 
 ## 3. Deploy & infra state (CRITICAL — caused most of the pain this session)
 
@@ -34,35 +31,36 @@ How the M3 `keyword_suggestions`/`query_fanouts` bug was resolved (for context):
 
 ## 4. Known issues / open items
 
-- **M3 PAA gap (known/accepted):** PAA tier-1 uses the broad silo anchor (`people_also_ask("retatrutide Mechanism & Pharmacology")`), which isn't a natural Google query, so some silos get no PAA box → 0 questions (and no tier-2 cascade). It's binary (~35 or 0). PAA is the smallest contributor (~20–50/silo) and the pool is already 3–5k/silo, so this was left as-is — revisit in M4 if needed (fix would mirror the suggestions/fan-outs change: PAA tier-1 on the bare seed, or a natural per-silo query with a seed fallback).
-- **M3 (resolved):** `keyword_suggestions` + `query_fanouts` zero-yield — fixed via bare-seed anchor fanned to all silos (§2).
+- **The 5-min synchronous wall (BIGGEST open item → M11).** The whole pipeline (`/expand`) runs in one HTTP request. **Railway's edge caps requests at 5 minutes (confirmed not configurable).** A large run exceeds it; the browser errors, but the backend keeps running (sync `def` → threadpool, not cancelled on client disconnect), completes, and persists — so data isn't lost, but the UI never sees it, and there's no session-resume until M7 (verify via Supabase instead). Internal per-stage budgets (`EXPANSION_TIME_BUDGET_S` / `COMPETITOR_TIME_BUDGET_S`, 240s each) are a safety valve to return *before* the edge cap; hitting one truncates the lowest-yield tail (mostly autocomplete) and shows a "partial mining" banner. **Real fix = async + polling, deferred to M11** — but note PRD §15.1 M11 is literally "cost + observability", so confirm the async work has an explicit home there. Mitigation knobs now: `AUTOCOMPLETE_MAX` (already 500), `EXPANSION_MAX_WORKERS`/`COMPETITOR_MAX_WORKERS` (raise to finish faster).
+- **M4 ranked_keywords is domain-level, not URL-level.** §7.4 says "per URL ranks 1–20"; DataForSEO's `ranked_keywords` target is a domain, so we dedupe the top URLs to domains and filter rank ≤ 20 server-side. Verified live (3,953 competitor kw on one silo). The filter path (`ranked_serp_element.serp_item.rank_absolute`) is the documented shape; if it's ever wrong the failure is quiet (mining degrades to 0 + degraded notes, no crash).
+- **M4 hygiene leftovers (low, not fixed):** dead `insert_keywords` in `storage/silo.py` (replaced by `insert_classified_keywords`); `/expand` has no guard against running before `/finalize` (degrades gracefully — all active, no scoring); two gated silos sharing a domain make duplicate `ranked_keywords` calls (minor cost).
+- **M4 stuck-running edge:** the `/expand` run guard (atomic `try_mark_running`) 409s if status is already `running`. A hard crash / deploy mid-run leaves status stuck `running`, so re-running *that* session 409s forever — recover by starting a new session (no resume until M7).
+- **Tuning notes (calibration):** clustering yields few large communities (4 groupings, edge threshold 0.55) — raise the edge threshold / Louvain resolution if M5's orchestrator wants finer input; relevance threshold 0.62 filters hard on a single broad silo (~10–14% retained). PAA tier-1 still returns 0 on silos whose broad anchor isn't a natural Google query (smallest contributor; left as-is).
 - **`gpt-5.4` + `web_search`** (silo discovery) work in prod but were never verifiable from the sandbox; `OPENAI_SILO_MODEL` / `OPENAI_WEB_SEARCH_TOOL` env vars allow correction without a code change.
-- **Expansion is synchronous** and can run up to the 4-min hard cap (`EXPANSION_TIME_BUDGET_S=240`). A long run can outrun the browser/gateway connection even though the backend finishes (happened once — 17k keywords saved, UI never got the response). Real fix = background job + polling, **deferred to M11**. Mitigation knobs: `EXPANSION_MAX_WORKERS` (raise to ~24 to finish faster), `AUTOCOMPLETE_MAX` (lower to cut time/cost). Time cap is wall-clock only (abandoned in-flight calls may still bill).
 - **Session resume in the UI:** the data persists at every step, but the frontend can't reopen a session — **deferred to M7** (Project + Session Browser, §9.4).
-- **`status: complete`** is set at the end of M3 expansion as the "current pipeline terminus"; later milestones must move this downstream.
-- **Review leftovers (Low, not fixed):** R4 — `build_anchor` uses substring containment (a seed that's a substring of a silo word skips seed-qualification); R5 — `except TimeoutError` for the time cap relies on Python ≥3.11 (we pin 3.11).
+- **`status: complete`** is set at the end of the M4 pipeline as the "current pipeline terminus"; M5 must move this downstream.
 
 ## 5. Architecture quick map (backend `backend/app/`)
 
 - `main.py` — FastAPI app, CORS, correlation-id middleware, routers.
 - `config.py` — `Settings` (pydantic-settings); env aliases; expansion knobs.
-- `api/` — `health.py`, `projects.py`, `sessions.py` (silo discovery + M3 expansion endpoints), `debug.py` (TEMP, remove).
+- `api/` — `health.py`, `projects.py`, `sessions.py` (silo discovery + `/deep-mine` + `/expand` full-pipeline endpoints).
 - `auth/dependencies.py` — `require_user` (verifies Supabase JWT via service client; logs real reason on failure).
-- `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword DB ops.
-- `llm/openai_client.py` — GPT-5.4 grounding + silo proposal (Responses API + web_search) + embeddings.
-- `dataforseo/client.py` — DataForSEO calls (demand sample, SERP structure, expansion endpoints, autocomplete, `raw()` for debug).
-- `pipeline/silo_discovery.py` (M2), `pipeline/expansion.py` (M3), `pipeline/models.py`.
+- `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword DB ops incl. `set_topics_gating`, `get_topic_embeddings`, `insert_classified_keywords`, `try_mark_running`.
+- `llm/openai_client.py` — GPT-5.4 grounding + silo proposal (Responses API + web_search) + `embed()`.
+- `dataforseo/client.py` — DataForSEO calls (demand sample, SERP structure, expansion endpoints, autocomplete; M4: `serp_top_urls`, `ranked_keywords`, `domain_of`).
+- `pipeline/` — `silo_discovery.py` (M2), `expansion.py` (M3), `competitor.py`/`relevance.py`/`clustering.py` (M4), `orchestrate.py` (M4 `run_refinement_pipeline` = expansion→mining→gate→clustering), `models.py`.
 
-Frontend: `frontend/src/owner/SiloDiscovery.tsx` is the whole flow (seed form → disambiguation → silo review → finalize → run expansion → results). `shared/api.ts`, `shared/auth.tsx`, TanStack Query. Progress UI = `WorkingProgress` component (discovery ~20–40s, expansion ~2–4 min estimates).
+Frontend: `frontend/src/owner/SiloDiscovery.tsx` is the whole flow (seed → disambiguation → silo review → finalize → **deep-mine selection** → run pipeline → results). `shared/api.ts`, `shared/auth.tsx`, TanStack Query. Progress UI = `WorkingProgress` (discovery ~20–40s; pipeline ~3–6 min estimate).
 
-Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `..._topics.sql` (M2), `..._keywords.sql` (M3). All applied to the live DB.
+Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `..._topics.sql` (M2), `..._keywords.sql` (M3), `..._keywords_relevance.sql` (M4: `keywords.relevance_score`). All applied to the live DB.
 
 ## 6. Useful commands / queries
 
 Backend (from `backend/`, venv at `.venv`):
 ```bash
 . .venv/bin/activate
-python -m pytest -q          # 25 tests, all passing
+python -m pytest -q          # 55 tests, all passing
 ruff check app/ tests/
 python -c "import app.main"   # import smoke test
 ```
