@@ -172,6 +172,62 @@ class DataForSEOClient:
                 out.append(sug)
         return out
 
+    # ----- M4 competitor mining (PRD §7.4) --------------------------------
+    def serp_top_urls(self, keyword: str, top_n: int = 5) -> list[str]:
+        """Top organic result URLs (full URLs) for `keyword`, for competitor
+        mining. `top_n` is 5 in standard mode, 10 in comprehensive (§7.4)."""
+        task = self._post(
+            "/v3/serp/google/organic/live/advanced",
+            [{"keyword": keyword, "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE, "depth": max(top_n, 10)}],
+        )
+        items = (task.get("result") or [{}])[0].get("items") or []
+        urls: list[str] = []
+        for item in items:
+            if item.get("type") != "organic":
+                continue
+            url = item.get("url")
+            if url:
+                urls.append(url)
+            if len(urls) >= top_n:
+                break
+        return urls
+
+    def ranked_keywords(
+        self, target_domain: str, limit: int = 500, max_position: int = 20
+    ) -> list[str]:
+        """Keywords `target_domain` ranks for in organic positions 1..max_position
+        (DataForSEO Labs `ranked_keywords`, PRD §7.4). The DataForSEO target is a
+        domain; results are filtered to the requested rank ceiling server-side."""
+        task = self._post(
+            "/v3/dataforseo_labs/google/ranked_keywords/live",
+            [{"target": target_domain, "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE, "limit": limit,
+              "filters": [
+                  ["ranked_serp_element.serp_item.rank_absolute", "<=", max_position]
+              ]}],
+        )
+        items = (task.get("result") or [{}])[0].get("items") or []
+        out: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kd = item.get("keyword_data") or {}
+            kw = kd.get("keyword") if isinstance(kd, dict) else None
+            if kw:
+                out.append(kw)
+        return out
+
+    @staticmethod
+    def domain_of(url: str) -> str | None:
+        """Bare registrable host for a URL (drops scheme, path, leading www.)."""
+        host = urlparse(url).netloc.lower()
+        if not host:
+            return None
+        if host.startswith("www."):
+            host = host[4:]
+        return host or None
+
     def serp_competitor_paths(self, seed: str, top_n: int = 5) -> list[str]:
         """URL path patterns from the top organic domains for the seed."""
         task = self._post(
