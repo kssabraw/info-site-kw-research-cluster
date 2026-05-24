@@ -10,6 +10,7 @@ gating, competitor mining, and clustering are M4.
 """
 
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -18,12 +19,24 @@ from app.dataforseo import DataForSEOClient
 
 logger = logging.getLogger(__name__)
 
+# Connective/filler tokens stripped when deriving a tight phrase-match anchor
+# from a silo name. We keep domain nouns (obesity, dosing, trials) and drop only
+# words that would over-narrow a phrase-match query or add no topical signal.
+_ANCHOR_STOPWORDS = frozenset({
+    "and", "or", "the", "a", "an", "of", "for", "to", "in", "on", "at", "with",
+    "your", "you", "use", "uses", "using", "how", "what", "why", "when", "who",
+    "does", "do", "is", "are",
+})
+
 
 @dataclass
 class ExpansionTopic:
     id: str
     anchor: str
     name: str = ""  # friendly silo name for UI messages; falls back to anchor
+    # Tight, phrase-matchable anchor for the seed-sensitive endpoints
+    # (keyword_suggestions, query_fanouts). Falls back to `anchor` when empty.
+    suggest_anchor: str = ""
 
 
 @dataclass
@@ -52,6 +65,24 @@ def build_anchor(seed: str, silo_name: str) -> str:
     if seed.lower() in silo_name.lower():
         return silo_name
     return f"{seed} {silo_name}".strip()
+
+
+def build_tight_anchor(seed: str, silo_name: str) -> str:
+    """A concise, phrase-matchable anchor for the seed-sensitive endpoints
+    (keyword_suggestions, query_fanouts). Those endpoints only return keywords
+    that *contain* the anchor, so a long descriptive anchor like
+    "retatrutide Obesity & Metabolic Uses" matches nothing. We seed-qualify the
+    first salient (non-filler) token of the silo name instead, e.g.
+    "Obesity & Metabolic Uses" -> "retatrutide obesity". Falls back to the bare
+    seed when the name yields no salient token."""
+    seed = seed.strip()
+    seed_tokens = set(seed.lower().split())
+    for raw in re.split(r"[^0-9a-z]+", silo_name.lower()):
+        tok = raw.strip()
+        if not tok or tok in _ANCHOR_STOPWORDS or tok in seed_tokens:
+            continue
+        return f"{seed} {tok}"
+    return seed
 
 
 def _add(pool: dict[str, set[str]], keyword: str, source: str) -> None:
@@ -94,18 +125,24 @@ def run_expansion(
         return tier1, tier2[:paa_tier2_cap]
 
     # ----- Phase 1: base expansion (parallel across topic x endpoint) -------
-    base_jobs = {
-        "keyword_ideas": lambda a: dfs.keyword_ideas(a, keyword_ideas_limit),
-        "keyword_suggestions": lambda a: dfs.keyword_suggestions(a, keyword_suggestions_limit),
-        "query_fanouts": lambda a: dfs.query_fanouts(a, query_fanouts_limit),
-        "paa": paa_two_tier,
-    }
-
+    # keyword_ideas (broad ideation) and PAA use the broad silo anchor; the
+    # phrase/seed-sensitive endpoints use the tight anchor, since a long
+    # descriptive anchor returns 0 from keyword_suggestions/query_fanouts.
     pool_exec = ThreadPoolExecutor(max_workers=max_workers)
     futures = {}
     for t in topics:
-        for source, fn in base_jobs.items():
-            futures[pool_exec.submit(fn, t.anchor)] = (t, source)
+        tight = t.suggest_anchor or t.anchor
+        jobs = [
+            ("keyword_ideas", t.anchor,
+             lambda a: dfs.keyword_ideas(a, keyword_ideas_limit)),
+            ("keyword_suggestions", tight,
+             lambda a: dfs.keyword_suggestions(a, keyword_suggestions_limit)),
+            ("query_fanouts", tight,
+             lambda a: dfs.query_fanouts(a, query_fanouts_limit)),
+            ("paa", t.anchor, paa_two_tier),
+        ]
+        for source, anchor, fn in jobs:
+            futures[pool_exec.submit(fn, anchor)] = (t, source)
 
     try:
         for fut in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):

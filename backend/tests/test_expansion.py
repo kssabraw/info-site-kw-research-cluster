@@ -1,7 +1,12 @@
 import time
 
 from app.dataforseo import DataForSEOClient, DataForSEOError
-from app.pipeline.expansion import ExpansionTopic, build_anchor, run_expansion
+from app.pipeline.expansion import (
+    ExpansionTopic,
+    build_anchor,
+    build_tight_anchor,
+    run_expansion,
+)
 
 
 def test_build_anchor_seed_qualifies():
@@ -11,6 +16,17 @@ def test_build_anchor_seed_qualifies():
     assert build_anchor("retatrutide", "weight loss use") == "retatrutide weight loss use"
     # Case-insensitive containment.
     assert build_anchor("Mercury", "mercury toxicity") == "mercury toxicity"
+
+
+def test_build_tight_anchor_seed_qualifies_first_salient_token():
+    # Filler tokens ("&", "uses") dropped; first salient token is seed-qualified.
+    assert build_tight_anchor("retatrutide", "Obesity & Metabolic Uses") == "retatrutide obesity"
+    assert build_tight_anchor("retatrutide", "Access, Dosing & Use") == "retatrutide access"
+    assert build_tight_anchor("retatrutide", "Benefits & Risks") == "retatrutide benefits"
+    # A seed token inside the name is skipped (filler "how" too).
+    assert build_tight_anchor("retatrutide", "How Retatrutide Works") == "retatrutide works"
+    # No salient token -> bare seed fallback.
+    assert build_tight_anchor("retatrutide", "The Uses & Use") == "retatrutide"
 
 
 def test_query_fanouts_harvests_related_keyword_arrays(monkeypatch):
@@ -89,6 +105,58 @@ def test_aggregates_and_dedupes_sources_case_insensitively():
     assert kws["b"] == ["keyword_ideas", "keyword_suggestions"]
     assert kws["d"] == ["query_fanouts"]
     assert r.degraded_notes == []
+
+
+class _AnchorRecorderDFS(FakeDFS):
+    """Records which anchor each endpoint was called with."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.seen: dict[str, str] = {}
+
+    def keyword_ideas(self, anchor, limit=0):
+        self.seen["keyword_ideas"] = anchor
+        return list(self.ideas)
+
+    def keyword_suggestions(self, anchor, limit=0):
+        self.seen["keyword_suggestions"] = anchor
+        return list(self.suggestions)
+
+    def query_fanouts(self, anchor, limit=0):
+        self.seen["query_fanouts"] = anchor
+        return list(self.fanouts)
+
+    def people_also_ask(self, anchor):
+        self.seen["paa"] = anchor
+        return []
+
+
+def test_seed_sensitive_endpoints_use_tight_anchor():
+    # keyword_ideas + PAA get the broad anchor; suggestions + fanouts get the
+    # tight anchor so phrase-match endpoints don't return 0.
+    dfs = _AnchorRecorderDFS(ideas=["a"], suggestions=["b"], fanouts=["c"])
+    run_expansion(
+        topics=[
+            ExpansionTopic(
+                id="t1",
+                anchor="retatrutide obesity & metabolic uses",
+                name="Obesity & Metabolic Uses",
+                suggest_anchor="retatrutide obesity",
+            )
+        ],
+        dfs=dfs,
+    )
+    assert dfs.seen["keyword_ideas"] == "retatrutide obesity & metabolic uses"
+    assert dfs.seen["paa"] == "retatrutide obesity & metabolic uses"
+    assert dfs.seen["keyword_suggestions"] == "retatrutide obesity"
+    assert dfs.seen["query_fanouts"] == "retatrutide obesity"
+
+
+def test_seed_sensitive_endpoints_fall_back_to_broad_anchor_when_tight_unset():
+    dfs = _AnchorRecorderDFS(ideas=["a"], suggestions=["b"])
+    run_expansion(topics=[ExpansionTopic(id="t1", anchor="seed")], dfs=dfs)
+    assert dfs.seen["keyword_suggestions"] == "seed"
+    assert dfs.seen["query_fanouts"] == "seed"
 
 
 def test_paa_two_tier_and_cap():
