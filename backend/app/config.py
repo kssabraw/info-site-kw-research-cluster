@@ -56,7 +56,9 @@ class Settings(BaseSettings):
     query_fanouts_limit: int = 300
     paa_tier1_seeds: int = 8          # tier-1 questions used as tier-2 seeds
     paa_tier2_cap: int = 40           # max tier-2 questions per silo (PRD §7.3)
-    autocomplete_max: int = 1500      # safety cap on autocomplete calls per run
+    autocomplete_max: int = 500       # safety cap on autocomplete calls per run
+                                      # (autocomplete is the noisiest/slowest source;
+                                      #  most of it gets filtered by the relevance gate)
     expansion_max_workers: int = 8    # parallel endpoint/silo workers
     expansion_time_budget_s: int = 240  # hard cap on a single expansion run (4 min)
 
