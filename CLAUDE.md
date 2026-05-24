@@ -144,7 +144,7 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M3 — Expansion pipeline** (in progress)
+**M4 — SERP competitor mining + relevance gate + statistical clustering** (next; awaiting kickoff)
 
 M1 — Foundation: **complete** (signed off 2026-05-21). Built on `m1-foundation`.
 
@@ -156,14 +156,27 @@ and `mercury` (disambiguation gate fires). Built on `m2-silo-discovery`; M1+M2 t
 merged to `main`, which is now the single deploy branch for Railway and Netlify.
 Backend env reads `SUPABASE_SERVICE_KEY`/`SUPABASE_KEY` aliases (AR Tools naming).
 
-M3 Done state (per PRD §15.1):
-- Per-silo DataForSEO expansion (`keyword_ideas`, `keyword_suggestions`,
-  `query_fanouts`, PAA two tiers deep) runs in parallel for all finalized silos.
-- Autocomplete enrichment runs on the surfaced (deduped) keyword pool.
-- All keywords persist to the `keywords` table with source attribution.
-- **No competitor mining / relevance gate / clustering yet** — those are M4.
+M3 — Expansion pipeline: **complete** (signed off 2026-05-24). Per-silo DataForSEO
+expansion + autocomplete + keyword persistence to `keywords` with source
+attribution. Resolved a zero-yield bug: `keyword_suggestions` and `query_fanouts`
+are phrase/seed-match endpoints that return near-zero on a silo-qualified anchor, so
+they now run **once on the bare seed and fan out to every silo** (M4's relevance gate
+sorts them per-silo); `keyword_ideas` and PAA keep their per-silo broad anchor.
+Verified live on `retatrutide` (per silo: 500 suggestions + 79 fan-outs + ~1000 ideas
++ ~2000–3500 autocomplete + PAA). Temporary `/debug/dataforseo` probe removed after
+tuning. **Known/accepted:** PAA tier-1 uses the broad silo anchor and returns 0 on
+silos whose anchor isn't a natural Google query — PAA is the smallest contributor, so
+this was left as-is (revisit in M4 if needed). Built on `claude/blissful-cray-Hm9tY`;
+merged to `main`.
 
-When M3 is complete and approved, update this section to reflect M4 as the active milestone.
+M4 Done state (per PRD §15.1):
+- User deep-mine selection UI exists; SERP competitor mining runs on gated silos.
+- Relevance gate filters keywords against the per-silo embedding (§7.6).
+- Statistical clustering (Louvain) produces candidate groupings, persisted to
+  `statistical_clustering_log`.
+- End state: per-silo statistical groupings exist but are not yet user-facing.
+
+When M4 is complete and approved, update this section to reflect M5 as the active milestone.
 
 ---
 
