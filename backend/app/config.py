@@ -45,6 +45,21 @@ class Settings(BaseSettings):
     # cosine distance >= this threshold. Tunable during MVP testing.
     ambiguity_separation_threshold: float = 0.5
 
+    # Anthropic — article planning orchestrator (Claude Opus 4.7, tool-use /
+    # strict-schema JSON; PRD §7.10, §14.2). Reuses the AR Tools ANTHROPIC_API_KEY.
+    anthropic_api_key: str = ""
+    orchestrator_model: str = "claude-opus-4-7"
+    orchestrator_max_tokens: int = 8000
+    orchestrator_timeout_s: int = 120         # PRD §16.2: >120s -> retry once then degrade
+
+    # M5 article planning (PRD §7.10).
+    candidate_serp_top_n: int = 10            # top organic URLs per candidate primary
+    candidate_serp_max_workers: int = 8
+    candidate_serp_time_budget_s: int = 120
+    # Cross-topic dedup thresholds (§7.10.4).
+    dedup_primary_cosine_threshold: float = 0.85
+    dedup_serp_overlap_min: float = 2 / 3     # top-3 SERP overlap fraction
+
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""
     dataforseo_password: str = ""
