@@ -14,8 +14,13 @@ from pydantic import BaseModel, Field
 from app.auth import AuthedUser, require_user
 from app.config import get_settings
 from app.dataforseo import get_dataforseo
-from app.llm import LLMError, get_llm
+from app.llm import LLMError, get_llm, get_orchestrator
 from app.logging import bind_session_id
+from app.pipeline.article_planning.models import GroupingInput, TopicInput
+from app.pipeline.article_planning.orchestrate_articles import (
+    all_degraded,
+    run_article_planning,
+)
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
 from app.pipeline.orchestrate import PipelineTopic, run_refinement_pipeline
 from app.pipeline.silo_discovery import run_silo_discovery
@@ -338,8 +343,9 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             detail="The keyword pipeline failed. The session was marked as errored; try again.",
         ) from exc
 
-    # M4 is the current pipeline terminus; M5 (orchestrator) moves this downstream.
-    store.update_session(session_id, {"status": "complete"})
+    # Clustering done; the article-planning orchestrator (§7.10) runs next via
+    # POST /plan-articles, which sets the terminal 'complete' status.
+    store.update_session(session_id, {"status": "awaiting_article_planning"})
 
     counts = result.counts()
     names = {t["id"]: t["name"] for t in topics}
@@ -360,6 +366,135 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             }
             for tid, kws in result.per_topic_gated.items()
         ],
+    }
+
+
+@router.post("/sessions/{session_id}/plan-articles")
+def plan_articles(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """M5 article planning (§7.10): SERP for candidate primaries -> per-silo
+    orchestrator -> cross-topic dedup -> persist clusters + coverage gaps.
+    Reconstructs its inputs from the persisted clustering log + keyword rows, so
+    it runs as its own request after /expand (keeps each request under the edge
+    cap; re-runnable)."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+
+    log = session.get("statistical_clustering_log") or {}
+    log_topics = log.get("topics") or {}
+    if not log_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No statistical clustering to plan from. Run /expand first.",
+        )
+
+    # Atomically claim the run (reuses the /expand guard); blocks double-submit.
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+
+    topics_meta = {t["id"]: t for t in store.list_topics(session_id)}
+    embeddings = store.get_topic_embeddings(session_id)
+    topic_inputs: list[TopicInput] = []
+    for tid, meta in topics_meta.items():
+        groupings = [
+            GroupingInput(
+                id=str(g.get("id") or f"{tid}:g{i}"),
+                representative=str(g.get("representative") or ""),
+                cohesion=float(g.get("cohesion") or 0.0),
+                size=int(g.get("size") or len(g.get("keywords") or [])),
+                keywords=[str(k) for k in (g.get("keywords") or [])],
+            )
+            for i, g in enumerate((log_topics.get(tid) or {}).get("groupings") or [])
+        ]
+        topic_inputs.append(
+            TopicInput(
+                id=tid,
+                name=meta.get("name") or "",
+                rationale=meta.get("rationale") or "",
+                relationship_type=meta.get("relationship_type") or "",
+                embedding=embeddings.get(tid),
+                groupings=groupings,
+            )
+        )
+
+    s = get_settings()
+    try:
+        result = run_article_planning(
+            topics=topic_inputs,
+            dfs=get_dataforseo(),
+            orchestrator=get_orchestrator(),
+            embed_fn=get_llm().embed,
+            candidate_serp_top_n=s.candidate_serp_top_n,
+            candidate_serp_max_workers=s.candidate_serp_max_workers,
+            candidate_serp_time_budget_s=s.candidate_serp_time_budget_s,
+            dedup_primary_cosine_threshold=s.dedup_primary_cosine_threshold,
+            dedup_serp_overlap_min=s.dedup_serp_overlap_min,
+        )
+        if all_degraded(result):
+            # §16.2: orchestrator failed on every silo -> error, clustering log
+            # already persisted for debug.
+            store.update_session(
+                session_id,
+                {"status": "error", "orchestrator_log": result.orchestrator_log()},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Article planning failed on every silo. The session was marked "
+                "errored; statistical clustering is preserved. Try again.",
+            )
+        store.reset_article_planning(session_id)
+        persisted = store.persist_article_plan(session_id, result, get_llm().embed)
+        store.update_session(
+            session_id, {"orchestrator_log": result.orchestrator_log()}
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        store.update_session(session_id, {"status": "error"})
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "article_planning",
+                   "reason": repr(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Article planning failed. The session was marked errored; try again.",
+        ) from exc
+
+    store.update_session(session_id, {"status": "complete"})
+
+    names = {t["id"]: t["name"] for t in topics_meta.values()}
+    return {
+        "planned": True,
+        **persisted,
+        "degraded": any(p.degraded for p in result.per_topic),
+        "degraded_notes": result.degraded_notes,
+        "timed_out": result.timed_out,
+        "collisions": len(result.dedup_log.get("collisions", [])),
+        "topics": [
+            {
+                "topic_id": p.topic_id,
+                "name": names.get(p.topic_id, ""),
+                "articles": len(p.articles),
+                "gaps": len(p.gaps),
+                "dropped": len(p.dropped),
+                "degraded": p.degraded,
+            }
+            for p in result.per_topic
+        ],
+    }
+
+
+@router.get("/sessions/{session_id}/clusters")
+def get_clusters(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Read-only article plan + coverage gaps for a session (M5 verification /
+    minimal UI; full editing views are M7)."""
+    _require_session(user, session_id)
+    return {
+        "clusters": store.list_clusters(session_id),
+        "coverage_gaps": store.list_coverage_gaps(session_id),
     }
 
 

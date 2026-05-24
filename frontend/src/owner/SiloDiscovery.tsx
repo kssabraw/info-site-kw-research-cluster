@@ -11,10 +11,12 @@ import {
   getKeywords,
   getSession,
   overrideAudience,
+  planArticles,
   setDeepMine,
   type AddTopicBody,
   type EditTopicBody,
   type ExpansionResult,
+  type PlanResult,
   type RelationshipType,
   type Silo,
   type SiloDiscovery as Discovery,
@@ -24,7 +26,7 @@ import {
   RELATIONSHIP_OPTIONS,
 } from "../shared/relationshipTypes";
 
-type Step = "form" | "disambiguation" | "review" | "finalized" | "expanded";
+type Step = "form" | "disambiguation" | "review" | "finalized" | "expanded" | "planned";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
@@ -85,6 +87,16 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
     onSuccess: (r) => {
       setExpansion(r);
       setStep("expanded");
+    },
+    onError: (e) => setError(msg(e)),
+  });
+
+  const [plan, setPlan] = useState<PlanResult | null>(null);
+  const planMut = useMutation({
+    mutationFn: () => planArticles(sessionId!),
+    onSuccess: (r) => {
+      setPlan(r);
+      setStep("planned");
     },
     onError: (e) => setError(msg(e)),
   });
@@ -189,8 +201,28 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
 
-        {step === "expanded" && expansion && sessionId && (
-          <ExpansionResults expansion={expansion} sessionId={sessionId} onExit={onExit} />
+        {step === "expanded" && planMut.isPending && (
+          <WorkingProgress
+            stages={PLANNING_STAGES}
+            targetS={120}
+            estimate="usually 1–4 minutes"
+          />
+        )}
+
+        {step === "expanded" && !planMut.isPending && expansion && sessionId && (
+          <ExpansionResults
+            expansion={expansion}
+            sessionId={sessionId}
+            onExit={onExit}
+            onPlan={() => {
+              setError(null);
+              planMut.mutate();
+            }}
+          />
+        )}
+
+        {step === "planned" && plan && (
+          <PlanResults plan={plan} onExit={onExit} />
         )}
       </main>
     </>
@@ -216,6 +248,12 @@ const EXPANSION_STAGES: Stage[] = [
   { until: 110, label: "Mining competitor ranked keywords" },
   { until: 150, label: "Scoring relevance against each silo" },
   { until: Infinity, label: "Clustering keywords per silo" },
+];
+
+const PLANNING_STAGES: Stage[] = [
+  { until: 40, label: "Fetching SERPs for candidate primary keywords" },
+  { until: 95, label: "Planning articles per silo (merge / split / promote / drop)" },
+  { until: Infinity, label: "Deduplicating articles across silos" },
 ];
 
 function WorkingProgress({
@@ -262,6 +300,7 @@ function ExpansionResults(p: {
   expansion: ExpansionResult;
   sessionId: string;
   onExit: () => void;
+  onPlan: () => void;
 }) {
   const { expansion } = p;
   const [openTopic, setOpenTopic] = useState<string | null>(null);
@@ -314,7 +353,74 @@ function ExpansionResults(p: {
 
       <div className="toolbar">
         <span className="muted">
-          Groupings are an internal signal — article planning arrives in the next milestone.
+          Groupings are an internal signal. Plan articles to turn them into a content map.
+        </span>
+        <div className="silo-actions">
+          <button className="btn btn-ghost" style={{ width: "auto" }} onClick={p.onExit}>
+            Done
+          </button>
+          <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onPlan}>
+            Plan articles
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Read-only article-plan summary (M5 verification). Full table/cluster/
+// architecture views + editing land in M7.
+function PlanResults(p: { plan: PlanResult; onExit: () => void }) {
+  const { plan } = p;
+  return (
+    <>
+      <h1 className="page-title">Article plan ready</h1>
+      <p className="muted">
+        {plan.clusters.toLocaleString()} articles planned across {plan.topics.length} silos
+        {" · "}
+        {plan.gaps.toLocaleString()} coverage gaps flagged
+        {" · "}
+        {plan.dropped.toLocaleString()} keywords dropped
+        {" · "}
+        {plan.collisions.toLocaleString()} cross-silo duplicates merged.
+      </p>
+
+      {plan.degraded && (
+        <div className="banner">
+          One or more silos fell back to statistical passthrough — the orchestrator
+          couldn't refine them. Their articles mirror the raw groupings.
+        </div>
+      )}
+      {plan.timed_out && (
+        <div className="banner">
+          SERP fetching hit its time budget — some candidate primaries were planned
+          without SERP evidence.
+        </div>
+      )}
+      {plan.degraded_notes.map((note) => (
+        <div className="banner" key={note}>
+          {note}
+        </div>
+      ))}
+
+      {plan.topics.map((t) => (
+        <div className="silo-card" key={t.topic_id}>
+          <div className="silo-head">
+            <p className="silo-name">
+              {t.name}
+              {t.degraded && <span className="muted"> · passthrough</span>}
+            </p>
+            <span className="muted">
+              {t.articles} articles · {t.gaps} gaps · {t.dropped} dropped
+            </span>
+          </div>
+        </div>
+      ))}
+
+      <div className="toolbar">
+        <span className="muted">
+          Editable table, cluster, and architecture views arrive in a later milestone.
         </span>
         <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
           Done
