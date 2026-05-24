@@ -189,8 +189,8 @@ def run_expansion(
 
     if capped:
         result.degraded_notes.append(
-            "Keyword expansion stopped at the time limit; results may be partial. "
-            "Increase EXPANSION_MAX_WORKERS or the time budget, or lower AUTOCOMPLETE_MAX."
+            "Keyword expansion reached its time limit, so some keywords may be "
+            "missing. Everything collected so far has been saved."
         )
 
     result.per_topic = {
