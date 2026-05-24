@@ -1,5 +1,11 @@
+import math
+
 from app.dataforseo import DataForSEOClient
-from app.pipeline.orchestrate import PipelineTopic, run_refinement_pipeline
+from app.pipeline.orchestrate import (
+    PipelineTopic,
+    gate_and_cluster,
+    run_refinement_pipeline,
+)
 
 
 class FakeDFS:
@@ -68,6 +74,38 @@ def test_pipeline_composes_all_stages():
     assert "gated competitor kw" not in kws("t2")
     assert "seed competitor kw" in kws("t1")
     assert "seed competitor kw" in kws("t2")
+
+
+def _unit(*xs):
+    n = math.sqrt(sum(x * x for x in xs)) or 1.0
+    return [x / n for x in xs]
+
+
+def test_gate_and_cluster_threshold_sensitivity():
+    # Anchor [1,0]; three keywords at descending cosine (~0.995, ~0.581, ~0.196).
+    # The re-gate harness reuses this on a stored pool to tune the threshold.
+    vecs = {
+        "kw high": _unit(1.0, 0.1),
+        "kw mid": _unit(1.0, 1.4),
+        "kw low": _unit(1.0, 5.0),
+    }
+
+    def embed(texts):
+        return [vecs[t] for t in texts]
+
+    pool = {"t1": {"kw high": ["s"], "kw mid": ["s"], "kw low": ["s"]}}
+    common = dict(per_topic_lists=pool, topic_names={"t1": "T1"},
+                  topic_embeddings={"t1": _unit(1.0, 0.0)}, embed_fn=embed)
+
+    strict = gate_and_cluster(**common, relevance_threshold=0.62)
+    loose = gate_and_cluster(**common, relevance_threshold=0.50)
+
+    def actives(r):
+        return {g.keyword for g in r.per_topic_gated["t1"] if g.status == "active"}
+
+    assert actives(strict) == {"kw high"}              # only the near-anchor kw
+    assert actives(loose) == {"kw high", "kw mid"}     # lowering admits the mid kw
+    assert loose.clustering_log["topics"]["t1"]["grouping_count"] >= 1
 
 
 def test_pipeline_clusters_and_counts():

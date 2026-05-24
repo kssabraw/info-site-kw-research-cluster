@@ -63,6 +63,59 @@ def _merge(base: dict[str, dict[str, set[str]]], add: dict[str, dict[str, list[s
             target.setdefault(kw, set()).update(sources)
 
 
+def gate_and_cluster(
+    *,
+    per_topic_lists: dict[str, dict[str, list[str]]],
+    topic_names: dict[str, str],
+    topic_embeddings: dict[str, list[float] | None],
+    embed_fn,
+    relevance_threshold: float = 0.62,
+    relevance_embed_batch: int = 1000,
+    clustering_edge_threshold: float = 0.55,
+    clustering_max_nodes: int = 2500,
+) -> PipelineResult:
+    """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
+    per-topic candidate pool. Shared by the full pipeline and the re-gate path
+    (which reuses a session's stored keyword pool, skipping DataForSEO)."""
+    result = PipelineResult()
+
+    gate = run_relevance_gate(
+        per_topic=per_topic_lists,
+        topic_embeddings=topic_embeddings,
+        embed_fn=embed_fn,
+        topic_names=topic_names,
+        threshold=relevance_threshold,
+        batch_size=relevance_embed_batch,
+    )
+    result.degraded_notes.extend(gate.degraded_notes)
+    result.per_topic_gated = gate.per_topic
+
+    # Only scored actives carry an embedding. Cap the per-topic node count (the
+    # similarity graph is O(n^2)) by keeping the most-relevant actives; the
+    # long-tail remainder stays active in the DB but isn't clustered.
+    active_keywords: dict[str, list[str]] = {}
+    active_embeddings: dict[str, list[list[float]]] = {}
+    for tid, gated_kws in gate.per_topic.items():
+        scored = [
+            (g.relevance_score if g.relevance_score is not None else 0.0, g.keyword, g.embedding)
+            for g in gated_kws
+            if g.status == "active" and g.embedding is not None
+        ]
+        if len(scored) > clustering_max_nodes:
+            scored.sort(key=lambda x: x[0], reverse=True)
+            scored = scored[:clustering_max_nodes]
+        active_keywords[tid] = [kw for _, kw, _ in scored]
+        active_embeddings[tid] = [emb for _, _, emb in scored]
+
+    cluster = run_clustering(
+        per_topic_keywords=active_keywords,
+        per_topic_embeddings=active_embeddings,
+        edge_threshold=clustering_edge_threshold,
+    )
+    result.clustering_log = cluster.to_log()
+    return result
+
+
 def run_refinement_pipeline(
     *,
     seed: str,
@@ -151,46 +204,24 @@ def run_refinement_pipeline(
         fanned = {t.id: seed_keywords for t in topics}
         _merge(pools, fanned)
 
-    # ----- 3. Relevance gate + junk filter ---------------------------------
+    # ----- 3+4. Relevance gate + statistical clustering --------------------
     per_topic_lists = {
         tid: {kw: sorted(sources) for kw, sources in kws.items()}
         for tid, kws in pools.items()
     }
-    gate = run_relevance_gate(
-        per_topic=per_topic_lists,
+    gc = gate_and_cluster(
+        per_topic_lists=per_topic_lists,
+        topic_names=topic_names,
         topic_embeddings=topic_embeddings,
         embed_fn=embed_fn,
-        topic_names=topic_names,
-        threshold=relevance_threshold,
-        batch_size=relevance_embed_batch,
+        relevance_threshold=relevance_threshold,
+        relevance_embed_batch=relevance_embed_batch,
+        clustering_edge_threshold=clustering_edge_threshold,
+        clustering_max_nodes=clustering_max_nodes,
     )
-    result.degraded_notes.extend(gate.degraded_notes)
-    result.per_topic_gated = gate.per_topic
-
-    # ----- 4. Statistical clustering on the survivors ----------------------
-    # Only scored actives carry an embedding. Cap the per-topic node count (the
-    # similarity graph is O(n^2)) by keeping the most-relevant actives; the
-    # long-tail remainder stays active in the DB but isn't clustered.
-    active_keywords: dict[str, list[str]] = {}
-    active_embeddings: dict[str, list[list[float]]] = {}
-    for tid, gated_kws in gate.per_topic.items():
-        scored = [
-            (g.relevance_score if g.relevance_score is not None else 0.0, g.keyword, g.embedding)
-            for g in gated_kws
-            if g.status == "active" and g.embedding is not None
-        ]
-        if len(scored) > clustering_max_nodes:
-            scored.sort(key=lambda x: x[0], reverse=True)
-            scored = scored[:clustering_max_nodes]
-        active_keywords[tid] = [kw for _, kw, _ in scored]
-        active_embeddings[tid] = [emb for _, _, emb in scored]
-
-    cluster = run_clustering(
-        per_topic_keywords=active_keywords,
-        per_topic_embeddings=active_embeddings,
-        edge_threshold=clustering_edge_threshold,
-    )
-    result.clustering_log = cluster.to_log()
+    result.degraded_notes.extend(gc.degraded_notes)
+    result.per_topic_gated = gc.per_topic_gated
+    result.clustering_log = gc.clustering_log
 
     logger.info(
         "step_complete",
