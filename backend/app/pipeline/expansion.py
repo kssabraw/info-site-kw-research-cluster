@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 class ExpansionTopic:
     id: str
     anchor: str
+    name: str = ""  # friendly silo name for UI messages; falls back to anchor
 
 
 @dataclass
@@ -53,6 +54,8 @@ def build_anchor(seed: str, silo_name: str) -> str:
 
 
 def _add(pool: dict[str, set[str]], keyword: str, source: str) -> None:
+    if not isinstance(keyword, str):
+        return  # tolerate a malformed (non-string) element in a source result
     norm = _normalize(keyword)
     if norm:
         pool.setdefault(norm, set()).add(source)
@@ -111,13 +114,14 @@ def run_expansion(
             except Exception as exc:
                 # Any failure (HTTP error, non-JSON body, unexpected result
                 # shape) degrades this source only; the others still land (§16.2).
+                label = topic.name or topic.anchor
                 result.degraded_notes.append(
-                    f"Partial expansion for silo “{topic.anchor}”: {source} unavailable."
+                    f"Partial expansion for silo “{label}”: {source} unavailable."
                 )
                 logger.warning(
                     "degraded",
                     extra={"event": "degraded", "step": "expansion",
-                           "topic": topic.anchor, "source": source, "reason": str(exc)},
+                           "topic": label, "source": source, "reason": str(exc)},
                 )
                 continue
             if source == "paa":
@@ -143,6 +147,8 @@ def run_expansion(
     seeds: list[tuple[str, str]] = []
     longest = max((len(ks) for _, ks in per_topic_keys), default=0)
     for i in range(longest):
+        if len(seeds) >= autocomplete_max:
+            break
         for tid, ks in per_topic_keys:
             if i < len(ks):
                 seeds.append((tid, ks[i]))

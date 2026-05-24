@@ -249,7 +249,9 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
     try:
         result = run_expansion(
             topics=[
-                ExpansionTopic(id=t["id"], anchor=build_anchor(seed, t["name"]))
+                ExpansionTopic(
+                    id=t["id"], anchor=build_anchor(seed, t["name"]), name=t["name"]
+                )
                 for t in topics
             ],
             dfs=get_dataforseo(),
