@@ -169,7 +169,7 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           <WorkingProgress
             stages={EXPANSION_STAGES}
             targetS={90}
-            estimate="usually 1–3 minutes"
+            estimate="usually 2–4 minutes"
           />
         )}
 
