@@ -1,3 +1,5 @@
+import time
+
 from app.dataforseo import DataForSEOError
 from app.pipeline.expansion import ExpansionTopic, run_expansion
 
@@ -109,6 +111,44 @@ def test_autocomplete_merges_suggestions():
     kws = r.per_topic["t1"]
     assert kws["a x"] == ["autocomplete"]
     assert kws["a y"] == ["autocomplete"]
+
+
+class _SlowDFS:
+    def _sleep(self):
+        time.sleep(0.2)
+
+    def keyword_ideas(self, a, limit=0):
+        self._sleep()
+        return ["a"]
+
+    def keyword_suggestions(self, a, limit=0):
+        self._sleep()
+        return ["b"]
+
+    def query_fanouts(self, a, limit=0):
+        self._sleep()
+        return []
+
+    def people_also_ask(self, a):
+        self._sleep()
+        return []
+
+    def autocomplete(self, kw):
+        self._sleep()
+        return []
+
+
+def test_time_budget_caps_the_run():
+    # A tiny budget against slow endpoints must stop and flag, not hang.
+    started = time.monotonic()
+    r = run_expansion(
+        topics=[ExpansionTopic(id="t1", anchor="seed")],
+        dfs=_SlowDFS(),
+        max_workers=1,
+        time_budget_s=0.1,
+    )
+    assert time.monotonic() - started < 5.0  # returned promptly, didn't hang
+    assert any("stopped at the time limit" in n for n in r.degraded_notes)
 
 
 def test_autocomplete_skipped_when_majority_fail():

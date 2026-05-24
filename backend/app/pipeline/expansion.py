@@ -10,6 +10,7 @@ gating, competitor mining, and clustering are M4.
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -56,8 +57,11 @@ def run_expansion(
     paa_tier2_cap: int = 40,
     autocomplete_max: int = 1500,
     max_workers: int = 8,
+    time_budget_s: float = 240.0,
 ) -> ExpansionResult:
     result = ExpansionResult()
+    deadline = time.monotonic() + time_budget_s
+    capped = False
     # topic_id -> {keyword: set(sources)}
     pools: dict[str, dict[str, set[str]]] = {t.id: {} for t in topics}
 
@@ -81,13 +85,14 @@ def run_expansion(
         "paa": paa_two_tier,
     }
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool_exec:
-        futures = {}
-        for t in topics:
-            for source, fn in base_jobs.items():
-                futures[pool_exec.submit(fn, t.anchor)] = (t, source)
+    pool_exec = ThreadPoolExecutor(max_workers=max_workers)
+    futures = {}
+    for t in topics:
+        for source, fn in base_jobs.items():
+            futures[pool_exec.submit(fn, t.anchor)] = (t, source)
 
-        for fut in as_completed(futures):
+    try:
+        for fut in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
             topic, source = futures[fut]
             try:
                 data = fut.result()
@@ -112,6 +117,11 @@ def run_expansion(
             else:
                 for kw in data:
                     _add(pools[topic.id], kw, source)
+    except TimeoutError:
+        # Hit the overall time budget. Keep what completed; abandon the rest.
+        capped = True
+    finally:
+        pool_exec.shutdown(wait=False, cancel_futures=True)
 
     # ----- Phase 2: autocomplete on the deduped pool (§7.5) -----------------
     # (topic_id, keyword) pairs, capped globally to bound cost. Interleave
@@ -126,13 +136,15 @@ def run_expansion(
                 seeds.append((tid, ks[i]))
     seeds = seeds[:autocomplete_max]
 
-    if seeds:
+    # Only enrich if the time budget hasn't already been spent on base expansion.
+    if seeds and not capped and (deadline - time.monotonic()) > 1.0:
         ok = 0
         fail = 0
         ac_additions: list[tuple[str, str]] = []
-        with ThreadPoolExecutor(max_workers=max_workers) as pool_exec:
-            ac_futures = {pool_exec.submit(dfs.autocomplete, kw): tid for tid, kw in seeds}
-            for fut in as_completed(ac_futures):
+        ac_exec = ThreadPoolExecutor(max_workers=max_workers)
+        ac_futures = {ac_exec.submit(dfs.autocomplete, kw): tid for tid, kw in seeds}
+        try:
+            for fut in as_completed(ac_futures, timeout=max(0.0, deadline - time.monotonic())):
                 tid = ac_futures[fut]
                 try:
                     suggestions = fut.result()
@@ -142,13 +154,26 @@ def run_expansion(
                     continue
                 for sug in suggestions:
                     ac_additions.append((tid, sug))
+        except TimeoutError:
+            capped = True
+        finally:
+            ac_exec.shutdown(wait=False, cancel_futures=True)
 
-        # Skip autocomplete entirely if a majority of calls failed (§16.2).
-        if fail and fail / (ok + fail) > 0.5:
+        # On a clean finish, skip autocomplete entirely if a majority failed
+        # (§16.2). On a time-cap, keep whatever completed.
+        if not capped and fail and fail / (ok + fail) > 0.5:
             result.degraded_notes.append("Autocomplete enrichment unavailable for this run.")
         else:
             for tid, sug in ac_additions:
                 _add(pools[tid], sug, "autocomplete")
+    elif seeds and (capped or (deadline - time.monotonic()) <= 1.0):
+        capped = True
+
+    if capped:
+        result.degraded_notes.append(
+            "Keyword expansion stopped at the time limit; results may be partial. "
+            "Increase EXPANSION_MAX_WORKERS or the time budget, or lower AUTOCOMPLETE_MAX."
+        )
 
     result.per_topic = {
         tid: {kw: sorted(sources) for kw, sources in kws.items()}
