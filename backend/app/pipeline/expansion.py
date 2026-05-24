@@ -31,6 +31,7 @@ class ExpansionResult:
     # topic_id -> {normalized_keyword: sorted list of source tags}
     per_topic: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     degraded_notes: list[str] = field(default_factory=list)
+    timed_out: bool = False  # hit the time budget (logged; not surfaced to the user)
 
     @property
     def total_keywords(self) -> int:
@@ -188,10 +189,8 @@ def run_expansion(
         capped = True
 
     if capped:
-        result.degraded_notes.append(
-            "Keyword expansion reached its time limit, so some keywords may be "
-            "missing. Everything collected so far has been saved."
-        )
+        result.timed_out = True
+        logger.info("step_capped", extra={"event": "step_capped", "step": "expansion"})
 
     result.per_topic = {
         tid: {kw: sorted(sources) for kw, sources in kws.items()}
