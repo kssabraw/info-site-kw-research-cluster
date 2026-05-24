@@ -7,6 +7,7 @@ service client after ownership has been verified.
 
 import json
 
+from app.pipeline.article_planning.models import PlanResult
 from app.pipeline.models import ProposedSilo
 from app.pipeline.relevance import GatedKeyword
 from app.storage.supabase_client import (
@@ -14,6 +15,15 @@ from app.storage.supabase_client import (
     get_service_client,
     get_user_client,
 )
+
+
+def _norm(kw: str) -> str:
+    return " ".join((kw or "").strip().lower().split())
+
+
+def _vector_literal(vector: list[float]) -> str:
+    # pgvector accepts its text form "[a,b,c]".
+    return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 
 # Columns returned to the API — never the raw embedding vector.
 _TOPIC_COLS = (
@@ -198,7 +208,10 @@ def delete_topic(topic_id: str) -> None:
 
 
 # ---- M3 keyword expansion -------------------------------------------------
-_KEYWORD_COLS = "id, topic_id, keyword, sources, status, relevance_score, created_at"
+_KEYWORD_COLS = (
+    "id, topic_id, cluster_id, keyword, sources, status, relevance_score, "
+    "is_primary_for_cluster, orchestrator_drop_reason, created_at"
+)
 
 
 def delete_keywords_for_session(session_id: str) -> None:
@@ -298,8 +311,199 @@ def insert_classified_keywords(
 
 
 def set_topic_embedding(topic_id: str, vector: list[float]) -> None:
-    # pgvector accepts its text form "[a,b,c]".
-    literal = "[" + ",".join(repr(float(x)) for x in vector) + "]"
-    get_service_client().table("topics").update({"embedding": literal}).eq(
-        "id", topic_id
-    ).execute()
+    get_service_client().table("topics").update(
+        {"embedding": _vector_literal(vector)}
+    ).eq("id", topic_id).execute()
+
+
+# ---- M5 article planning persistence (PRD §7.10, §13) ---------------------
+def get_active_keyword_index(session_id: str) -> dict[tuple[str, str], str]:
+    """(topic_id, normalized keyword) -> keyword row id, for the session's active
+    keywords (the only pool the orchestrator saw). Paged: a broad silo can hold
+    well over PostgREST's 1000-row default."""
+    client = get_service_client()
+    index: dict[tuple[str, str], str] = {}
+    offset = 0
+    page = 1000
+    while True:
+        res = (
+            client.table("keywords")
+            .select("id, topic_id, keyword")
+            .eq("session_id", session_id)
+            .eq("status", "active")
+            .order("id")
+            .range(offset, offset + page - 1)
+            .execute()
+        )
+        rows = res.data or []
+        for r in rows:
+            index[(r["topic_id"], _norm(r["keyword"]))] = r["id"]
+        if len(rows) < page:
+            break
+        offset += page
+    return index
+
+
+def reset_article_planning(session_id: str) -> None:
+    """Clear any prior article-planning output so /plan-articles is idempotent
+    (and re-runnable). Resets keyword orchestrator fields, un-drops
+    orchestrator-dropped keywords, and deletes clusters + coverage gaps."""
+    client = get_service_client()
+    # Un-drop keywords the orchestrator dropped on a previous run.
+    client.table("keywords").update({"status": "active"}).eq(
+        "session_id", session_id
+    ).eq("status", "dropped_by_orchestrator").execute()
+    # Clear per-keyword cluster linkage.
+    client.table("keywords").update(
+        {
+            "cluster_id": None,
+            "is_primary_for_cluster": False,
+            "serp_top_urls": None,
+            "orchestrator_drop_reason": None,
+        }
+    ).eq("session_id", session_id).execute()
+
+    topic_ids = [t["id"] for t in list_topics(session_id)]
+    if topic_ids:
+        client.table("coverage_gaps").delete().in_("topic_id", topic_ids).execute()
+        client.table("clusters").delete().in_("topic_id", topic_ids).execute()
+
+
+def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
+    """Write the orchestrator's plan: clusters, keyword linkage, dropped keywords,
+    peer links, coverage gaps. Handles the clusters<->keywords FK cycle with a
+    staged write (insert clusters -> link keywords -> backfill primary + peers).
+    Returns counts."""
+    client = get_service_client()
+    kw_index = get_active_keyword_index(session_id)
+
+    # 1) Insert a cluster per article; remember the row id and keyword linkage.
+    articles = [(p.topic_id, a) for p in result.per_topic for a in p.articles]
+    cluster_ids: list[str] = []
+    primary_to_cluster: dict[str, str] = {}      # norm(primary) -> cluster id
+    per_cluster_primary_kw_id: list[str | None] = []
+    per_cluster_serp: list[list[str]] = []
+    per_cluster_supporting_kw_ids: list[list[str]] = []
+
+    for topic_id, art in articles:
+        row = (
+            client.table("clusters")
+            .insert(
+                {
+                    "topic_id": topic_id,
+                    "name": art.primary_keyword,
+                    "intent": art.intent,
+                    "suggested_h2s": art.suggested_h2s,
+                    "source_statistical_grouping_id": art.source_statistical_grouping_id,
+                    "orchestrator_notes": art.orchestrator_notes,
+                    "is_gap_placeholder": False,
+                }
+            )
+            .execute()
+        )
+        cid = row.data[0]["id"]
+        cluster_ids.append(cid)
+        primary_to_cluster[_norm(art.primary_keyword)] = cid
+        per_cluster_primary_kw_id.append(kw_index.get((topic_id, _norm(art.primary_keyword))))
+        per_cluster_serp.append(art.serp_top_urls or [])
+        per_cluster_supporting_kw_ids.append(
+            [kid for sk in art.supporting_keywords
+             if (kid := kw_index.get((topic_id, _norm(sk)))) is not None]
+        )
+
+    # 2) Link keywords to clusters and backfill each cluster's primary + peers.
+    primary_embeddings = embed_fn([art.primary_keyword for _, art in articles]) if articles else []
+    for idx, (cid, (topic_id, art)) in enumerate(zip(cluster_ids, articles)):
+        primary_kw_id = per_cluster_primary_kw_id[idx]
+        update: dict = {}
+        if primary_kw_id:
+            client.table("keywords").update(
+                {
+                    "cluster_id": cid,
+                    "is_primary_for_cluster": True,
+                    "serp_top_urls": per_cluster_serp[idx] or None,
+                }
+            ).eq("id", primary_kw_id).execute()
+            update["primary_keyword_id"] = primary_kw_id
+        support_ids = per_cluster_supporting_kw_ids[idx]
+        if support_ids:
+            client.table("keywords").update({"cluster_id": cid}).in_(
+                "id", support_ids
+            ).execute()
+        peer_ids = [
+            primary_to_cluster[_norm(pk)]
+            for pk in art.peer_primary_keywords
+            if _norm(pk) in primary_to_cluster
+            and primary_to_cluster[_norm(pk)] != cid
+        ]
+        if peer_ids:
+            update["peer_article_links"] = list(dict.fromkeys(peer_ids))
+        if idx < len(primary_embeddings):
+            update["centroid_embedding"] = _vector_literal(primary_embeddings[idx])
+        if update:
+            client.table("clusters").update(update).eq("id", cid).execute()
+
+    # 3) Drop keywords the orchestrator dropped (stored, not deleted).
+    dropped = 0
+    for plan in result.per_topic:
+        for d in plan.dropped:
+            kid = kw_index.get((plan.topic_id, _norm(d.keyword)))
+            if not kid:
+                continue
+            client.table("keywords").update(
+                {"status": "dropped_by_orchestrator", "orchestrator_drop_reason": d.reason}
+            ).eq("id", kid).execute()
+            dropped += 1
+
+    # 4) Coverage gaps (pending; acceptance -> placeholder cluster is M7).
+    gap_rows = [
+        {
+            "topic_id": plan.topic_id,
+            "suggested_title": g.suggested_title,
+            "target_keyword": g.target_keyword,
+            "rationale": g.rationale,
+        }
+        for plan in result.per_topic
+        for g in plan.gaps
+    ]
+    if gap_rows:
+        client.table("coverage_gaps").insert(gap_rows).execute()
+
+    return {"clusters": len(cluster_ids), "dropped": dropped, "gaps": len(gap_rows)}
+
+
+def list_clusters(session_id: str) -> list[dict]:
+    """Article units for a session, joined up through topics. Read-only summary
+    (full editing UI is M7); never returns the centroid embedding."""
+    topic_ids = [t["id"] for t in list_topics(session_id)]
+    if not topic_ids:
+        return []
+    res = (
+        get_service_client()
+        .table("clusters")
+        .select(
+            "id, topic_id, name, primary_keyword_id, intent, suggested_h2s, "
+            "peer_article_links, source_statistical_grouping_id, orchestrator_notes, "
+            "is_user_edited, is_gap_placeholder, created_at"
+        )
+        .in_("topic_id", topic_ids)
+        .order("created_at")
+        .execute()
+    )
+    return res.data
+
+
+def list_coverage_gaps(session_id: str) -> list[dict]:
+    topic_ids = [t["id"] for t in list_topics(session_id)]
+    if not topic_ids:
+        return []
+    res = (
+        get_service_client()
+        .table("coverage_gaps")
+        .select("id, topic_id, suggested_title, target_keyword, rationale, status, "
+                "accepted_cluster_id, created_at")
+        .in_("topic_id", topic_ids)
+        .order("created_at")
+        .execute()
+    )
+    return res.data
