@@ -10,13 +10,13 @@ import {
   finalizeSilos,
   getKeywords,
   getSession,
+  getSummary,
   overrideAudience,
   planArticles,
   setDeepMine,
   type AddTopicBody,
   type EditTopicBody,
-  type ExpansionResult,
-  type PlanResult,
+  type PipelineSummary,
   type RelationshipType,
   type Silo,
   type SiloDiscovery as Discovery,
@@ -26,7 +26,10 @@ import {
   RELATIONSHIP_OPTIONS,
 } from "../shared/relationshipTypes";
 
-type Step = "form" | "disambiguation" | "review" | "finalized" | "expanded" | "planned";
+// The pipeline steps run in the background; "pipeline" is a polling-driven view
+// that renders progress / results from the session summary.
+type Step = "form" | "disambiguation" | "review" | "finalized" | "pipeline";
+type Phase = "expanding" | "planning";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
@@ -77,26 +80,35 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
     onError: (e) => setError(msg(e)),
   });
 
-  const [expansion, setExpansion] = useState<ExpansionResult | null>(null);
+  // Pipeline runs in the background; we poll the session summary to drive the UI.
+  const [phase, setPhase] = useState<Phase>("expanding");
+  const summaryQ = useQuery({
+    queryKey: ["summary", sessionId],
+    queryFn: () => getSummary(sessionId!),
+    enabled: !!sessionId && step === "pipeline",
+    // Poll while a run is in progress; stop once it reaches a terminal status.
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 4000 : false),
+  });
+
   const expandMut = useMutation({
-    // The deep-mine selection (§7.2) is saved, then the full pipeline runs.
+    // The deep-mine selection (§7.2) is saved, then the pipeline kicks off async.
     mutationFn: async (gatedTopicIds: string[]) => {
       await setDeepMine(sessionId!, gatedTopicIds);
       return expandSession(sessionId!);
     },
-    onSuccess: (r) => {
-      setExpansion(r);
-      setStep("expanded");
+    onSuccess: () => {
+      setPhase("expanding");
+      setStep("pipeline");
+      qc.invalidateQueries({ queryKey: ["summary", sessionId] });
     },
     onError: (e) => setError(msg(e)),
   });
 
-  const [plan, setPlan] = useState<PlanResult | null>(null);
   const planMut = useMutation({
     mutationFn: () => planArticles(sessionId!),
-    onSuccess: (r) => {
-      setPlan(r);
-      setStep("planned");
+    onSuccess: () => {
+      setPhase("planning");
+      qc.invalidateQueries({ queryKey: ["summary", sessionId] });
     },
     onError: (e) => setError(msg(e)),
   });
@@ -182,14 +194,6 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
 
-        {step === "finalized" && expandMut.isPending && (
-          <WorkingProgress
-            stages={EXPANSION_STAGES}
-            targetS={150}
-            estimate="usually 3–6 minutes"
-          />
-        )}
-
         {step === "finalized" && !expandMut.isPending && sessionId && (
           <DeepMineSelection
             sessionId={sessionId}
@@ -201,17 +205,10 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
 
-        {step === "expanded" && planMut.isPending && (
-          <WorkingProgress
-            stages={PLANNING_STAGES}
-            targetS={120}
-            estimate="usually 1–4 minutes"
-          />
-        )}
-
-        {step === "expanded" && !planMut.isPending && expansion && sessionId && (
-          <ExpansionResults
-            expansion={expansion}
+        {step === "pipeline" && sessionId && (
+          <PipelineView
+            phase={phase}
+            summary={summaryQ.data ?? null}
             sessionId={sessionId}
             onExit={onExit}
             onPlan={() => {
@@ -219,10 +216,6 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
               planMut.mutate();
             }}
           />
-        )}
-
-        {step === "planned" && plan && (
-          <PlanResults plan={plan} onExit={onExit} />
         )}
       </main>
     </>
@@ -296,8 +289,61 @@ function WorkingProgress({
 }
 
 // ---------------------------------------------------------------------------
+// Polling-driven view of a background pipeline run. The work runs server-side
+// (past the 5-min edge cap), so we poll the session summary and render progress,
+// results, or an error from its status.
+function PipelineView(p: {
+  phase: Phase;
+  summary: PipelineSummary | null;
+  sessionId: string;
+  onExit: () => void;
+  onPlan: () => void;
+}) {
+  const { summary, phase } = p;
+  const status = summary?.status;
+
+  if (!summary || status === "running") {
+    return phase === "planning" ? (
+      <WorkingProgress stages={PLANNING_STAGES} targetS={120} estimate="usually 1–4 minutes" />
+    ) : (
+      <WorkingProgress stages={EXPANSION_STAGES} targetS={150} estimate="usually 3–6 minutes" />
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <div className="card">
+        <h1 className="page-title">The run hit an error</h1>
+        <p className="form-error">{summary.last_error ?? "The pipeline failed."}</p>
+        <p className="muted">
+          Any data collected before the failure was saved. You can start a new session
+          or retry from the project list.
+        </p>
+        <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
+          Back to projects
+        </button>
+      </div>
+    );
+  }
+
+  if (status === "complete" && summary.plan) {
+    return <PlanResults plan={summary.plan} onExit={p.onExit} />;
+  }
+
+  // awaiting_article_planning: expansion done, ready to plan articles.
+  return (
+    <ExpansionResults
+      expansion={summary.expansion}
+      sessionId={p.sessionId}
+      onExit={p.onExit}
+      onPlan={p.onPlan}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
 function ExpansionResults(p: {
-  expansion: ExpansionResult;
+  expansion: PipelineSummary["expansion"];
   sessionId: string;
   onExit: () => void;
   onPlan: () => void;
@@ -316,18 +362,6 @@ function ExpansionResults(p: {
         {c.filtered_relevance.toLocaleString()} off-topic, {c.filtered_junk.toLocaleString()}{" "}
         junk).
       </p>
-
-      {expansion.timed_out && (
-        <div className="banner">
-          The run hit its time budget — some silos may be partially mined. The keywords
-          collected so far were saved.
-        </div>
-      )}
-      {expansion.degraded_notes.map((note) => (
-        <div className="banner" key={note}>
-          {note}
-        </div>
-      ))}
 
       {expansion.topics.map((t) => (
         <div className="silo-card" key={t.topic_id}>
@@ -371,7 +405,7 @@ function ExpansionResults(p: {
 // ---------------------------------------------------------------------------
 // Read-only article-plan summary (M5 verification). Full table/cluster/
 // architecture views + editing land in M7.
-function PlanResults(p: { plan: PlanResult; onExit: () => void }) {
+function PlanResults(p: { plan: NonNullable<PipelineSummary["plan"]>; onExit: () => void }) {
   const { plan } = p;
   return (
     <>
@@ -386,33 +420,12 @@ function PlanResults(p: { plan: PlanResult; onExit: () => void }) {
         {plan.collisions.toLocaleString()} cross-silo duplicates merged.
       </p>
 
-      {plan.degraded && (
-        <div className="banner">
-          One or more silos fell back to statistical passthrough — the orchestrator
-          couldn't refine them. Their articles mirror the raw groupings.
-        </div>
-      )}
-      {plan.timed_out && (
-        <div className="banner">
-          SERP fetching hit its time budget — some candidate primaries were planned
-          without SERP evidence.
-        </div>
-      )}
-      {plan.degraded_notes.map((note) => (
-        <div className="banner" key={note}>
-          {note}
-        </div>
-      ))}
-
       {plan.topics.map((t) => (
         <div className="silo-card" key={t.topic_id}>
           <div className="silo-head">
-            <p className="silo-name">
-              {t.name}
-              {t.degraded && <span className="muted"> · passthrough</span>}
-            </p>
+            <p className="silo-name">{t.name}</p>
             <span className="muted">
-              {t.articles} articles · {t.gaps} gaps · {t.dropped} dropped
+              {t.articles} articles · {t.gaps} gaps
             </span>
           </div>
         </div>

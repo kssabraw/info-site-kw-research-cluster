@@ -11,22 +11,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from app import jobs
 from app.auth import AuthedUser, require_user
 from app.config import get_settings
 from app.dataforseo import get_dataforseo
-from app.llm import LLMError, get_llm, get_orchestrator
+from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
-from app.pipeline.article_planning.models import GroupingInput, TopicInput
-from app.pipeline.article_planning.orchestrate_articles import (
-    all_degraded,
-    run_article_planning,
-)
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
-from app.pipeline.orchestrate import (
-    PipelineTopic,
-    gate_and_cluster,
-    run_refinement_pipeline,
-)
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -275,312 +266,85 @@ def set_deep_mine(
 
 
 # ---- M3 expansion + M4 mining/relevance/clustering ------------------------
-@router.post("/sessions/{session_id}/expand")
+@router.post("/sessions/{session_id}/expand", status_code=status.HTTP_202_ACCEPTED)
 def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
-    session = _require_session(user, session_id)
+    """Kick off the §7.3–§7.9 pipeline in the background and return immediately.
+    The work runs past the 5-min edge cap, so the frontend polls
+    GET /sessions/{id}/summary for status. The atomic run guard rejects a
+    double-submit (409)."""
+    _require_session(user, session_id)
     bind_session_id(session_id)
-    topics = store.list_topics(session_id)
-    if not topics:
+    if not store.list_topics(session_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No silos to expand. Finalize at least one silo first.",
         )
-
-    # Atomically claim the run; reject if one is already in progress. This
-    # guards against a double-submit or a retry-after-timeout (the prior run may
-    # still be executing server-side) creating duplicate rows + double spend.
     if not store.try_mark_running(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A pipeline run is already in progress for this session.",
         )
-
-    seed = session["seed_keyword"]
-    embeddings = store.get_topic_embeddings(session_id)
-    s = get_settings()
-    coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
-    top_n = (
-        s.competitor_top_n_comprehensive
-        if coverage_mode == "comprehensive"
-        else s.competitor_top_n_standard
-    )
-    try:
-        result = run_refinement_pipeline(
-            seed=seed,
-            topics=[
-                PipelineTopic(
-                    id=t["id"],
-                    name=t["name"],
-                    embedding=embeddings.get(t["id"]),
-                    gated=bool(t.get("is_gated_for_competitor_mining")),
-                )
-                for t in topics
-            ],
-            dfs=get_dataforseo(),
-            embed_fn=get_llm().embed,
-            keyword_ideas_limit=s.keyword_ideas_limit,
-            keyword_suggestions_limit=s.keyword_suggestions_limit,
-            query_fanouts_limit=s.query_fanouts_limit,
-            paa_tier1_seeds=s.paa_tier1_seeds,
-            paa_tier2_cap=s.paa_tier2_cap,
-            autocomplete_max=s.autocomplete_max,
-            expansion_max_workers=s.expansion_max_workers,
-            expansion_time_budget_s=s.expansion_time_budget_s,
-            competitor_top_n=top_n,
-            ranked_keywords_limit=s.ranked_keywords_limit,
-            competitor_max_position=s.competitor_max_position,
-            competitor_max_workers=s.competitor_max_workers,
-            competitor_time_budget_s=s.competitor_time_budget_s,
-            relevance_threshold=s.relevance_threshold,
-            relevance_embed_batch=s.relevance_embed_batch,
-            clustering_edge_threshold=s.clustering_edge_threshold,
-            clustering_max_nodes=s.clustering_max_nodes,
-        )
-        store.delete_keywords_for_session(session_id)
-        count = store.insert_classified_keywords(session_id, result.per_topic_gated)
-        store.update_session(
-            session_id, {"statistical_clustering_log": result.clustering_log}
-        )
-    except Exception as exc:
-        store.update_session(session_id, {"status": "error"})
-        logger.error(
-            "step_failed",
-            extra={"event": "step_failed", "step": "refinement_pipeline",
-                   "reason": repr(exc)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The keyword pipeline failed. The session was marked as errored; try again.",
-        ) from exc
-
-    # Clustering done; the article-planning orchestrator (§7.10) runs next via
-    # POST /plan-articles, which sets the terminal 'complete' status.
-    store.update_session(session_id, {"status": "awaiting_article_planning"})
-
-    counts = result.counts()
-    names = {t["id"]: t["name"] for t in topics}
-    groupings = result.clustering_log.get("topics", {})
-    return {
-        "expanded": True,
-        "keyword_count": count,
-        "counts": counts,
-        "degraded_notes": result.degraded_notes,
-        "timed_out": result.timed_out,
-        "topics": [
-            {
-                "topic_id": tid,
-                "name": names.get(tid, ""),
-                "active": sum(1 for g in kws if g.status == "active"),
-                "total": len(kws),
-                "grouping_count": groupings.get(tid, {}).get("grouping_count", 0),
-            }
-            for tid, kws in result.per_topic_gated.items()
-        ],
-    }
+    jobs.submit_expand(session_id)
+    return {"status": "running", "session_id": session_id}
 
 
-@router.post("/sessions/{session_id}/regate")
+@router.get("/sessions/{session_id}/summary")
+def session_summary(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Status + expansion/plan counts. Polled by the frontend to drive the UI and
+    to resume a session on refresh; `plan` is null until the orchestrator runs."""
+    _require_session(user, session_id)
+    return store.get_pipeline_summary(session_id)
+
+
+@router.post("/sessions/{session_id}/regate", status_code=status.HTTP_202_ACCEPTED)
 def regate_session(
     session_id: str, body: RegateBody, user: AuthedUser = Depends(require_user)
 ) -> dict:
-    """Re-run the relevance gate + clustering on a session's already-collected
-    keywords at a (possibly different) threshold, skipping all DataForSEO calls.
-    Reuses the stored keyword pool, re-embeds + re-scores + re-clusters, clears
-    any prior article plan, and returns the session to awaiting_article_planning.
-    A calibration tool: lets us tune the relevance threshold in ~1-2 min/iteration
-    without re-paying for expansion + competitor mining (or hitting the 5-min wall)."""
+    """Kick off a re-gate (relevance gate + clustering) on the session's stored
+    keyword pool at a (possibly overridden) threshold in the background, skipping
+    DataForSEO. Returns immediately; poll GET /summary for status. A calibration
+    tool: tune the threshold without re-paying for expansion + mining."""
     _require_session(user, session_id)
     bind_session_id(session_id)
-
-    pool = store.list_all_keyword_pool(session_id)
-    if not pool:
+    if not store.list_all_keyword_pool(session_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No keywords to re-gate. Run /expand first.",
         )
-
     if not store.try_mark_running(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
         )
-
     s = get_settings()
-    threshold = body.relevance_threshold if body.relevance_threshold is not None \
+    threshold = (
+        body.relevance_threshold
+        if body.relevance_threshold is not None
         else s.relevance_threshold
-    topics = store.list_topics(session_id)
-    topic_names = {t["id"]: t["name"] for t in topics}
-    topic_embeddings = store.get_topic_embeddings(session_id)
-    try:
-        gc = gate_and_cluster(
-            per_topic_lists=pool,
-            topic_names=topic_names,
-            topic_embeddings=topic_embeddings,
-            embed_fn=get_llm().embed,
-            relevance_threshold=threshold,
-            relevance_embed_batch=s.relevance_embed_batch,
-            clustering_edge_threshold=s.clustering_edge_threshold,
-            clustering_max_nodes=s.clustering_max_nodes,
-        )
-        # Clear any prior article plan (clusters reference keywords), then re-tag
-        # the keyword pool with the new gate output.
-        store.reset_article_planning(session_id)
-        store.delete_keywords_for_session(session_id)
-        count = store.insert_classified_keywords(session_id, gc.per_topic_gated)
-        store.update_session(
-            session_id,
-            {"statistical_clustering_log": gc.clustering_log, "orchestrator_log": None},
-        )
-    except Exception as exc:
-        store.update_session(session_id, {"status": "error"})
-        logger.error(
-            "step_failed",
-            extra={"event": "step_failed", "step": "regate", "reason": repr(exc)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Re-gate failed. The session was marked errored; try again.",
-        ) from exc
-
-    store.update_session(session_id, {"status": "awaiting_article_planning"})
-
-    counts = gc.counts()
-    groupings = gc.clustering_log.get("topics", {})
-    return {
-        "regated": True,
-        "relevance_threshold": threshold,
-        "keyword_count": count,
-        "counts": counts,
-        "degraded_notes": gc.degraded_notes,
-        "topics": [
-            {
-                "topic_id": tid,
-                "name": topic_names.get(tid, ""),
-                "active": sum(1 for g in kws if g.status == "active"),
-                "total": len(kws),
-                "grouping_count": groupings.get(tid, {}).get("grouping_count", 0),
-            }
-            for tid, kws in gc.per_topic_gated.items()
-        ],
-    }
+    )
+    jobs.submit_regate(session_id, threshold)
+    return {"status": "running", "session_id": session_id, "relevance_threshold": threshold}
 
 
-@router.post("/sessions/{session_id}/plan-articles")
+@router.post("/sessions/{session_id}/plan-articles", status_code=status.HTTP_202_ACCEPTED)
 def plan_articles(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
-    """M5 article planning (§7.10): SERP for candidate primaries -> per-silo
-    orchestrator -> cross-topic dedup -> persist clusters + coverage gaps.
-    Reconstructs its inputs from the persisted clustering log + keyword rows, so
-    it runs as its own request after /expand (keeps each request under the edge
-    cap; re-runnable)."""
+    """Kick off M5 article planning (§7.10) in the background: SERP for candidate
+    primaries -> per-silo orchestrator -> cross-topic dedup -> persist clusters +
+    coverage gaps. Returns immediately; poll GET /summary for status."""
     session = _require_session(user, session_id)
     bind_session_id(session_id)
-
-    log = session.get("statistical_clustering_log") or {}
-    log_topics = log.get("topics") or {}
-    if not log_topics:
+    if not (session.get("statistical_clustering_log") or {}).get("topics"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No statistical clustering to plan from. Run /expand first.",
         )
-
-    # Atomically claim the run (reuses the /expand guard); blocks double-submit.
     if not store.try_mark_running(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
         )
-
-    topics_meta = {t["id"]: t for t in store.list_topics(session_id)}
-    embeddings = store.get_topic_embeddings(session_id)
-    topic_inputs: list[TopicInput] = []
-    for tid, meta in topics_meta.items():
-        groupings = [
-            GroupingInput(
-                id=str(g.get("id") or f"{tid}:g{i}"),
-                representative=str(g.get("representative") or ""),
-                cohesion=float(g.get("cohesion") or 0.0),
-                size=int(g.get("size") or len(g.get("keywords") or [])),
-                keywords=[str(k) for k in (g.get("keywords") or [])],
-            )
-            for i, g in enumerate((log_topics.get(tid) or {}).get("groupings") or [])
-        ]
-        topic_inputs.append(
-            TopicInput(
-                id=tid,
-                name=meta.get("name") or "",
-                rationale=meta.get("rationale") or "",
-                relationship_type=meta.get("relationship_type") or "",
-                embedding=embeddings.get(tid),
-                groupings=groupings,
-            )
-        )
-
-    s = get_settings()
-    try:
-        result = run_article_planning(
-            topics=topic_inputs,
-            dfs=get_dataforseo(),
-            orchestrator=get_orchestrator(),
-            embed_fn=get_llm().embed,
-            candidate_serp_top_n=s.candidate_serp_top_n,
-            candidate_serp_max_workers=s.candidate_serp_max_workers,
-            candidate_serp_time_budget_s=s.candidate_serp_time_budget_s,
-            dedup_primary_cosine_threshold=s.dedup_primary_cosine_threshold,
-            dedup_serp_overlap_min=s.dedup_serp_overlap_min,
-        )
-        if all_degraded(result):
-            # §16.2: orchestrator failed on every silo -> error, clustering log
-            # already persisted for debug.
-            store.update_session(
-                session_id,
-                {"status": "error", "orchestrator_log": result.orchestrator_log()},
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Article planning failed on every silo. The session was marked "
-                "errored; statistical clustering is preserved. Try again.",
-            )
-        store.reset_article_planning(session_id)
-        persisted = store.persist_article_plan(session_id, result, get_llm().embed)
-        store.update_session(
-            session_id, {"orchestrator_log": result.orchestrator_log()}
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        store.update_session(session_id, {"status": "error"})
-        logger.error(
-            "step_failed",
-            extra={"event": "step_failed", "step": "article_planning",
-                   "reason": repr(exc)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Article planning failed. The session was marked errored; try again.",
-        ) from exc
-
-    store.update_session(session_id, {"status": "complete"})
-
-    names = {t["id"]: t["name"] for t in topics_meta.values()}
-    return {
-        "planned": True,
-        **persisted,
-        "degraded": any(p.degraded for p in result.per_topic),
-        "degraded_notes": result.degraded_notes,
-        "timed_out": result.timed_out,
-        "collisions": len(result.dedup_log.get("collisions", [])),
-        "topics": [
-            {
-                "topic_id": p.topic_id,
-                "name": names.get(p.topic_id, ""),
-                "articles": len(p.articles),
-                "gaps": len(p.gaps),
-                "dropped": len(p.dropped),
-                "degraded": p.degraded,
-            }
-            for p in result.per_topic
-        ],
-    }
+    jobs.submit_plan(session_id)
+    return {"status": "running", "session_id": session_id}
 
 
 @router.get("/sessions/{session_id}/clusters")
