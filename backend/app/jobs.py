@@ -51,8 +51,13 @@ def submit_plan(session_id: str) -> None:
     _EXECUTOR.submit(run_plan_job, session_id)
 
 
-def submit_regate(session_id: str, threshold: float) -> None:
-    _EXECUTOR.submit(run_regate_job, session_id, threshold)
+def submit_regate(
+    session_id: str,
+    threshold: float,
+    edge_threshold: float,
+    resolution: float,
+) -> None:
+    _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold, resolution)
 
 
 def run_expand_job(session_id: str) -> None:
@@ -98,6 +103,7 @@ def run_expand_job(session_id: str) -> None:
             relevance_threshold=s.relevance_threshold,
             relevance_embed_batch=s.relevance_embed_batch,
             clustering_edge_threshold=s.clustering_edge_threshold,
+            clustering_resolution=s.clustering_resolution,
             clustering_max_nodes=s.clustering_max_nodes,
         )
         store.delete_keywords_for_session(session_id)
@@ -190,9 +196,11 @@ def run_plan_job(session_id: str) -> None:
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
 
 
-def run_regate_job(session_id: str, threshold: float) -> None:
-    """Re-gate + re-cluster a session's stored keyword pool at a new threshold,
-    skipping DataForSEO. Clears any prior article plan."""
+def run_regate_job(
+    session_id: str, threshold: float, edge_threshold: float, resolution: float
+) -> None:
+    """Re-gate + re-cluster a session's stored keyword pool at a new threshold and
+    clustering granularity, skipping DataForSEO. Clears any prior article plan."""
     bind_session_id(session_id)
     try:
         pool = store.list_all_keyword_pool(session_id)
@@ -207,7 +215,8 @@ def run_regate_job(session_id: str, threshold: float) -> None:
             embed_fn=get_llm().embed,
             relevance_threshold=threshold,
             relevance_embed_batch=s.relevance_embed_batch,
-            clustering_edge_threshold=s.clustering_edge_threshold,
+            clustering_edge_threshold=edge_threshold,
+            clustering_resolution=resolution,
             clustering_max_nodes=s.clustering_max_nodes,
         )
         store.reset_article_planning(session_id)
