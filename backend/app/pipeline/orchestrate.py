@@ -254,6 +254,7 @@ def gate_and_cluster(
     clustering_max_nodes: int = 2500,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
+    assign_best_silo: bool = False,
 ) -> PipelineResult:
     """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
     per-topic candidate pool. Shared by the full pipeline and the re-gate path
@@ -269,6 +270,7 @@ def gate_and_cluster(
         batch_size=relevance_embed_batch,
         seed_terms=seed_terms,
         peer_terms=peer_terms,
+        assign_best_silo=assign_best_silo,
     )
     result.degraded_notes.extend(gate.degraded_notes)
     result.per_topic_gated = gate.per_topic
@@ -317,6 +319,7 @@ def cluster_preview(
     clustering_max_nodes: int = 2500,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
+    assign_best_silo: bool = False,
 ) -> dict:
     """Embed + gate once, then cluster under each (edge_threshold, resolution)
     config and report granularity stats — without persisting anything. The
@@ -331,6 +334,7 @@ def cluster_preview(
         batch_size=relevance_embed_batch,
         seed_terms=seed_terms,
         peer_terms=peer_terms,
+        assign_best_silo=assign_best_silo,
     )
     active_keywords, active_embeddings = _active_for_clustering(
         gate.per_topic, clustering_max_nodes
@@ -399,6 +403,7 @@ def run_refinement_pipeline(
     clustering_max_nodes: int = 2500,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
+    assign_best_silo: bool = False,
 ) -> PipelineResult:
     result = PipelineResult()
     topic_names = {t.id: t.name for t in topics}
@@ -478,6 +483,7 @@ def run_refinement_pipeline(
         clustering_max_nodes=clustering_max_nodes,
         seed_terms=seed_terms,
         peer_terms=peer_terms,
+        assign_best_silo=assign_best_silo,
     )
     result.degraded_notes.extend(gc.degraded_notes)
     result.per_topic_gated = gc.per_topic_gated
