@@ -78,6 +78,14 @@ def cross_topic_dedup(
         tid: np.asarray(v, dtype=np.float32) if v is not None else None
         for tid, v in topic_embeddings.items()
     }
+    # Lever 2: remove the common-mode component (the shared seed direction that
+    # dominates every silo embedding) before judging which silo a collided
+    # article belongs to. Subtracting the mean of the topic vectors penalizes
+    # silos that merely align with the broad seed and rewards the silo whose
+    # *distinctive* direction matches the keyword — so e.g. "how does X work"
+    # wins for the mechanism silo instead of losing to a broader silo.
+    present = [v for v in topic_vecs.values() if v is not None]
+    mean_vec = np.mean(np.stack(present), axis=0) if present else None
 
     # serp-overlap collision needs ≥ ceil(serp_overlap_min * 3) of the top 3.
     serp_min_count = int(np.ceil(serp_overlap_min * 3))
@@ -97,9 +105,10 @@ def cross_topic_dedup(
             overlap = _serp_overlap_top3(ai, aj)
             if cos <= primary_cosine_threshold and overlap < serp_min_count:
                 continue
-            # Collision. Winner = the article more relevant to its own topic.
-            rel_i = _relevance(vectors[i], topic_vecs.get(ai.topic_id))
-            rel_j = _relevance(vectors[j], topic_vecs.get(aj.topic_id))
+            # Collision. Winner = the article more relevant to its own topic, by
+            # the common-mode-removed (discriminative) relevance.
+            rel_i = _relevance(vectors[i], topic_vecs.get(ai.topic_id), mean_vec)
+            rel_j = _relevance(vectors[j], topic_vecs.get(aj.topic_id), mean_vec)
             if rel_j > rel_i:
                 winner, loser, loser_idx = aj, ai, i
             else:
@@ -133,9 +142,12 @@ def cross_topic_dedup(
     )
 
 
-def _relevance(primary_vec: np.ndarray, topic_vec: np.ndarray | None) -> float:
+def _relevance(primary_vec: np.ndarray, topic_vec: np.ndarray | None,
+               mean_vec: np.ndarray | None = None) -> float:
     if topic_vec is None:
         return 0.0
+    if mean_vec is not None:
+        return _cosine(primary_vec - mean_vec, topic_vec - mean_vec)
     return _cosine(primary_vec, topic_vec)
 
 
