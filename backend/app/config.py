@@ -49,8 +49,13 @@ class Settings(BaseSettings):
     # strict-schema JSON; PRD §7.10, §14.2). Reuses the AR Tools ANTHROPIC_API_KEY.
     anthropic_api_key: str = ""
     orchestrator_model: str = "claude-opus-4-7"
-    orchestrator_max_tokens: int = 8000
+    orchestrator_max_tokens: int = 16000
     orchestrator_timeout_s: int = 120         # PRD §16.2: >120s -> retry once then degrade
+    # The orchestrator runs per silo, but a silo with many groupings overruns a
+    # single call (huge prompt + output -> timeout/truncation). Plan in chunks of
+    # this many groupings, run in parallel, so each call stays small and fast.
+    orchestrator_groupings_per_call: int = 12
+    orchestrator_max_workers: int = 5         # parallel orchestrator calls
 
     # M5 article planning (PRD §7.10).
     candidate_serp_top_n: int = 10            # top organic URLs per candidate primary

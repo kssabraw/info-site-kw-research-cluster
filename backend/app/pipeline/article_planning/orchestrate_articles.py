@@ -17,6 +17,8 @@ a degenerate one-keyword cluster — no keyword data is lost.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 
 from app.dataforseo import DataForSEOClient
 from app.llm import AnthropicError, AnthropicLLM
@@ -299,6 +301,40 @@ def plan_topic(
     return _passthrough_plan(topic, serp_by_keyword, reason=last_error or "orchestrator failed")
 
 
+def _chunk(items: list, size: int) -> list[list]:
+    size = max(1, size)
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _merge_chunk_plans(topic_id: str, chunk_plans: list[TopicPlan]) -> TopicPlan:
+    """Combine a topic's per-chunk plans into one. The topic counts as degraded
+    only if *every* chunk degraded (a single bad chunk doesn't sink the silo).
+    Coverage gaps are deduped by title since each chunk flags independently."""
+    merged = TopicPlan(topic_id=topic_id)
+    seen_gap: set[str] = set()
+    degraded_chunks = 0
+    for cp in chunk_plans:
+        merged.articles.extend(cp.articles)
+        merged.dropped.extend(cp.dropped)
+        for g in cp.gaps:
+            key = _norm(g.suggested_title)
+            if key and key not in seen_gap:
+                seen_gap.add(key)
+                merged.gaps.append(g)
+        if cp.degraded:
+            degraded_chunks += 1
+    merged.degraded = bool(chunk_plans) and degraded_chunks == len(chunk_plans)
+    merged.log = {
+        "degraded": merged.degraded,
+        "chunks": len(chunk_plans),
+        "degraded_chunks": degraded_chunks,
+        "article_count": len(merged.articles),
+        "gap_count": len(merged.gaps),
+        "dropped_count": len(merged.dropped),
+    }
+    return merged
+
+
 def run_article_planning(
     *,
     topics: list[TopicInput],
@@ -308,13 +344,20 @@ def run_article_planning(
     candidate_serp_top_n: int = 10,
     candidate_serp_max_workers: int = 8,
     candidate_serp_time_budget_s: float = 120.0,
+    groupings_per_call: int = 12,
+    max_workers: int = 5,
     dedup_primary_cosine_threshold: float = 0.85,
     dedup_serp_overlap_min: float = 2 / 3,
 ) -> PlanResult:
-    """Full §7.10 pass: SERP for each candidate primary -> per-topic orchestrator
-    -> cross-topic dedup. Returns the assembled plan; persistence is the caller's
-    job. Topic-level failures degrade to passthrough (per topic); the caller
-    treats an all-degraded run as an error state (PRD §16.2 failure table)."""
+    """Full §7.10 pass: SERP for each candidate primary -> per-silo orchestrator
+    (chunked + parallel) -> cross-topic dedup. Returns the assembled plan;
+    persistence is the caller's job.
+
+    Each silo is planned in chunks of `groupings_per_call` groupings so no single
+    Opus call overruns its token/timeout budget at scale (200+ groupings); chunks
+    run in parallel. A chunk failure degrades only that chunk to passthrough; a
+    topic is degraded only if all its chunks did. The caller treats an all-topics-
+    degraded run as an error state (PRD §16.2 failure table)."""
     representatives = [g.representative for t in topics for g in t.groupings]
     serp = fetch_candidate_serps(
         keywords=representatives,
@@ -326,8 +369,34 @@ def run_article_planning(
     result = PlanResult(
         degraded_notes=list(serp.degraded_notes), timed_out=serp.timed_out
     )
+
+    # One task per (topic, grouping-chunk). A topic with no groupings yields no
+    # tasks and a non-degraded empty plan below.
+    tasks: list[tuple[str, TopicInput]] = []
     for topic in topics:
-        result.per_topic.append(plan_topic(topic, serp.per_keyword, orchestrator))
+        for chunk in _chunk(topic.groupings, groupings_per_call):
+            tasks.append((topic.id, replace(topic, groupings=chunk)))
+
+    chunk_results: dict[str, list[TopicPlan]] = {t.id: [] for t in topics}
+    if tasks:
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
+            futures = {
+                ex.submit(plan_topic, sub, serp.per_keyword, orchestrator): tid
+                for tid, sub in tasks
+            }
+            for fut in as_completed(futures):
+                tid = futures[fut]
+                chunk_results[tid].append(fut.result())
+
+    for topic in topics:
+        chunks = chunk_results[topic.id]
+        if not chunks:
+            result.per_topic.append(
+                TopicPlan(topic_id=topic.id,
+                          log={"degraded": False, "article_count": 0, "note": "no groupings"})
+            )
+        else:
+            result.per_topic.append(_merge_chunk_plans(topic.id, chunks))
 
     cross_topic_dedup(
         result,
@@ -340,7 +409,7 @@ def run_article_planning(
     logger.info(
         "step_complete",
         extra={"event": "step_complete", "step": "article_planning",
-               "topic_count": len(topics), **result.counts(),
+               "topic_count": len(topics), "chunk_count": len(tasks), **result.counts(),
                "degraded": any(p.degraded for p in result.per_topic),
                "timed_out": result.timed_out},
     )
