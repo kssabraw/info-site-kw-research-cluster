@@ -18,7 +18,11 @@ from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
-from app.pipeline.orchestrate import cluster_preview, routing_diagnostic
+from app.pipeline.orchestrate import (
+    cluster_preview,
+    routing_diagnostic,
+    simulate_best_silo_clustering,
+)
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -386,6 +390,37 @@ def routing_diagnostic_endpoint(
         active_by_topic=active_by_topic,
         probes=body.probes,
         embed_fn=get_llm().embed,
+    )
+
+
+@router.post("/sessions/{session_id}/lever3-simulate")
+def lever3_simulate_endpoint(
+    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Read-only Lever-3 dry run: argmax-route every active keyword to its best
+    silo (raw rationale-anchor cosine) and cluster each silo's reassigned set,
+    reporting per-silo grouping counts. Measures the Lever-3 outcome before
+    building it. No persistence, no status change."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    pool = store.list_all_keyword_pool(session_id)
+    if not pool:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="No keywords. Run /expand first.")
+    s = get_settings()
+    topics = store.list_topics(session_id)
+    return simulate_best_silo_clustering(
+        per_topic_lists=pool,
+        topic_names={t["id"]: t["name"] for t in topics},
+        topic_embeddings=store.get_topic_embeddings(session_id),
+        embed_fn=get_llm().embed,
+        relevance_threshold=(body.relevance_threshold
+                             if body.relevance_threshold is not None else s.relevance_threshold),
+        edge_threshold=(body.clustering_edge_threshold
+                        if body.clustering_edge_threshold is not None else s.clustering_edge_threshold),
+        resolution=(body.clustering_resolution
+                    if body.clustering_resolution is not None else s.clustering_resolution),
+        clustering_max_nodes=s.clustering_max_nodes,
     )
 
 

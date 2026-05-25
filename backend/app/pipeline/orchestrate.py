@@ -40,6 +40,76 @@ def _cos(a, b) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
+def simulate_best_silo_clustering(
+    *,
+    per_topic_lists: dict[str, dict[str, list[str]]],
+    topic_names: dict[str, str],
+    topic_embeddings: dict[str, list[float] | None],
+    embed_fn,
+    relevance_threshold: float,
+    edge_threshold: float,
+    resolution: float,
+    clustering_max_nodes: int = 2500,
+) -> dict:
+    """Read-only dry run of Lever 3. Gates the pool, then assigns each unique
+    active keyword to its single best silo (argmax raw cosine to the rationale
+    anchor) and *actually clusters* each silo's reassigned set — reporting the
+    per-silo grouping counts and multi-keyword (>=2) cluster counts, which
+    predict the article distribution. No persistence; this measures the Lever-3
+    outcome before committing to it."""
+    gate = run_relevance_gate(
+        per_topic=per_topic_lists,
+        topic_embeddings=topic_embeddings,
+        embed_fn=embed_fn,
+        topic_names=topic_names,
+        threshold=relevance_threshold,
+    )
+    anchors = {
+        tid: np.asarray(v, dtype=np.float64)
+        for tid, v in topic_embeddings.items() if v
+    }
+    # one embedding per unique active keyword (reused across whichever silos it
+    # was active in)
+    kw_emb: dict[str, np.ndarray] = {}
+    for gks in gate.per_topic.values():
+        for g in gks:
+            if g.status == "active" and g.embedding is not None and g.keyword not in kw_emb:
+                kw_emb[g.keyword] = np.asarray(g.embedding, dtype=np.float64)
+
+    assigned: dict[str, list[tuple[str, np.ndarray]]] = {tid: [] for tid in anchors}
+    for kw, e in kw_emb.items():
+        best = max(anchors, key=lambda tid: _cos(e, anchors[tid]))
+        assigned[best].append((kw, e))
+
+    per_kw = {tid: [kw for kw, _ in items][:clustering_max_nodes] for tid, items in assigned.items()}
+    per_emb = {tid: [e for _, e in items][:clustering_max_nodes] for tid, items in assigned.items()}
+    cluster = run_clustering(
+        per_topic_keywords=per_kw, per_topic_embeddings=per_emb,
+        edge_threshold=edge_threshold, resolution=resolution,
+    )
+
+    silos = []
+    for tid, name in topic_names.items():
+        groupings = cluster.per_topic.get(tid, [])
+        sizes = sorted(g.size for g in groupings)
+        silos.append({
+            "silo": name,
+            "assigned_keywords": len(assigned.get(tid, [])),
+            "groupings": len(groupings),
+            "multi_kw_groupings": sum(1 for s in sizes if s >= 2),
+            "singletons": sum(1 for s in sizes if s == 1),
+            "median_size": sizes[len(sizes) // 2] if sizes else 0,
+        })
+    silos.sort(key=lambda s: s["multi_kw_groupings"], reverse=True)
+    return {
+        "relevance_threshold": relevance_threshold,
+        "edge_threshold": edge_threshold,
+        "resolution": resolution,
+        "total_active_unique": len(kw_emb),
+        "silos": silos,
+    }
+
+
 def routing_diagnostic(
     *,
     seed: str,
