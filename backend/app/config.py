@@ -92,6 +92,10 @@ class Settings(BaseSettings):
 
     # M4 relevance gate (PRD §7.6) + clustering (§7.9).
     relevance_threshold: float = 0.52        # cosine cutoff vs parent topic embedding
+    # Lever 3: assign each keyword to its single best silo (argmax cosine to the
+    # silo anchor) instead of keeping it active in every silo it passes in. Kills
+    # the cross-silo duplication that dedup otherwise has to clean up.
+    relevance_assign_best_silo: bool = True
     relevance_embed_batch: int = 1000        # keywords per embedding request
     clustering_edge_threshold: float = 0.55  # min cosine for a graph edge
     # Louvain resolution: >1 favors more, smaller communities (finer granularity).

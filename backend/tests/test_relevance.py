@@ -204,3 +204,36 @@ def test_peer_entity_filter_drops_competitor_not_seed():
     assert by_kw["retatrutide dosage"] == "active"
     # not a peer and not seed -> NOT peer-filtered (left to the relevance score)
     assert by_kw["clinical trials europe"] != "filtered_junk"
+
+
+def test_assign_best_silo_routes_keyword_to_one_silo():
+    # "kw" is fanned into both silos but embeds toward silo A; with Lever 3 it's
+    # active only in A and filtered_relevance in B (no cross-silo duplicate).
+    embed = make_embed_fn({"kw one": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={
+            "A": {"kw one": ["x"]},
+            "B": {"kw one": ["x"]},
+        },
+        topic_embeddings={"A": _unit(1, 0), "B": _unit(0, 1)},
+        embed_fn=embed,
+        threshold=0.5,
+        assign_best_silo=True,
+    )
+    a = {g.keyword: g.status for g in r.per_topic["A"]}
+    b = {g.keyword: g.status for g in r.per_topic["B"]}
+    assert a["kw one"] == "active"               # best silo keeps it
+    assert b["kw one"] == "filtered_relevance"   # routed away from B
+
+
+def test_without_assign_best_silo_keyword_stays_in_both():
+    # Default (flag off): the keyword is active in every silo it passes.
+    embed = make_embed_fn({"kw one": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={"A": {"kw one": ["x"]}, "B": {"kw one": ["x"]}},
+        topic_embeddings={"A": _unit(1, 0), "B": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+    )
+    assert {g.status for g in r.per_topic["A"]} == {"active"}
+    assert {g.status for g in r.per_topic["B"]} == {"active"}

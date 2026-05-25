@@ -155,6 +155,7 @@ def run_relevance_gate(
     batch_size: int = 1000,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
+    assign_best_silo: bool = False,
 ) -> RelevanceResult:
     """Classify every keyword in `per_topic` as active / filtered_relevance /
     filtered_junk. `embed_fn(list[str]) -> list[list[float]]` embeds keywords.
@@ -199,6 +200,29 @@ def run_relevance_gate(
             "degraded); they were kept active."
         )
 
+    # 2b. Lever 3: assign each keyword to its single best silo (argmax cosine to
+    #     the silo's anchor) among the silos it appears in. A keyword fanned to
+    #     many silos then lands in exactly one — no cross-silo duplicate articles.
+    #     Scored against its assigned silo; elsewhere it's filtered_relevance.
+    best_topic_for_kw: dict[str, str] = {}
+    if assign_best_silo and emb_by_kw:
+        anchor_vecs = {
+            tid: np.asarray(a, dtype=np.float64)
+            for tid, a in topic_embeddings.items() if a
+        }
+        cand_topics: dict[str, list[str]] = {}
+        for tid, cands in cands_by_topic.items():
+            if tid in anchor_vecs:
+                for kw, _ in cands:
+                    if kw in emb_by_kw:
+                        cand_topics.setdefault(kw, []).append(tid)
+        for kw, tids in cand_topics.items():
+            e = emb_by_kw[kw]
+            best_topic_for_kw[kw] = max(
+                tids, key=lambda tid: float(np.dot(e, anchor_vecs[tid])
+                                            / ((np.linalg.norm(e) * np.linalg.norm(anchor_vecs[tid])) or 1.0))
+            )
+
     # 3. Score per topic against that topic's own anchor.
     for tid, cands in cands_by_topic.items():
         classified: list[GatedKeyword] = list(junk_by_topic[tid])
@@ -227,7 +251,12 @@ def run_relevance_gate(
             sims = _cosine_to_anchor(vectors, anchor_vec)
             for (kw, src, emb), sim in zip(scorable, sims):
                 score = float(sim)
-                if score >= threshold:
+                # Lever 3: only the keyword's best silo can hold it active.
+                if assign_best_silo and best_topic_for_kw.get(kw, tid) != tid:
+                    classified.append(
+                        GatedKeyword(kw, src, "filtered_relevance", relevance_score=score)
+                    )
+                elif score >= threshold:
                     classified.append(
                         GatedKeyword(kw, src, "active",
                                      relevance_score=score, embedding=emb.tolist())

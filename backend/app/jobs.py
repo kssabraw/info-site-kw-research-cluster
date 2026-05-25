@@ -93,6 +93,7 @@ def run_expand_job(session_id: str) -> None:
             embed_fn=get_llm().embed,
             seed_terms=[seed, *(session.get("aliases") or [])],
             peer_terms=session.get("peer_entities") or [],
+            assign_best_silo=s.relevance_assign_best_silo,
             keyword_ideas_limit=s.keyword_ideas_limit,
             keyword_suggestions_limit=s.keyword_suggestions_limit,
             query_fanouts_limit=s.query_fanouts_limit,
@@ -234,6 +235,7 @@ def run_regate_job(
             clustering_max_nodes=s.clustering_max_nodes,
             seed_terms=seed_terms,
             peer_terms=peer_terms,
+            assign_best_silo=s.relevance_assign_best_silo,
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
