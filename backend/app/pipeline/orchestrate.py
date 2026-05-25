@@ -20,6 +20,8 @@ outrun the gateway. Background execution is deferred to M11 (handoff §4).
 import logging
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from app.dataforseo import DataForSEOClient
 from app.pipeline.clustering import run_clustering
 from app.pipeline.competitor import MineTopic, run_competitor_mining
@@ -27,6 +29,98 @@ from app.pipeline.expansion import ExpansionTopic, build_anchor, run_expansion
 from app.pipeline.relevance import GatedKeyword, run_relevance_gate
 
 logger = logging.getLogger(__name__)
+
+
+def _cos(a, b) -> float:
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def routing_diagnostic(
+    *,
+    seed: str,
+    topics: list[tuple[str, str]],
+    rationale_embeddings: dict[str, list[float] | None],
+    active_by_topic: dict[str, list[str]],
+    probes: list[str],
+    embed_fn,
+) -> dict:
+    """Read-only investigation of how to route a keyword to its correct silo.
+
+    Compares candidate per-silo "anchor" representations by routing each probe
+    keyword to its argmax-cosine silo under each strategy, plus the resulting
+    per-silo spread when every active keyword is routed. No persistence — this is
+    purely diagnostic, to pick the routing signal empirically rather than guess.
+
+    Strategies:
+      - rationale_anchor : the current embed(seed+rationale+audience)
+      - silo_name        : embed(name)
+      - seed_plus_name   : embed(f"{seed} {name}")
+      - keyword_centroid : mean embedding of the silo's own active keywords
+    """
+    ids = [tid for tid, _ in topics]
+    names = [name for _, name in topics]
+
+    name_vecs = embed_fn(names)
+    seedname_vecs = embed_fn([f"{seed} {name}" for name in names])
+
+    centroid_vecs: dict[str, np.ndarray | None] = {}
+    all_active: list[str] = []
+    for tid in ids:
+        kws = active_by_topic.get(tid) or []
+        all_active.extend(kws)
+    # Embed every sampled active keyword once; reuse for centroids + spread.
+    active_emb: dict[str, np.ndarray] = {}
+    if all_active:
+        uniq = list(dict.fromkeys(all_active))
+        vecs = embed_fn(uniq)
+        active_emb = {kw: np.asarray(v, dtype=np.float64) for kw, v in zip(uniq, vecs)}
+    for tid in ids:
+        kws = [k for k in (active_by_topic.get(tid) or []) if k in active_emb]
+        centroid_vecs[tid] = (
+            np.mean(np.stack([active_emb[k] for k in kws]), axis=0) if kws else None
+        )
+
+    strategies: dict[str, list] = {
+        "rationale_anchor": [rationale_embeddings.get(tid) for tid in ids],
+        "silo_name": list(name_vecs),
+        "seed_plus_name": list(seedname_vecs),
+        "keyword_centroid": [centroid_vecs[tid] for tid in ids],
+    }
+
+    def route(vec, anchors) -> str | None:
+        best_idx, best_score = None, -2.0
+        for idx, a in enumerate(anchors):
+            if a is None:
+                continue
+            sc = _cos(vec, a)
+            if sc > best_score:
+                best_score, best_idx = sc, idx
+        return names[best_idx] if best_idx is not None else None
+
+    probe_vecs = embed_fn(probes) if probes else []
+    probe_routing = [
+        {"keyword": p, **{strat: route(pv, anchors) for strat, anchors in strategies.items()}}
+        for p, pv in zip(probes, probe_vecs)
+    ]
+
+    # Per-silo spread when every sampled active keyword is routed (a good signal
+    # spreads keywords across silos; a bad one dumps them into one).
+    spread: dict[str, dict[str, int]] = {}
+    for strat, anchors in strategies.items():
+        counts = {name: 0 for name in names}
+        for kw, vec in active_emb.items():
+            dest = route(vec, anchors)
+            if dest is not None:
+                counts[dest] += 1
+        spread[strat] = counts
+
+    return {"silos": names, "probe_routing": probe_routing, "active_spread": spread,
+            "active_sampled": len(active_emb)}
 
 _SEED_MINE_ID = "__seed__"
 
