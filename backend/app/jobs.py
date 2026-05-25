@@ -164,10 +164,15 @@ def run_plan_job(session_id: str) -> None:
             candidate_serp_top_n=s.candidate_serp_top_n,
             candidate_serp_max_workers=s.candidate_serp_max_workers,
             candidate_serp_time_budget_s=s.candidate_serp_time_budget_s,
+            groupings_per_call=s.orchestrator_groupings_per_call,
+            max_workers=s.orchestrator_max_workers,
             dedup_primary_cosine_threshold=s.dedup_primary_cosine_threshold,
             dedup_serp_overlap_min=s.dedup_serp_overlap_min,
         )
         if all_degraded(result):
+            # Clear any stale prior plan so an errored run doesn't leave clusters
+            # behind that disagree with status=error (review M5).
+            store.reset_article_planning(session_id)
             store.update_session(
                 session_id,
                 {

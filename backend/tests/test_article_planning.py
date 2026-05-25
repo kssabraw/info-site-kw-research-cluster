@@ -1,16 +1,21 @@
 """M5 article planning tests (PRD §7.10): per-topic orchestrator, validation,
 degraded fallback, cross-topic dedup, and the candidate-SERP fetch."""
 
+import threading
+
 from app.llm import AnthropicError
 from app.pipeline.article_planning.dedup import cross_topic_dedup
 from app.pipeline.article_planning.models import (
     ArticleRecord,
+    CoverageGapRecord,
     GroupingInput,
     PlanResult,
     TopicInput,
     TopicPlan,
 )
 from app.pipeline.article_planning.orchestrate_articles import (
+    _chunk,
+    _merge_chunk_plans,
     all_degraded,
     plan_topic,
     run_article_planning,
@@ -25,9 +30,11 @@ class FakeOrchestrator:
         self.payload = payload
         self.raises = raises
         self.calls = 0
+        self._lock = threading.Lock()
 
     def call_tool(self, **kwargs):
-        self.calls += 1
+        with self._lock:
+            self.calls += 1
         if self.raises:
             raise AnthropicError("boom")
         return self.payload
@@ -257,3 +264,52 @@ def test_run_article_planning_end_to_end_with_fakes():
     )
     assert result.counts()["articles"] == 1
     assert all_degraded(result) is False
+
+
+# ---- H1: chunked, parallel orchestration ----------------------------------
+def _multi_grouping_topic(n: int) -> TopicInput:
+    return TopicInput(
+        id="t1", name="Benefits", rationale="why", relationship_type="effect_or_outcome",
+        embedding=[1.0, 0.0],
+        groupings=[
+            GroupingInput(id=f"t1:g{i}", representative=f"kw{i} a",
+                          cohesion=0.8, size=2, keywords=[f"kw{i} a", f"kw{i} b"])
+            for i in range(n)
+        ],
+    )
+
+
+def test_chunk_splits_evenly():
+    assert _chunk([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+    assert _chunk([], 3) == []
+    assert _chunk([1, 2], 0) == [[1], [2]]  # size coerced to >=1
+
+
+def test_run_article_planning_chunks_one_call_per_chunk():
+    # 4 groupings, 2 per call -> 2 orchestrator calls (not 1 giant call).
+    empty = {"articles": [], "dropped_keywords": [], "coverage_gaps": []}
+    orch = FakeOrchestrator(empty)
+    run_article_planning(
+        topics=[_multi_grouping_topic(4)],
+        dfs=_SerpDFS(),
+        orchestrator=orch,
+        embed_fn=lambda kws: [[1.0, 0.0] for _ in kws],
+        groupings_per_call=2,
+        max_workers=1,
+    )
+    assert orch.calls == 2
+
+
+def test_merge_chunk_plans_degrade_and_gap_dedup():
+    g = CoverageGapRecord(suggested_title="Long-term safety", target_keyword=None, rationale="r")
+    c1 = TopicPlan(topic_id="t1", degraded=True, gaps=[g])
+    c2 = TopicPlan(topic_id="t1", degraded=False,
+                   gaps=[CoverageGapRecord("long-term  SAFETY", None, "dup")])
+    merged = _merge_chunk_plans("t1", [c1, c2])
+    # one chunk healthy -> topic not degraded; gaps deduped by normalized title
+    assert merged.degraded is False
+    assert len(merged.gaps) == 1
+    # every chunk degraded -> topic degraded
+    allbad = _merge_chunk_plans("t1", [TopicPlan("t1", degraded=True),
+                                       TopicPlan("t1", degraded=True)])
+    assert allbad.degraded is True

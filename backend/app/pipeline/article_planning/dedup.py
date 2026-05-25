@@ -53,7 +53,8 @@ def cross_topic_dedup(
 
     primaries = [a.primary_keyword for a in articles]
     try:
-        vectors = [np.asarray(v, dtype=np.float32) for v in embed_fn(primaries)]
+        raw = embed_fn(primaries)
+        vectors = [np.asarray(v, dtype=np.float32) for v in raw]
     except Exception as exc:  # noqa: BLE001 — dedup is best-effort; never sink the run
         logger.warning(
             "degraded",
@@ -61,6 +62,16 @@ def cross_topic_dedup(
                    "reason": f"primary embedding failed: {exc}"},
         )
         result.dedup_log = {"collisions": [], "error": "embedding_failed"}
+        return
+    # A short/over-long embedding batch would desync vectors from articles and
+    # IndexError mid-loop; skip dedup rather than crash a successful plan (M3).
+    if len(vectors) != len(articles):
+        logger.warning(
+            "degraded",
+            extra={"event": "degraded", "step": "cross_topic_dedup",
+                   "reason": f"embedding count mismatch ({len(vectors)} != {len(articles)})"},
+        )
+        result.dedup_log = {"collisions": [], "error": "embedding_count_mismatch"}
         return
 
     topic_vecs = {
