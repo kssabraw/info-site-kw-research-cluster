@@ -15,6 +15,7 @@ from app.pipeline.article_planning.models import (
 )
 from app.pipeline.article_planning.orchestrate_articles import (
     _chunk,
+    direct_plan_topic,
     _merge_chunk_plans,
     all_degraded,
     plan_topic,
@@ -334,3 +335,37 @@ def test_dedup_centering_routes_to_distinctive_silo():
     survivors = [a.primary_keyword for p in result.per_topic for a in p.articles]
     assert survivors == ["how does it work"]  # silo A kept it, not broad silo B
     assert result.dedup_log["collisions"][0]["winner_topic"] == "A"
+
+
+# ---- Direct mode (no orchestrator; includes singletons) -------------------
+def test_direct_plan_topic_includes_singletons():
+    topic = TopicInput(
+        id="t1", name="Benefits", rationale="", relationship_type="effect_or_outcome",
+        embedding=[1.0, 0.0],
+        groupings=[
+            GroupingInput(id="t1:g0", representative="reta weight loss", cohesion=0.8, size=2,
+                          keywords=["reta weight loss", "reta weight loss results"]),
+            GroupingInput(id="t1:g1", representative="reta cost", cohesion=1.0, size=1,
+                          keywords=["reta cost"]),  # singleton -> still an article
+        ],
+    )
+    plan = direct_plan_topic(topic)
+    assert plan.degraded is False
+    assert len(plan.articles) == 2
+    by_primary = {a.primary_keyword: a for a in plan.articles}
+    assert by_primary["reta weight loss"].supporting_keywords == ["reta weight loss results"]
+    assert by_primary["reta cost"].supporting_keywords == []  # singleton kept
+
+
+def test_run_article_planning_direct_skips_orchestrator():
+    topic = _multi_grouping_topic(3)
+    orch = FakeOrchestrator({"articles": [], "dropped_keywords": [], "coverage_gaps": []})
+    result = run_article_planning(
+        topics=[topic],
+        dfs=_SerpDFS(),
+        orchestrator=orch,
+        embed_fn=lambda kws: [[1.0, 0.0] for _ in kws],
+        direct=True,
+    )
+    assert orch.calls == 0                      # orchestrator never called
+    assert result.counts()["articles"] == 3     # one per grouping

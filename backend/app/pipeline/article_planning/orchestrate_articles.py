@@ -335,6 +335,31 @@ def _merge_chunk_plans(topic_id: str, chunk_plans: list[TopicPlan]) -> TopicPlan
     return merged
 
 
+def direct_plan_topic(topic: TopicInput) -> TopicPlan:
+    """Direct mode (no LLM): every grouping becomes an article — representative as
+    primary, the rest as supporting keywords. Singletons are included as
+    one-keyword articles (deliberate; the user opted to keep the long tail). Not
+    degraded — this is an intentional path, not a fallback. Intent defaults to
+    informational; H2 outlines are left to the downstream Brief Generator."""
+    plan = TopicPlan(topic_id=topic.id, degraded=False)
+    for g in topic.groupings:
+        supporting = [k for k in g.keywords if _norm(k) != _norm(g.representative)]
+        plan.articles.append(
+            ArticleRecord(
+                topic_id=topic.id,
+                primary_keyword=g.representative,
+                supporting_keywords=supporting,
+                intent=DEFAULT_INTENT,
+                suggested_h2s=[],
+                source_statistical_grouping_id=g.id,
+                orchestrator_notes="Direct mode (statistical grouping, no orchestrator).",
+                serp_top_urls=[],
+            )
+        )
+    plan.log = {"degraded": False, "direct": True, "article_count": len(plan.articles)}
+    return plan
+
+
 def run_article_planning(
     *,
     topics: list[TopicInput],
@@ -348,16 +373,40 @@ def run_article_planning(
     max_workers: int = 5,
     dedup_primary_cosine_threshold: float = 0.85,
     dedup_serp_overlap_min: float = 2 / 3,
+    direct: bool = False,
 ) -> PlanResult:
     """Full §7.10 pass: SERP for each candidate primary -> per-silo orchestrator
     (chunked + parallel) -> cross-topic dedup. Returns the assembled plan;
     persistence is the caller's job.
+
+    With `direct=True`, skips the SERP fetch and the LLM orchestrator entirely:
+    every grouping (incl. singletons) becomes an article, then cross-topic dedup
+    collapses cross-silo duplicates. Fast/cheap/deterministic, maximal article
+    count, no intent/H2 inference.
 
     Each silo is planned in chunks of `groupings_per_call` groupings so no single
     Opus call overruns its token/timeout budget at scale (200+ groupings); chunks
     run in parallel. A chunk failure degrades only that chunk to passthrough; a
     topic is degraded only if all its chunks did. The caller treats an all-topics-
     degraded run as an error state (PRD §16.2 failure table)."""
+    if direct:
+        result = PlanResult()
+        for topic in topics:
+            result.per_topic.append(direct_plan_topic(topic))
+        cross_topic_dedup(
+            result,
+            topic_embeddings={t.id: t.embedding for t in topics},
+            embed_fn=embed_fn,
+            primary_cosine_threshold=dedup_primary_cosine_threshold,
+            serp_overlap_min=dedup_serp_overlap_min,
+        )
+        logger.info(
+            "step_complete",
+            extra={"event": "step_complete", "step": "article_planning_direct",
+                   "topic_count": len(topics), **result.counts()},
+        )
+        return result
+
     representatives = [g.representative for t in topics for g in t.groupings]
     serp = fetch_candidate_serps(
         keywords=representatives,

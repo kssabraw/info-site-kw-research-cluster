@@ -47,8 +47,8 @@ def submit_expand(session_id: str) -> None:
     _EXECUTOR.submit(run_expand_job, session_id)
 
 
-def submit_plan(session_id: str) -> None:
-    _EXECUTOR.submit(run_plan_job, session_id)
+def submit_plan(session_id: str, direct: bool = False) -> None:
+    _EXECUTOR.submit(run_plan_job, session_id, direct)
 
 
 def submit_regate(
@@ -133,8 +133,9 @@ def run_expand_job(session_id: str) -> None:
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
 
 
-def run_plan_job(session_id: str) -> None:
-    """§7.10: SERP for candidate primaries + per-silo orchestrator + dedup."""
+def run_plan_job(session_id: str, direct: bool = False) -> None:
+    """§7.10: SERP for candidate primaries + per-silo orchestrator + dedup.
+    With direct=True, skips the orchestrator (groupings -> articles + dedup)."""
     bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
@@ -174,6 +175,7 @@ def run_plan_job(session_id: str) -> None:
             max_workers=s.orchestrator_max_workers,
             dedup_primary_cosine_threshold=s.dedup_primary_cosine_threshold,
             dedup_serp_overlap_min=s.dedup_serp_overlap_min,
+            direct=direct,
         )
         if all_degraded(result):
             # Clear any stale prior plan so an errored run doesn't leave clusters
