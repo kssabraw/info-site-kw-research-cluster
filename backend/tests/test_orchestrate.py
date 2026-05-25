@@ -5,6 +5,7 @@ from app.pipeline.orchestrate import (
     PipelineTopic,
     cluster_preview,
     routing_diagnostic,
+    simulate_best_silo_clustering,
     gate_and_cluster,
     run_refinement_pipeline,
 )
@@ -200,3 +201,31 @@ def test_routing_diagnostic_compares_strategies():
     assert r["mechanism of action"]["silo_name"] == "mechanism"
     assert r["trial enrollment"]["silo_name"] == "trials"
     assert out["active_spread"]["silo_name"] == {"mechanism": 1, "trials": 1}
+
+
+def test_simulate_best_silo_clustering_reassigns_then_clusters():
+    # Two silos with orthogonal anchors; keywords each lean to one silo and pair
+    # up so each silo forms one 2-keyword grouping after argmax reassignment.
+    vecs = {
+        "mech a": _unit(0.0, 1.0), "mech b": _unit(0.02, 1.0),
+        "trial a": _unit(1.0, 0.0), "trial b": _unit(1.0, 0.02),
+    }
+
+    def embed(texts):
+        return [vecs[t] for t in texts]
+
+    # Pool fans every keyword into both silos (the thing Lever 3 undoes).
+    both = {"mech a": ["s"], "mech b": ["s"], "trial a": ["s"], "trial b": ["s"]}
+    out = simulate_best_silo_clustering(
+        per_topic_lists={"m": dict(both), "t": dict(both)},
+        topic_names={"m": "mechanism", "t": "trials"},
+        topic_embeddings={"m": _unit(0.0, 1.0), "t": _unit(1.0, 0.0)},
+        embed_fn=embed,
+        relevance_threshold=0.4,
+        edge_threshold=0.55,
+        resolution=1.0,
+    )
+    by_silo = {s["silo"]: s for s in out["silos"]}
+    assert by_silo["mechanism"]["assigned_keywords"] == 2   # mech a/b routed here
+    assert by_silo["trials"]["assigned_keywords"] == 2      # trial a/b routed here
+    assert out["total_active_unique"] == 4
