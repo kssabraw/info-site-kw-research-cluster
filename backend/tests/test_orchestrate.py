@@ -4,6 +4,7 @@ from app.dataforseo import DataForSEOClient
 from app.pipeline.orchestrate import (
     PipelineTopic,
     cluster_preview,
+    routing_diagnostic,
     gate_and_cluster,
     run_refinement_pipeline,
 )
@@ -174,3 +175,28 @@ def test_ungated_session_still_mines_seed_only():
     active = {g.keyword for g in r.per_topic_gated["t1"] if g.status == "active"}
     assert "seed competitor kw" in active          # seed always mined
     assert "gated competitor kw" not in active      # nothing gated
+
+
+def test_routing_diagnostic_compares_strategies():
+    vecs = {
+        "mechanism": [0.0, 1.0], "trials": [1.0, 0.0],
+        "retatrutide mechanism": [0.0, 1.0], "retatrutide trials": [1.0, 0.0],
+        "how does it work": [0.0, 1.0], "clinical trial signup": [1.0, 0.0],
+        "mechanism of action": [0.0, 1.0], "trial enrollment": [1.0, 0.0],
+    }
+
+    def embed(texts):
+        return [vecs[t] for t in texts]
+
+    out = routing_diagnostic(
+        seed="retatrutide",
+        topics=[("m", "mechanism"), ("t", "trials")],
+        rationale_embeddings={"m": [0.0, 1.0], "t": [1.0, 0.0]},
+        active_by_topic={"m": ["how does it work"], "t": ["clinical trial signup"]},
+        probes=["mechanism of action", "trial enrollment"],
+        embed_fn=embed,
+    )
+    r = {x["keyword"]: x for x in out["probe_routing"]}
+    assert r["mechanism of action"]["silo_name"] == "mechanism"
+    assert r["trial enrollment"]["silo_name"] == "trials"
+    assert out["active_spread"]["silo_name"] == {"mechanism": 1, "trials": 1}

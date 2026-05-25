@@ -18,7 +18,7 @@ from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
-from app.pipeline.orchestrate import cluster_preview
+from app.pipeline.orchestrate import cluster_preview, routing_diagnostic
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -65,6 +65,12 @@ class RegateBody(BaseModel):
     relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
+
+
+class RoutingDiagnosticBody(BaseModel):
+    # Probe keywords to route under each candidate silo-anchor strategy.
+    probes: list[str] = Field(min_length=1, max_length=50)
+    active_sample_per_topic: int = Field(default=80, ge=1, le=400)
 
 
 class ClusterPreviewBody(BaseModel):
@@ -353,6 +359,34 @@ def regate_session(
         "clustering_edge_threshold": edge,
         "clustering_resolution": resolution,
     }
+
+
+@router.post("/sessions/{session_id}/routing-diagnostic")
+def routing_diagnostic_endpoint(
+    session_id: str, body: RoutingDiagnosticBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Read-only: compare candidate silo-anchor strategies by routing probe
+    keywords (and the active pool) to their argmax-cosine silo. Used to pick the
+    keyword->silo routing signal empirically. No persistence, no status change."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    session = store.get_session(session_id) or {}
+    topics = store.list_topics(session_id)
+    if not topics:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No silos.")
+    active_by_topic = {
+        t["id"]: [k["keyword"] for k in store.list_keywords(
+            session_id, topic_id=t["id"], status="active", limit=body.active_sample_per_topic)]
+        for t in topics
+    }
+    return routing_diagnostic(
+        seed=session.get("seed_keyword", ""),
+        topics=[(t["id"], t["name"]) for t in topics],
+        rationale_embeddings=store.get_topic_embeddings(session_id),
+        active_by_topic=active_by_topic,
+        probes=body.probes,
+        embed_fn=get_llm().embed,
+    )
 
 
 @router.post("/sessions/{session_id}/cluster-preview")
