@@ -50,6 +50,7 @@ def simulate_best_silo_clustering(
     edge_threshold: float,
     resolution: float,
     clustering_max_nodes: int = 2500,
+    examples_per_silo: int = 6,
 ) -> dict:
     """Read-only dry run of Lever 3. Gates the pool, then assigns each unique
     active keyword to its single best silo (argmax raw cosine to the rationale
@@ -92,6 +93,14 @@ def simulate_best_silo_clustering(
     for tid, name in topic_names.items():
         groupings = cluster.per_topic.get(tid, [])
         sizes = sorted(g.size for g in groupings)
+        # Example article candidates: the largest multi-keyword groupings, each
+        # shown as primary (medoid) + the rest of its keywords.
+        multi = sorted((g for g in groupings if g.size >= 2),
+                       key=lambda g: g.size, reverse=True)
+        examples = [
+            {"primary": g.representative, "size": g.size, "keywords": g.keywords[:15]}
+            for g in multi[:examples_per_silo]
+        ]
         silos.append({
             "silo": name,
             "assigned_keywords": len(assigned.get(tid, [])),
@@ -99,6 +108,7 @@ def simulate_best_silo_clustering(
             "multi_kw_groupings": sum(1 for s in sizes if s >= 2),
             "singletons": sum(1 for s in sizes if s == 1),
             "median_size": sizes[len(sizes) // 2] if sizes else 0,
+            "example_articles": examples,
         })
     silos.sort(key=lambda s: s["multi_kw_groupings"], reverse=True)
     return {
