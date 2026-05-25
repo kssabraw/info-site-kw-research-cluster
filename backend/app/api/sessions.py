@@ -486,11 +486,22 @@ def cluster_preview_endpoint(
     )
 
 
+class PlanArticlesBody(BaseModel):
+    # direct=True skips the LLM orchestrator: every grouping (incl. singletons)
+    # becomes an article, then cross-topic dedup collapses duplicates.
+    direct: bool = False
+
+
 @router.post("/sessions/{session_id}/plan-articles", status_code=status.HTTP_202_ACCEPTED)
-def plan_articles(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+def plan_articles(
+    session_id: str,
+    user: AuthedUser = Depends(require_user),
+    body: PlanArticlesBody | None = None,
+) -> dict:
     """Kick off M5 article planning (§7.10) in the background: SERP for candidate
     primaries -> per-silo orchestrator -> cross-topic dedup -> persist clusters +
-    coverage gaps. Returns immediately; poll GET /summary for status."""
+    coverage gaps. With body {"direct": true}, skips the orchestrator (groupings
+    -> articles directly). Returns immediately; poll GET /summary for status."""
     session = _require_session(user, session_id)
     bind_session_id(session_id)
     if not (session.get("statistical_clustering_log") or {}).get("topics"):
@@ -503,8 +514,8 @@ def plan_articles(session_id: str, user: AuthedUser = Depends(require_user)) -> 
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
         )
-    jobs.submit_plan(session_id)
-    return {"status": "running", "session_id": session_id}
+    jobs.submit_plan(session_id, direct=bool(body and body.direct))
+    return {"status": "running", "session_id": session_id, "direct": bool(body and body.direct)}
 
 
 @router.get("/sessions/{session_id}/clusters")
