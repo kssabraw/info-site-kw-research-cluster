@@ -313,3 +313,24 @@ def test_merge_chunk_plans_degrade_and_gap_dedup():
     allbad = _merge_chunk_plans("t1", [TopicPlan("t1", degraded=True),
                                        TopicPlan("t1", degraded=True)])
     assert allbad.degraded is True
+
+
+def test_dedup_centering_routes_to_distinctive_silo():
+    # a1 (silo A) and b1 (silo B) collide. Silo B's embedding is large and
+    # mean-aligned (a "broad" silo); raw cosine would hand the article to B.
+    # Common-mode removal (Lever 2) rewards A's distinctive direction, so A wins.
+    a1 = _article("A", "how does it work")
+    b1 = _article("B", "how it works")  # near-identical -> collision
+    result = PlanResult(per_topic=[
+        TopicPlan(topic_id="A", articles=[a1]),
+        TopicPlan(topic_id="B", articles=[b1]),
+    ])
+    vecs = {"how does it work": [1.0, 1.0], "how it works": [1.0, 1.0]}
+    cross_topic_dedup(
+        result,
+        topic_embeddings={"A": [0.0, 1.0], "B": [3.0, 3.0]},
+        embed_fn=lambda kws: [vecs[k] for k in kws],
+    )
+    survivors = [a.primary_keyword for p in result.per_topic for a in p.articles]
+    assert survivors == ["how does it work"]  # silo A kept it, not broad silo B
+    assert result.dedup_log["collisions"][0]["winner_topic"] == "A"
