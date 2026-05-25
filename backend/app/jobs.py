@@ -56,8 +56,11 @@ def submit_regate(
     threshold: float,
     edge_threshold: float,
     resolution: float,
+    seed_terms: list[str],
+    peer_terms: list[str],
 ) -> None:
-    _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold, resolution)
+    _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold,
+                     resolution, seed_terms, peer_terms)
 
 
 def run_expand_job(session_id: str) -> None:
@@ -74,8 +77,9 @@ def run_expand_job(session_id: str) -> None:
             if coverage_mode == "comprehensive"
             else s.competitor_top_n_standard
         )
+        seed = session["seed_keyword"]
         result = run_refinement_pipeline(
-            seed=session["seed_keyword"],
+            seed=seed,
             topics=[
                 PipelineTopic(
                     id=t["id"],
@@ -87,6 +91,8 @@ def run_expand_job(session_id: str) -> None:
             ],
             dfs=get_dataforseo(),
             embed_fn=get_llm().embed,
+            seed_terms=[seed, *(session.get("aliases") or [])],
+            peer_terms=session.get("peer_entities") or [],
             keyword_ideas_limit=s.keyword_ideas_limit,
             keyword_suggestions_limit=s.keyword_suggestions_limit,
             query_fanouts_limit=s.query_fanouts_limit,
@@ -202,7 +208,8 @@ def run_plan_job(session_id: str) -> None:
 
 
 def run_regate_job(
-    session_id: str, threshold: float, edge_threshold: float, resolution: float
+    session_id: str, threshold: float, edge_threshold: float, resolution: float,
+    seed_terms: list[str], peer_terms: list[str],
 ) -> None:
     """Re-gate + re-cluster a session's stored keyword pool at a new threshold and
     clustering granularity, skipping DataForSEO. Clears any prior article plan."""
@@ -223,6 +230,8 @@ def run_regate_job(
             clustering_edge_threshold=edge_threshold,
             clustering_resolution=resolution,
             clustering_max_nodes=s.clustering_max_nodes,
+            seed_terms=seed_terms,
+            peer_terms=peer_terms,
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)

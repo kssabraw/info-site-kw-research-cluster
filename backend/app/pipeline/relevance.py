@@ -78,6 +78,27 @@ def _is_junk(keyword: str) -> bool:
     return any(w in _BLOCKED_TOKENS for w in words)
 
 
+def _term_pattern(terms: list[str] | None):
+    """Whole-word alternation regex for a list of seed/peer terms, or None."""
+    cleaned = [re.escape(t.strip().lower()) for t in (terms or []) if t and t.strip()]
+    if not cleaned:
+        return None
+    return re.compile(r"\b(?:" + "|".join(cleaned) + r")\b")
+
+
+def _off_niche(keyword: str, seed_pat, peer_pat) -> bool:
+    """Generic peer-entity filter (PRD §5.1, §7.6): a keyword is off-niche if it
+    names a peer entity (competitor/sibling) but not the seed (or an alias). Seed-
+    agnostic — the seed/peer term lists are supplied per-seed (LLM-generated at
+    grounding), so this works for any subject. A keyword that names both the seed
+    and a peer (e.g. "tirzepatide vs retatrutide") is kept as a legit comparison."""
+    if peer_pat is None:
+        return False
+    if seed_pat is not None and seed_pat.search(keyword):
+        return False
+    return bool(peer_pat.search(keyword))
+
+
 def _cosine_to_anchor(vectors: np.ndarray, anchor: np.ndarray) -> np.ndarray:
     """Cosine similarity of each row in `vectors` to `anchor`. Zero vectors yield 0."""
     anchor_norm = np.linalg.norm(anchor)
@@ -132,13 +153,21 @@ def run_relevance_gate(
     topic_names: dict[str, str] | None = None,
     threshold: float = 0.62,
     batch_size: int = 1000,
+    seed_terms: list[str] | None = None,
+    peer_terms: list[str] | None = None,
 ) -> RelevanceResult:
     """Classify every keyword in `per_topic` as active / filtered_relevance /
     filtered_junk. `embed_fn(list[str]) -> list[list[float]]` embeds keywords.
     A topic with no embedding can't be scored — its keywords are kept active
-    (score null) and the run is flagged degraded for that silo."""
+    (score null) and the run is flagged degraded for that silo.
+
+    `seed_terms` (seed + aliases) and `peer_terms` (competitor/sibling entities)
+    drive the generic peer-entity filter: a keyword naming a peer but not the
+    seed is tagged filtered_junk (off-niche). Both are seed-agnostic lists."""
     result = RelevanceResult()
     topic_names = topic_names or {}
+    seed_pat = _term_pattern(seed_terms)
+    peer_pat = _term_pattern(peer_terms)
 
     # 1. Junk filter per topic; collect the unique non-junk keywords to embed.
     #    Only embed keywords that belong to at least one topic that HAS an
@@ -152,7 +181,7 @@ def run_relevance_gate(
         cands: list[tuple[str, list[str]]] = []
         for kw, sources in pool.items():
             srt = sorted(sources)
-            if _is_junk(kw):
+            if _is_junk(kw) or _off_niche(kw, seed_pat, peer_pat):
                 junk.append(GatedKeyword(kw, srt, "filtered_junk"))
             else:
                 cands.append((kw, srt))
