@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     competitor_time_budget_s: int = 240
 
     # M4 relevance gate (PRD §7.6) + clustering (§7.9).
-    relevance_threshold: float = 0.62        # cosine cutoff vs parent topic embedding
+    relevance_threshold: float = 0.52        # cosine cutoff vs parent topic embedding
     relevance_embed_batch: int = 1000        # keywords per embedding request
     clustering_edge_threshold: float = 0.55  # min cosine for a graph edge
     # Louvain resolution: >1 favors more, smaller communities (finer granularity).

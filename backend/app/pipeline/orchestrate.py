@@ -51,6 +51,8 @@ def simulate_best_silo_clustering(
     resolution: float,
     clustering_max_nodes: int = 2500,
     examples_per_silo: int = 6,
+    seed_terms: list[str] | None = None,
+    peer_terms: list[str] | None = None,
 ) -> dict:
     """Read-only dry run of Lever 3. Gates the pool, then assigns each unique
     active keyword to its single best silo (argmax raw cosine to the rationale
@@ -64,6 +66,8 @@ def simulate_best_silo_clustering(
         embed_fn=embed_fn,
         topic_names=topic_names,
         threshold=relevance_threshold,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
     )
     anchors = {
         tid: np.asarray(v, dtype=np.float64)
@@ -248,6 +252,8 @@ def gate_and_cluster(
     clustering_edge_threshold: float = 0.55,
     clustering_resolution: float = 1.0,
     clustering_max_nodes: int = 2500,
+    seed_terms: list[str] | None = None,
+    peer_terms: list[str] | None = None,
 ) -> PipelineResult:
     """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
     per-topic candidate pool. Shared by the full pipeline and the re-gate path
@@ -261,6 +267,8 @@ def gate_and_cluster(
         topic_names=topic_names,
         threshold=relevance_threshold,
         batch_size=relevance_embed_batch,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
     )
     result.degraded_notes.extend(gate.degraded_notes)
     result.per_topic_gated = gate.per_topic
@@ -307,6 +315,8 @@ def cluster_preview(
     configs: list[tuple[float, float]],
     relevance_embed_batch: int = 1000,
     clustering_max_nodes: int = 2500,
+    seed_terms: list[str] | None = None,
+    peer_terms: list[str] | None = None,
 ) -> dict:
     """Embed + gate once, then cluster under each (edge_threshold, resolution)
     config and report granularity stats — without persisting anything. The
@@ -319,6 +329,8 @@ def cluster_preview(
         topic_names=topic_names,
         threshold=relevance_threshold,
         batch_size=relevance_embed_batch,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
     )
     active_keywords, active_embeddings = _active_for_clustering(
         gate.per_topic, clustering_max_nodes
@@ -385,6 +397,8 @@ def run_refinement_pipeline(
     clustering_edge_threshold: float = 0.55,
     clustering_resolution: float = 1.0,
     clustering_max_nodes: int = 2500,
+    seed_terms: list[str] | None = None,
+    peer_terms: list[str] | None = None,
 ) -> PipelineResult:
     result = PipelineResult()
     topic_names = {t.id: t.name for t in topics}
@@ -462,6 +476,8 @@ def run_refinement_pipeline(
         clustering_edge_threshold=clustering_edge_threshold,
         clustering_resolution=clustering_resolution,
         clustering_max_nodes=clustering_max_nodes,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
     )
     result.degraded_notes.extend(gc.degraded_notes)
     result.per_topic_gated = gc.per_topic_gated

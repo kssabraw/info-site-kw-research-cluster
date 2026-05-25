@@ -173,3 +173,34 @@ def test_embedding_count_mismatch_degrades_not_silently_truncates():
     assert set(statuses) == {"kw one", "kw two"}  # neither dropped
     assert all(s == "active" for s in statuses.values())
     assert any("embedding service degraded" in n for n in r.degraded_notes)
+
+
+def test_peer_entity_filter_drops_competitor_not_seed():
+    # tirzepatide (a peer) without retatrutide -> off-niche junk; "vs retatrutide"
+    # keeps it; the generic mechanism uses supplied seed/peer lists (no hardcoding).
+    embed = make_embed_fn({
+        "retatrutide dosage": _unit(1, 0),
+        "tirzepatide vs retatrutide": _unit(1, 0),
+        "reta peptide results": _unit(1, 0),
+    })
+    r = run_relevance_gate(
+        per_topic={"t1": {
+            "retatrutide dosage": ["x"],
+            "buy tirzepatide injection": ["x"],   # peer, no seed -> junk
+            "tirzepatide vs retatrutide": ["x"],  # peer + seed -> kept
+            "reta peptide results": ["x"],        # alias -> kept
+            "clinical trials europe": ["x"],      # no peer, no seed -> not peer-filtered
+        }},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        seed_terms=["retatrutide", "reta"],
+        peer_terms=["tirzepatide", "semaglutide", "ozempic"],
+    )
+    by_kw = {g.keyword: g.status for g in r.per_topic["t1"]}
+    assert by_kw["buy tirzepatide injection"] == "filtered_junk"
+    assert by_kw["tirzepatide vs retatrutide"] == "active"
+    assert by_kw["reta peptide results"] == "active"
+    assert by_kw["retatrutide dosage"] == "active"
+    # not a peer and not seed -> NOT peer-filtered (left to the relevance score)
+    assert by_kw["clinical trials europe"] != "filtered_junk"

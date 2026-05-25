@@ -108,7 +108,13 @@ class OpenAILLM:
             '  "detected_audience": the dominant audience for top-ranking content,\n'
             '  "is_ambiguous": true if the seed clearly refers to two or more disjoint subjects '
             "(e.g. a planet AND a chemical element), otherwise false,\n"
-            '  "interpretations": when ambiguous, a list of short distinct interpretation labels; else [].\n'
+            '  "interpretations": when ambiguous, a list of short distinct interpretation labels; else [],\n'
+            '  "aliases": common nicknames/abbreviations/spellings for THIS subject '
+            '(e.g. "reta" for retatrutide); [] if none,\n'
+            '  "peer_entities": other named entities in the SAME category that are NOT this '
+            "subject — competitors or siblings someone researching this subject would confuse it "
+            '(e.g. for retatrutide: tirzepatide, semaglutide, ozempic; for an iPhone: Galaxy, Pixel). '
+            "Names only, no generic words. [] if none.\n"
         )
         data = _extract_json(self._respond(prompt, "subject_grounding", browsing=True))
         # A supplied disambiguation hint resolves ambiguity outright (PRD §7.1.2).
@@ -119,6 +125,8 @@ class OpenAILLM:
             detected_audience=data.get("detected_audience"),
             is_ambiguous=is_ambiguous,
             interpretations=[str(i) for i in (data.get("interpretations") or [])],
+            aliases=[str(a).strip() for a in (data.get("aliases") or []) if str(a).strip()],
+            peer_entities=[str(p).strip() for p in (data.get("peer_entities") or []) if str(p).strip()],
         )
 
     def propose_silos(

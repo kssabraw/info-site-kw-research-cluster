@@ -69,6 +69,10 @@ class RegateBody(BaseModel):
     relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
+    # Peer-entity filter overrides (for testing on sessions whose grounding ran
+    # before this existed). Omitted -> use the session's stored lists.
+    aliases: list[str] | None = None
+    peer_entities: list[str] | None = None
 
 
 class RoutingDiagnosticBody(BaseModel):
@@ -113,6 +117,17 @@ def _require_session(user: AuthedUser, session_id: str) -> dict:
     return session
 
 
+def _resolve_peer_terms(session: dict, body) -> tuple[list[str], list[str]]:
+    """Seed terms (seed + aliases) and peer terms for the peer-entity filter.
+    Request-body overrides win (for sessions whose grounding predates the lists),
+    else use what grounding stored on the session."""
+    seed = session.get("seed_keyword") or ""
+    aliases = body.aliases if getattr(body, "aliases", None) is not None else (session.get("aliases") or [])
+    peers = body.peer_entities if getattr(body, "peer_entities", None) is not None else (session.get("peer_entities") or [])
+    seed_terms = [t for t in [seed, *aliases] if t]
+    return seed_terms, list(peers)
+
+
 def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
     """Run silo discovery for a session and persist the outcome."""
     settings = session.get("settings") or {}
@@ -136,7 +151,11 @@ def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
             detail=f"Silo discovery could not complete: {exc}",
         ) from exc
 
-    store.update_session(session["id"], {"detected_audience": result.detected_audience})
+    store.update_session(session["id"], {
+        "detected_audience": result.detected_audience,
+        "aliases": result.aliases,
+        "peer_entities": result.peer_entities,
+    })
 
     if result.needs_disambiguation:
         return SiloDiscoveryResponse(
@@ -327,7 +346,7 @@ def regate_session(
     keyword pool at a (possibly overridden) threshold in the background, skipping
     DataForSEO. Returns immediately; poll GET /summary for status. A calibration
     tool: tune the threshold without re-paying for expansion + mining."""
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
     bind_session_id(session_id)
     if not store.list_all_keyword_pool(session_id):
         raise HTTPException(
@@ -340,6 +359,7 @@ def regate_session(
             detail="A run is already in progress for this session.",
         )
     s = get_settings()
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
     threshold = (
         body.relevance_threshold
         if body.relevance_threshold is not None
@@ -355,13 +375,14 @@ def regate_session(
         if body.clustering_resolution is not None
         else s.clustering_resolution
     )
-    jobs.submit_regate(session_id, threshold, edge, resolution)
+    jobs.submit_regate(session_id, threshold, edge, resolution, seed_terms, peer_terms)
     return {
         "status": "running",
         "session_id": session_id,
         "relevance_threshold": threshold,
         "clustering_edge_threshold": edge,
         "clustering_resolution": resolution,
+        "peer_entities": peer_terms,
     }
 
 
@@ -401,7 +422,7 @@ def lever3_simulate_endpoint(
     silo (raw rationale-anchor cosine) and cluster each silo's reassigned set,
     reporting per-silo grouping counts. Measures the Lever-3 outcome before
     building it. No persistence, no status change."""
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
     bind_session_id(session_id)
     pool = store.list_all_keyword_pool(session_id)
     if not pool:
@@ -409,6 +430,7 @@ def lever3_simulate_endpoint(
                             detail="No keywords. Run /expand first.")
     s = get_settings()
     topics = store.list_topics(session_id)
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
     return simulate_best_silo_clustering(
         per_topic_lists=pool,
         topic_names={t["id"]: t["name"] for t in topics},
@@ -421,6 +443,8 @@ def lever3_simulate_endpoint(
         resolution=(body.clustering_resolution
                     if body.clustering_resolution is not None else s.clustering_resolution),
         clustering_max_nodes=s.clustering_max_nodes,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
     )
 
 
@@ -432,7 +456,7 @@ def cluster_preview_endpoint(
     then report cluster-size stats for each (edge_threshold, resolution) config.
     Synchronous (no persistence, no status change) — it's a quick analysis call
     used to pick clustering settings before committing a /regate."""
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
     bind_session_id(session_id)
     pool = store.list_all_keyword_pool(session_id)
     if not pool:
@@ -447,6 +471,7 @@ def cluster_preview_endpoint(
         else s.relevance_threshold
     )
     topics = store.list_topics(session_id)
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
     return cluster_preview(
         per_topic_lists=pool,
         topic_names={t["id"]: t["name"] for t in topics},
@@ -456,6 +481,8 @@ def cluster_preview_endpoint(
         configs=[(float(e), float(r)) for e, r in body.configs],
         relevance_embed_batch=s.relevance_embed_batch,
         clustering_max_nodes=s.clustering_max_nodes,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
     )
 
 
