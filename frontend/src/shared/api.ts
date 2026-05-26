@@ -554,3 +554,40 @@ export const rejectSession = (id: string, note?: string) =>
     method: "POST",
     body: JSON.stringify({ note }),
   });
+
+// ---- M10 CSV export (PRD §12) --------------------------------------------
+export type CsvExportFormat = "flat" | "topic_grouped" | "architecture";
+
+export interface CsvExportResult {
+  export_id: string;
+  session_id: string;
+  format: CsvExportFormat;
+  storage_path?: string;
+  generated_at: string;
+  download_url: string;
+}
+
+export interface CsvExportListItem {
+  id: string;
+  session_id: string;
+  user_id: string;
+  format: CsvExportFormat;
+  storage_path: string;
+  generated_at: string;
+}
+
+// Generate a CSV snapshot live from current Postgres state, store it, and return
+// a short-lived signed download URL. Export is available to both roles (§11.2).
+export const createExport = (sessionId: string, format: CsvExportFormat) =>
+  request<CsvExportResult>(
+    `/sessions/${sessionId}/export?format=${encodeURIComponent(format)}`,
+    { method: "POST" },
+  );
+
+// Past snapshots for a session, newest first (the Exports tab, §12).
+export const listExports = (sessionId: string) =>
+  request<CsvExportListItem[]>(`/sessions/${sessionId}/exports`);
+
+// Re-issue a fresh signed URL for a past snapshot (the old one may have expired).
+export const downloadExport = (exportId: string) =>
+  request<CsvExportResult>(`/exports/${exportId}/download`);
