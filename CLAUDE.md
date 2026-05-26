@@ -144,11 +144,59 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M7 — Owner UI (PRD §15.1 / §9): next.** The three views (table / cluster /
-architecture) + editing. The two-panel Architecture View (§9.3) consumes M6's
-read-only API. Stop for a human go-ahead before building (milestone discipline).
-Open decision still unresolved (carried from RF): the **orchestrator-vs-direct
-planner default**.
+**M7 — Owner UI (PRD §15.1 / §9): implemented, pending review + live validation.**
+Built on `claude/sweet-ramanujan-PXvK0` (this session's pinned branch — *not* an
+`m7-…` branch, per the session task instruction; not yet merged to `main`). Split
+into two sign-off gates:
+
+**M7a (read-only):** react-router added; the three views render against the
+read-only M1–M6 API. **Table View** (§9.1) — sortable + filterable
+(topic/cluster/source/length/question/text); Volume/KD/CPC show "—" (metrics
+enrichment §7.8 is unbuilt/optional). **Cluster View** (§9.2) — article units
+grouped by topic, gaps inline. **Architecture View** (§9.3) — two-panel site map +
+linking matrix, regenerate; Send-to-Brief disabled (§16.2). **Split View** —
+Table+Cluster side-by-side (desktop). **Project + Session Browser** (§9.4) —
+left-rail projects, session list, click-to-resume (the UI session-resume that
+calibration has worked around). New backend reads: `GET /projects/{id}/sessions`,
+a `statuses` filter on `/keywords`, and `seed_keyword` on `GET /sessions/{id}`.
+
+**M7b (editing):** all §9.2 cluster ops — rename, edit intent, edit H2s, promote
+primary, move keyword, delete (→Unassigned, never destroyed), **merge**, **split**
+(manual selection), accept/dismiss gaps, and an explicit **Re-run orchestrator**
+(orchestrator stays the default — decision settled this session; `direct` remains
+the opt-in flag, so no code flip). §9.1 Table bulk: exclude / mark-covered /
+restore / move-to-cluster. §9.4 browser mutations: archive/unarchive, move
+project, delete. New backend: `PATCH/DELETE /clusters/{id}`, `/promote-primary`,
+`/clusters/merge`, `/clusters/{id}/split`, `/sessions/{id}/keywords/{status,move}`,
+`/coverage-gaps/{id}/{accept,dismiss}`, `PATCH/DELETE /sessions/{id}`. Migration
+`20260527000000_session_archive.sql` (adds `sessions.archived`) **applied live via
+MCP**.
+
+**M7 decisions / divergences (flagged for review):**
+- **Membership-changing cluster edits (merge/split/delete/move) set
+  `centroid_embedding = NULL`** rather than recomputing it. The centroid is only
+  consumed by a *subsequent* re-plan's cross-topic dedup, which rebuilds every
+  cluster anyway — so paying for an embedding call on each edit would be wasted,
+  and NULL keeps edits deterministic + sandbox-testable (no OpenAI egress).
+- **Per-topic orchestrator re-run is deferred;** only whole-session re-run is wired
+  (the existing `/plan-articles`, which resets + rebuilds — the UI warns it
+  discards manual edits). §9.2 lists both; per-topic needs a scoped pipeline path.
+- **Split implements §9.2 option (a)** (manual keyword selection) only; option (b)
+  (re-run orchestrator on the article at a stricter SERP threshold) is deferred.
+- **Cluster filter in Table View is single-select** (315 clusters make chips
+  impractical); topic/source are multi-select. PRD says multi for all — flagged.
+- **Drag-and-drop keyword move not implemented** — used a per-keyword "move to…"
+  select + Table bulk "move-to-cluster" instead (§9.2 explicitly allows the
+  select-based alternative for mobile; covers the same operation).
+- **`metrics enrichment` (§7.8) still unbuilt** → Volume/KD/CPC columns are "—".
+  Optional in v1; decide before M8 whether to fold a minimal enrichment in.
+- **Not browser-validated** — sandbox has no Supabase/Railway egress (standing
+  constraint), so the views compile strict-clean (tsc) and the backend passes 98
+  tests + ruff, but live rendering/edit round-trips need checking on the deployed
+  stack (the M7a/M7b branch must deploy, or merge to `main`, first).
+- **Out of scope (unchanged):** CSV export → M10; VA restrictions → M8;
+  Brief-Generator handoff stays degraded-disabled; session **duplicate** (§9.4)
+  deferred (ambiguous semantics — flagged).
 
 ---
 
@@ -392,3 +440,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.2 | 2026-05-26 | Recursive Fanout (§7.7, Phase 1) signed off — `/fanout` second-stage that re-expands each silo's top cluster representatives as sub-anchors, cost-gated, re-gate/re-cluster on the enlarged pool. Validated live on `retatrutide` (`4ecefaa1`): 1,007 active recursive keywords, 0 peer leak. Build returns to the PRD sequence; **M6 (site architecture) is next.** |
 | 1.3 | 2026-05-26 | M6 (§7.11 site architecture) **implemented, pending review** — `POST/GET /sessions/{id}/architecture`, `site_architecture` table (one row/session, upsert on regenerate), pillar editorial content via Opus (per-pillar, parallel) + deterministic linking matrix guaranteeing the §15.2 acceptance rules. Migration applied to the live DB (via MCP); no live validation yet (sandbox egress). Built on `claude/gifted-clarke-pONCI`. |
 | 1.4 | 2026-05-26 | M6 **signed off** — validated live on `retatrutide` `4ecefaa1` (315 clusters): 5 pillars, 0 orphans, 0 dangling links, all four §15.2 criteria pass. Fixed transient rate-limit degradation (`architect_max_workers` 5→2 + backoff). Merged to `main`. **M7 (Owner UI) is next.** |
+| 1.5 | 2026-05-26 | M7 (Owner UI, §9) **implemented, pending review + live validation.** M7a: react-router + read-only Table/Cluster/Architecture/Split views + Project+Session Browser (UI session-resume); new reads `GET /projects/{id}/sessions`, `statuses` keyword filter, `seed_keyword` on `GET /sessions/{id}`. M7b: full cluster editing (rename/intent/H2/promote/move/delete/merge/split), gap accept/dismiss, whole-session orchestrator re-run, Table bulk actions, browser archive/move/delete; migration `20260527000000_session_archive.sql` applied live via MCP. Orchestrator-vs-direct default **settled: orchestrator stays default** (no code flip). Built on `claude/sweet-ramanujan-PXvK0`; 98 backend tests pass, frontend builds; not browser-validated (sandbox egress). Deferred/flagged: per-topic re-run, split option (b), session duplicate, metrics enrichment (§7.8). |
