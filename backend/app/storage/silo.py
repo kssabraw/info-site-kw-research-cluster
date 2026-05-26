@@ -391,7 +391,12 @@ def get_active_keyword_index(session_id: str) -> dict[tuple[str, str], str]:
 def reset_article_planning(session_id: str) -> None:
     """Clear any prior article-planning output so /plan-articles is idempotent
     (and re-runnable). Resets keyword orchestrator fields, un-drops
-    orchestrator-dropped keywords, and deletes clusters + coverage gaps."""
+    orchestrator-dropped keywords, and deletes clusters + coverage gaps. Also
+    drops any stored site architecture: it's derived from the clusters (M6, §7.11)
+    by cluster id, so once the clusters are deleted + re-created (with fresh ids)
+    the old architecture's article references dangle. A re-plan therefore requires
+    a fresh /architecture run; clearing it here keeps the summary's `architecture`
+    flag honest rather than reporting a stale graph as present."""
     client = get_service_client()
     # Un-drop keywords the orchestrator dropped on a previous run.
     client.table("keywords").update({"status": "active"}).eq(
@@ -406,6 +411,8 @@ def reset_article_planning(session_id: str) -> None:
             "orchestrator_drop_reason": None,
         }
     ).eq("session_id", session_id).execute()
+
+    client.table("site_architecture").delete().eq("session_id", session_id).execute()
 
     topic_ids = [t["id"] for t in list_topics(session_id)]
     if topic_ids:
