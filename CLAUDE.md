@@ -144,14 +144,53 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M6 — Site architecture (PRD §15.1 / §7.11)** is next, now that RF is done.
-Recursive Fanout was re-sequenced ahead of M6 at the owner's direction
-(article volume/depth was the priority); that work is complete, so the build
-returns to the PRD sequence. Stop for a human go-ahead before building M6
-(milestone discipline). One decision to settle first: the **orchestrator-vs-direct
-planner default** (still orchestrator default, direct via `{"direct": true}`) —
-RF validated with direct mode for volume, so revisit whether direct becomes the
-default.
+**M6 — Site architecture (PRD §15.1 / §7.11): implemented, pending human review +
+live validation.** Built on `claude/gifted-clarke-pONCI`. After article planning,
+each article-bearing silo becomes a **pillar** (a high-level overview page that
+links down to its supporting articles). New endpoints: `POST /sessions/{id}/
+architecture` (async, 202 — poll `GET /summary`, whose payload now carries an
+`architecture` block) and `GET /sessions/{id}/architecture` (read; 404 until
+generated). One `site_architecture` row per session (`session_id` PK → a
+re-generate upserts in place, satisfying §9.3's "Regenerate architecture").
+
+**Design — LLM writes the prose, code wires the graph.** Opus 4.7 (reusing the
+orchestrator's Anthropic client per §7.11) is called **once per pillar, in
+parallel**, for the *editorial* fields only: title, target keyword, summary, 5–8
+H2 outline. The **linking matrix is assembled deterministically** so the §15.2
+acceptance rules hold by construction rather than on the model's good behavior:
+(1) one pillar per accepted silo; (2) every supporting article up-links to its
+pillar + every pillar down-links to all its articles; (3) no orphans (guaranteed
+by the down-links); (4) pillars link laterally only where topic-embedding cosine
+> 0.55. Lateral article links = 2–3 peers, prioritizing the orchestrator/dedup
+`peer_article_links`, topped up by same-silo centroid nearest-neighbors. A
+per-pillar LLM failure degrades that pillar to a deterministic stub (title = silo
+name, outline = article names); all-degraded → session `error` (the architect is
+down), mirroring the orchestrator.
+
+**M6 decisions / divergences (flagged for review):**
+- **Diverges from prompt B.3**, which has the model emit `supporting_article_ids`
+  + all lateral links too. Made deterministic instead — same rationale as M5's
+  deterministic cross-topic dedup (reproducible + testable; the acceptance rules
+  can't be silently violated by a hallucinated link or a dropped article).
+- **A silo with zero planned articles gets no pillar** (a childless overview page
+  links down to nothing); such silos are listed in `architecture_json.skipped_
+  silos`. Literal reading of §15.2 #1 ("one pillar per accepted silo") would force
+  an empty pillar — conservative call, flagged.
+- **`peer_article_links` from M5 are cross-topic** (set by dedup's loser→winner
+  linking), not the within-silo links B.3 assumes the orchestrator set. The
+  lateral-link assembly treats them as priority seeds, then fills within-silo by
+  centroid — so cross-silo article links survive *and* the §7.11 same-silo 2–3
+  target is met where peers exist.
+- **No live validation** (sandbox has no egress; the `gpt-5.4`/Anthropic calls and
+  the migration apply happen on the deployed stack). Migration
+  `20260526000000_site_architecture.sql` is **written but not yet applied** to the
+  live DB. Backend: 93 tests pass, ruff clean, import smoke OK; frontend builds.
+- **Planner default still unresolved** (orchestrator default, direct via
+  `{"direct": true}`) — carried in from RF, not touched by M6.
+
+No Architecture View UI yet — that's M7 (§9.3, two-panel site map). M6 ships only
+the read-only API (`api.ts` got `generateArchitecture` / `getArchitecture` +
+types, matching how RF added `fanout()` without a view).
 
 **Recursive Fanout (RF) — deepen each silo into sub-topics:** **complete**
 (signed off 2026-05-26). PRD §7.7, Phase 1; spec in
@@ -324,3 +363,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.0 | 2026-05-20 | Initial CLAUDE.md created as part of M1 kickoff. Locks architectural decisions from PRD v1.7. |
 | 1.1 | 2026-05-25 | M5 signed off (orchestrator + dedup, plus async execution, peer-entity filter, Lever-3 routing, direct mode, calibration tooling). Recursive Fanout (§7.7) re-sequenced as the next milestone ahead of the PRD's M6; spec in `docs/recursive-fanout-spec.md`. |
 | 1.2 | 2026-05-26 | Recursive Fanout (§7.7, Phase 1) signed off — `/fanout` second-stage that re-expands each silo's top cluster representatives as sub-anchors, cost-gated, re-gate/re-cluster on the enlarged pool. Validated live on `retatrutide` (`4ecefaa1`): 1,007 active recursive keywords, 0 peer leak. Build returns to the PRD sequence; **M6 (site architecture) is next.** |
+| 1.3 | 2026-05-26 | M6 (§7.11 site architecture) **implemented, pending review** — `POST/GET /sessions/{id}/architecture`, `site_architecture` table (one row/session, upsert on regenerate), pillar editorial content via Opus (per-pillar, parallel) + deterministic linking matrix guaranteeing the §15.2 acceptance rules. Migration written but not yet applied to the live DB; no live validation (sandbox egress). Built on `claude/gifted-clarke-pONCI`. |
