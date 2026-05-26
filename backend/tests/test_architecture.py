@@ -117,7 +117,9 @@ def test_pillar_editorial_fields_come_from_the_llm():
 # ---- degraded fallback -----------------------------------------------------
 
 
-def test_pillar_degrades_to_stub_when_architect_fails():
+def test_pillar_degrades_to_stub_when_architect_fails(monkeypatch):
+    # No real backoff sleeps in the test; just assert the retry-then-degrade path.
+    monkeypatch.setattr("app.pipeline.architecture.generate.time.sleep", lambda *_: None)
     arch = FakeArchitect(raises=True)
     result = run_architecture_generation(
         seed="x", audience="", pillars_input=[_pillar("t1", "Dosage", [_article("c1", "low dose")])],
@@ -127,11 +129,25 @@ def test_pillar_degrades_to_stub_when_architect_fails():
     assert p.degraded is True
     assert p.title == "Dosage"               # stub title = silo name
     assert p.h2_outline == ["low dose"]       # stub outline = article names
-    assert arch.calls == 2                    # one reprompt before degrading
+    assert arch.calls == 3                    # all attempts exhausted before degrading
     assert result.all_degraded() is True
 
 
+def test_transient_failure_backs_off_between_attempts(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.pipeline.architecture.generate.time.sleep", lambda s: sleeps.append(s))
+    arch = FakeArchitect(raises=True)
+    run_architecture_generation(
+        seed="x", audience="", pillars_input=[_pillar("t1", "Dosage", [_article("c1", "a")])],
+        architect=arch, topic_embeddings={}, cluster_centroids={},
+    )
+    # Backoff happens between attempts but not after the final one.
+    assert len(sleeps) == 2
+    assert all(s > 0 for s in sleeps)
+
+
 def test_blank_title_triggers_reprompt_then_stub():
+    # Shape failures reprompt immediately (no backoff sleep), so no monkeypatch.
     arch = FakeArchitect(payload={"title": "", "target_keyword": "", "summary": "",
                                   "h2_outline": []})
     result = run_architecture_generation(
@@ -139,7 +155,7 @@ def test_blank_title_triggers_reprompt_then_stub():
         architect=arch, topic_embeddings={}, cluster_centroids={},
     )
     assert result.pillars[0].degraded is True
-    assert arch.calls == 2
+    assert arch.calls == 3
 
 
 # ---- lateral pillar links (#4): cosine > threshold -------------------------
