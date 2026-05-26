@@ -144,12 +144,102 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M11 — Cost confirmation + observability (PRD §15.1 / §16): next.** Live cost
-banner during pipeline execution; per-step cost attribution logged
-(`actual_cost_usd` tracked live); structured logs (§16.3) flowing; an Owner debug
-view exposing `statistical_clustering_log` + `orchestrator_log` for any session
-(§15.3 #8). Note much async/structured-logging groundwork was pulled forward in
-M5. Stop for a human go-ahead before building (milestone discipline).
+**v1 MVP — feature-complete (M1–M11 all built).** M11 is the final milestone;
+with it merged the M1–M11 build sequence is done. What remains is **not new
+feature work** but the **§15.3 Definition-of-Done live-validation checklist** that
+the sandbox can't exercise (no Supabase/Railway/OpenAI/DataForSEO egress) — i.e.
+browser/deployed-stack validation of M8 (VA routing + wizard), M9 (approval
+round-trip), M10 (Storage upload + signed-URL download), and M11 (live cost
+numbers within ±25% of §8.1, the cost banner, the debug view). The full checklist
+is in `handoff.md §2`. There is no "next milestone" to build; the owner decides
+when to merge M11 and run the live validation.
+
+**M11 — Cost confirmation + observability (PRD §15.1 / §16): complete, pending
+review + live validation.** Built on `claude/exciting-davinci-tZGwH` (this
+session's pinned branch, off `main` at the M10 merge `4b10ed2`). Backend **176
+tests pass** (165 prior + 11 new in `tests/test_cost_meter.py` + the owner-only
+`/debug` role test), ruff clean, import smoke OK; frontend builds strict-clean
+(tsc + vite). **Live cost numbers, the banner, and the debug view are NOT
+sandbox-validated** (egress blocked) — validate on the deployed stack.
+
+**What shipped (per §16.3 / §16.4 / §15.1 / §15.3 #7–#8):**
+- **Real-metered per-step cost → `actual_cost_usd` + a new `cost_breakdown` jsonb,
+  flushed live (§16.4).** A per-run `CostMeter` (`app/cost_meter.py`) accumulates
+  each external call's cost, broken down by pipeline phase. **DataForSEO cost is
+  the real per-call charge** from its task envelope (`task["cost"]`); **LLM cost is
+  derived from real response token usage** via a rate table (Opus 15/75, gpt-5.4
+  5/15 per 1M tok — *rates are estimates, flagged for calibration*; embeddings
+  0.02/1M). The background jobs (`app/cost_attribution.py::metered_run`) bind the
+  meter, spawn a daemon that flushes `actual_cost_usd` + `cost_breakdown` every
+  `cost_flush_interval_s` (=10s, §16.4), and do a final lock-serialized flush on
+  exit (incl. on failure → partial cost persists). Silo discovery (synchronous in
+  `POST /sessions` / `/disambiguate`) is metered via `metered_sync` so the session
+  total covers the full §8.1 run. **Cost accumulates across a session's runs**
+  (expand→plan→architecture, plus re-plan/regate/fanout each *add* their spend) —
+  the honest cumulative figure §16.4 calls "the session's running cost".
+- **Context propagation fix (`app/concurrency.py`).** The pipeline parallelizes
+  API calls in raw `ThreadPoolExecutor`s, which **don't** copy contextvars into
+  workers — so the meter (and the §16.3 `session_id`/`correlation_id`) were
+  invisible in the very threads making the dominant DataForSEO calls.
+  `ContextThreadPoolExecutor` captures the caller's context at submit time;
+  swapped in via an import alias across `expansion.py` / `competitor.py` /
+  `serp.py` / `orchestrate_articles.py` / `architecture/generate.py` (no other
+  call-site changes). **Side benefit:** nested-thread external-call logs now carry
+  `session_id`, closing a latent §16.3 gap.
+- **Structured logs completed (§16.3).** The four external-call sites
+  (`dataforseo/client.py`, `llm/openai_client.py` `_respond` + `embed`,
+  `llm/anthropic_client.py`) now populate the `cost_usd` field (was `None  #
+  populated in M11`) and feed the meter; the context fix gives them real
+  `session_id`/`correlation_id`.
+- **Live cost banner (§8.4 / §15.1).** `GET /summary` now carries a `cost` block
+  (`estimated_cost_usd`, `actual_cost_usd`, `breakdown`) in **both** the cheap
+  running payload and the full one, so the banner climbs as the job flushes. New
+  `shared/CostBanner.tsx` (actual vs. estimate + a progress bar; turns red when
+  actual exceeds the non-binding estimate) on the Owner workspace **and** the VA
+  wizard progress screen. VA sees own cost only (RLS-scoped via the session).
+- **Owner debug view (§15.3 #8).** `GET /sessions/{id}/debug` (**require_owner** —
+  a VA gets 403; still RLS-scoped to a visible session) returns
+  `statistical_clustering_log` + `orchestrator_log` + the cost attribution. New
+  Owner-only `owner/DebugView.tsx` at `/session/:id/debug` (a "Debug" link in the
+  workspace head, owner-only; **not** in the VA surface) renders the per-step cost
+  table + the raw logs. The data already persisted — this is read + gate + render.
+- **Migration `20260529000000_session_cost_breakdown.sql`** (adds `sessions.
+  cost_breakdown jsonb`; no RLS change — `sessions` already carries the §13
+  policies) **applied to the live DB via Supabase MCP** (verified: column present,
+  RLS still enabled). `actual_cost_usd` / `statistical_clustering_log` /
+  `orchestrator_log` already existed from M1.
+
+**M11 decisions / divergences (flagged for review):**
+- **LLM $/token rates are estimates** (DataForSEO cost is real). So the §15.3 #7
+  "±25% of §8.1" check is honest on the DataForSEO-dominated total but carries LLM
+  estimation error until the rates are calibrated against real OpenAI/Anthropic
+  invoices after the first ~10 production runs (same caveat as `cost.py`).
+- **§7.8 metrics enrichment is still unbuilt**, so §15.3 #7's literal "standard +
+  metrics **on**" scenario can't be exercised as written; validate at metrics-off
+  and treat the +metrics line as estimate-only. Flagged.
+- **`cost_breakdown` is keyed by pipeline *phase* (job)** — `silo_discovery`,
+  `expand`, `article_planning`, `architecture`, `regate`, `recursive_fanout` — not
+  by §8.1 line item. Finer per-endpoint cost lives in the per-call structured logs
+  (each carries `service`/`endpoint`/`cost_usd`). Threading line-item step labels
+  deep into the pipeline functions was judged too invasive for the value. Flagged.
+- **Cost is cumulative across re-runs.** A re-plan / regate / fanout *adds* to
+  `actual_cost_usd` and its phase in `cost_breakdown` (real money was spent), so a
+  re-planned session can read above the one-shot §8.1 estimate, and the
+  `article_planning` phase can exceed its single-run figure. Truthful but flagged.
+- **Final-flush ordering** is made safe with a per-run flush lock (once `stop` is
+  set the loop starts no new flush; the final flush blocks on the lock until any
+  in-flight periodic flush finishes, then writes the latest value last). A
+  process restart mid-job still strands `status='running'` (the standing M5
+  durable-queue caveat) — the last periodic flush is the recorded partial cost.
+- **Owner calibration tools** (`/routing-diagnostic`, `/cluster-preview`,
+  `/lever3-simulate`) run their embedding calls synchronously in the request with
+  **no meter bound**, so their (cheap, embedding-only) spend is not attributed to
+  the session. Acceptable — they're read-only analysis, not part of a run's cost.
+  Flagged.
+- **Background jobs' `correlation_id` continuity** into the job is unchanged
+  (pre-existing): jobs bind `session_id` (the primary §16.3 key) but inherit no
+  request `correlation_id`, since `jobs._EXECUTOR` is left a plain executor.
+  Low; not re-architected (out of M11's "don't re-architect existing logging").
 
 ---
 
@@ -781,4 +871,5 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.6 | 2026-05-26 | M7 **merged to `main`** (`--no-ff`, per owner instruction) after an adversarial review pass + fixes: structural cluster edits now invalidate the stored `site_architecture` (was left dangling); `promote_primary`/`split_cluster` guard against a primary pointing at a non-member keyword (→ 400); `accept_gap` is idempotent. Remote `main` was at the M6 sign-off (`03c3e54`); the merge added only the M7 commits (`03c3e54..84f96b9`, no conflicts). Live validation on the deployed stack still recommended. **M8 (VA wizard, §10) is next.** |
 | 1.7 | 2026-05-26 | M8 (VA wizard, §10) **complete & merged to `main`** (per owner instruction; still pending live validation). Role-gated app (`App.tsx`): owner → §9 Owner UI (unchanged); VA → new `frontend/src/va/Wizard.tsx` 9-step linear wizard (step-gated: disambiguation only when ambiguous; settings locked to topic_count + coverage_mode; deep-mine capped at seed + 2; cost confirmation stubbed to "Run now") + a restricted results surface (Table/Cluster/read-only Architecture via a new `role` on `SessionCtx`; no Split/merge/delete/promote/gap/exclude; "Request restructure" stub). Server-side enforcement (defense in depth, §10.3/§11.2): new `require_owner` dep + `get_role()` gate cluster delete/merge/split/promote-primary, gap accept/dismiss, `/architecture`, session delete, `/regate`, `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate`, `/fanout`; in-handler checks for the deep-mine cap (`va_deep_mine_max_silos=2`), VA rename-only `PATCH /clusters`, and VA no-exclude bulk status. Built on `claude/exciting-cannon-jTTVb`, merged `--no-ff` to `main`; 116 backend tests (18 new in `tests/test_roles.py`) + ruff clean, frontend builds; not browser-validated. Flagged: architecture stays owner-only (so a VA run ends at the article plan; Architecture tab is owner-pending), metrics toggle is decorative (§7.8 unbuilt), no "+ New project" (no endpoint), static cost band. **M9 (approval workflow, §11.3) is next.** |
 | 1.8 | 2026-05-26 | M9 (approval workflow, §11.3) **complete & merged to `main`** (per owner instruction; merged `--no-ff`, remote `main` was at `27f5731`, conflict-free; still pending live validation). No schema/migration (all approval columns + the `pending_approval`/`rejected` statuses exist from M1). New pure cost model `backend/app/cost.py` (§8.1-derived; standard/comprehensive+metrics stay under the $5 VA cap, oversized + recursive runs exceed it). Gate placed at the cost-bearing `/expand` (the conservative read of §11.3's whole-run framing, since silo discovery already runs at `POST /sessions`). New endpoints: `GET /workspace-settings`, `GET /sessions/{id}/cost-estimate`, `POST /sessions/{id}/submit-for-approval` + `/cancel-approval` (VA), `GET /approvals` + `POST /sessions/{id}/approve` + `/reject` (owner-only); `/summary` gained an `approval` block. Frontend: wizard CostStep fetches the real estimate + branches Run-now vs Submit-for-approval → new WaitingStep (30s poll, cancel, adjust-&-resubmit on reject); Owner Approvals page (`/approvals`) + decision modal; AppShell owner-only Approvals nav badge. Built on `claude/jolly-heisenberg-Z06PH`; 139 backend tests (9 cost + 14 approvals new) + ruff clean, frontend builds; not browser-validated. Flagged: gate at `/expand`; reject reuses the same session (no clone); queue "submitted at" = `created_at`; estimate reads actual (false) metrics flag; owner-offline approval keeps M8's client-driven expand→plan chain; `recursive_fanout` still not a VA wizard control. **M10 (CSV export, §12) is next.** |
+| 1.10 | 2026-05-29 | M11 (cost + observability, §16) **complete, pending review + live validation** — the final milestone; M1–M11 now all built. Real-metered per-step cost attribution: a `CostMeter` (`app/cost_meter.py`) accumulates DataForSEO's real per-call charge + token-derived LLM cost, flushed live to `sessions.actual_cost_usd` + a new `cost_breakdown` jsonb every 10s from the background jobs (`app/cost_attribution.py`), cumulative across a session's runs. A `ContextThreadPoolExecutor` (`app/concurrency.py`) propagates the meter + `session_id`/`correlation_id` into the pipeline's nested API-call threads (also closing a latent §16.3 logging gap). The four external-call sites now populate the `cost_usd` log field. `GET /summary` carries a live `cost` block → a `CostBanner` on the Owner workspace + VA progress screen (§8.4). Owner-only `GET /sessions/{id}/debug` (require_owner) + `owner/DebugView.tsx` expose `statistical_clustering_log` + `orchestrator_log` + cost (§15.3 #8). Migration `20260529000000_session_cost_breakdown.sql` applied live via MCP. Built on `claude/exciting-davinci-tZGwH` (off `main` `4b10ed2`); 176 backend tests (11 new) + ruff clean, frontend builds. **Not sandbox-validated** (egress). Flagged: LLM $/token rates are estimates (DataForSEO cost is real); breakdown keyed by pipeline phase not §8.1 line item; cost cumulative across re-runs; §7.8 metrics still unbuilt so §15.3 #7 "+metrics" can't be exercised. Active milestone → v1 MVP feature-complete; remaining = the §15.3 live-validation checklist. |
 | 1.9 | 2026-05-28 | M10 (CSV export, §12) **complete & merged to `main`** (per owner instruction; merged `--no-ff`, remote `main` was at the M9 merge `1e0db30`, conflict-free; still pending live validation; built on `claude/wonderful-allen-oTKaO`). Three formats from current Postgres state via **pure, unit-tested** builders (`backend/app/csv_export.py`): flat (one row/keyword, §9.1 columns, Volume/KD/CPC blank), topic_grouped (one CSV/topic delivered as a single `.zip`), architecture (one row/page — pillar or supporting article — name-resolved links; 400 if no architecture). Backend uploads snapshots to the new private **`csv-snapshots`** Storage bucket under `{user_id}/{session_id}/{ts}-{rand8}.{ext}` via the service client and serves a **time-limited signed URL** (`csv_signed_url_ttl_s`=3600); re-download re-signs fresh. New router `backend/app/api/exports.py`: `POST /sessions/{id}/export?format=…` (sync, both roles, RLS-scoped), `GET /sessions/{id}/exports`, `GET /exports/{id}/download`. Migration `20260528000000_csv_exports.sql` (`fanout.csv_exports` + real RLS via a sessions-join) **applied live via MCP**; the private bucket **created via MCP**. Frontend: new **Exports tab** (`owner/views/ExportsView.tsx`) on both Owner + VA workspaces; `shared/api.ts` `createExport`/`listExports`/`downloadExport`. 165 backend tests (14 csv-builder + 12 export-API new) + ruff clean; frontend builds strict-clean. **CSV formula-injection hardening** on every text cell; signed URLs carry a server-side `Content-Disposition` attachment name; a failed export removes its orphan Storage object. **Storage upload / signed URLs / live download round-trip NOT sandbox-validated — deploy-only.** Flagged: sync generation; flat/topic_grouped use the surviving pool (active/excluded/covered); topic_grouped = one zip; "export selected" (§9.1) deferred. **M11 (cost + observability) is next.** |

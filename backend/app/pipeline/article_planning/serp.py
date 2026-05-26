@@ -10,9 +10,10 @@ failure degrades only that candidate, leaving the rest of the plan intact.
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass, field
 
+from app.concurrency import ContextThreadPoolExecutor as ThreadPoolExecutor
 from app.dataforseo import DataForSEOClient
 
 logger = logging.getLogger(__name__)

@@ -195,10 +195,20 @@ export interface SummaryApproval {
   decided_at: string | null;
 }
 
+// Live cost attribution on the summary payload (PRD §8.4 / §16.4). The cost
+// banner reads actual vs estimated; the background job flushes actual_cost_usd
+// every ~10s, so it climbs while the run is in progress.
+export interface SummaryCost {
+  estimated_cost_usd: number | null;
+  actual_cost_usd: number | null;
+  breakdown: Record<string, number>;
+}
+
 export interface PipelineSummary {
   status: string;
   last_error: string | null;
   approval: SummaryApproval;
+  cost: SummaryCost;
   expansion: {
     counts: PipelineCounts;
     topics: PipelineTopicCount[];
@@ -347,6 +357,21 @@ export const planArticles = (id: string) =>
 
 export const getSummary = (id: string) =>
   request<PipelineSummary>(`/sessions/${id}/summary`);
+
+// Owner debug view (PRD §15.3 #8): raw clustering + orchestrator logs + cost.
+// Owner-only on the backend (require_owner) — a VA gets 403.
+export interface SessionDebug {
+  status: string | null;
+  seed_keyword: string | null;
+  estimated_cost_usd: number | null;
+  actual_cost_usd: number | null;
+  cost_breakdown: Record<string, number>;
+  statistical_clustering_log: unknown;
+  orchestrator_log: unknown;
+}
+
+export const getSessionDebug = (id: string) =>
+  request<SessionDebug>(`/sessions/${id}/debug`);
 
 export interface RegateBody {
   relevance_threshold?: number;

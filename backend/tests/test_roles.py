@@ -48,6 +48,7 @@ OWNER_ONLY = [
     ("post", "/sessions/s1/routing-diagnostic", {"probes": ["x"]}),
     ("post", "/sessions/s1/lever3-simulate", {}),
     ("post", "/sessions/s1/fanout", {}),
+    ("get", "/sessions/s1/debug", None),
 ]
 
 
@@ -56,6 +57,28 @@ def test_owner_only_endpoints_forbidden_for_va(client, monkeypatch, method, path
     _as_role(monkeypatch, "va")
     resp = client.request(method, path, json=body)
     assert resp.status_code == 403, f"{method} {path} -> {resp.status_code}"
+
+
+def test_debug_view_allowed_for_owner(client, monkeypatch):
+    """The Owner debug view (PRD §15.3 #8) returns the raw logs + cost for a
+    session the owner can see; a VA is refused above (covered by OWNER_ONLY)."""
+    _as_role(monkeypatch, "owner")
+    monkeypatch.setattr(sessions_api.store, "session_visible_to_user", lambda *_: {"id": "s1"})
+    monkeypatch.setattr(
+        sessions_api.store, "get_session_debug",
+        lambda sid: {
+            "status": "complete",
+            "actual_cost_usd": 2.91,
+            "cost_breakdown": {"expand": 2.0, "article_planning": 0.6, "architecture": 0.31},
+            "statistical_clustering_log": {"topics": {}},
+            "orchestrator_log": {"dedup": {"collisions": []}},
+        },
+    )
+    resp = client.get("/sessions/s1/debug")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["actual_cost_usd"] == 2.91
+    assert "statistical_clustering_log" in body and "orchestrator_log" in body
 
 
 def test_deep_mine_cap_enforced_for_va(client, monkeypatch):

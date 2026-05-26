@@ -15,6 +15,7 @@ import time
 
 from openai import OpenAI
 
+from app.cost_meter import embedding_token_cost, llm_token_cost, record_cost
 from app.pipeline.models import (
     PROPOSABLE_TYPES,
     GroundingResult,
@@ -74,6 +75,10 @@ class OpenAILLM:
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
         usage = getattr(resp, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        cost = llm_token_cost(self._silo_model, input_tokens, output_tokens)
+        record_cost(cost)  # PRD §16.4 — token-derived cost
         logger.info(
             "llm_call",
             extra={
@@ -81,10 +86,10 @@ class OpenAILLM:
                 "purpose": purpose,
                 "provider": "openai",
                 "model": self._silo_model,
-                "prompt_tokens": getattr(usage, "input_tokens", None),
-                "completion_tokens": getattr(usage, "output_tokens", None),
+                "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens,
                 "latency_ms": latency_ms,
-                "cost_usd": None,  # populated in M11 (PRD §16.4 cost attribution)
+                "cost_usd": cost,
                 "status": "success",
             },
         )
@@ -172,6 +177,11 @@ class OpenAILLM:
             resp = self._client.embeddings.create(model=self._embedding_model, input=texts)
         except Exception as exc:  # noqa: BLE001
             raise LLMError(f"Embedding call failed: {exc}") from exc
+        usage = getattr(resp, "usage", None)
+        cost = embedding_token_cost(
+            self._embedding_model, getattr(usage, "total_tokens", None)
+        )
+        record_cost(cost)  # PRD §16.4 — token-derived cost
         logger.info(
             "external_call",
             extra={
@@ -180,7 +190,7 @@ class OpenAILLM:
                 "endpoint": "embeddings",
                 "result_count": len(texts),
                 "latency_ms": round((time.perf_counter() - started) * 1000, 2),
-                "cost_usd": None,  # populated in M11 (PRD §16.4 cost attribution)
+                "cost_usd": cost,
             },
         )
         return [d.embedding for d in resp.data]

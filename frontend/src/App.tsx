@@ -7,6 +7,7 @@ import { ProjectsPage } from "./owner/ProjectsPage";
 import { ApprovalsPage } from "./owner/ApprovalsPage";
 import { NewSession } from "./owner/NewSession";
 import { SessionWorkspace } from "./owner/SessionWorkspace";
+import { DebugView } from "./owner/DebugView";
 import { TableView } from "./owner/views/TableView";
 import { ClusterView } from "./owner/views/ClusterView";
 import { ArchitectureView } from "./owner/views/ArchitectureView";
@@ -46,6 +47,7 @@ function OwnerRoutes() {
       <Route path="/projects" element={<ProjectsPage />} />
       <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="/session/new" element={<NewSession />} />
+      <Route path="/session/:id/debug" element={<DebugView />} />
       <Route path="/session/:id" element={<SessionWorkspace />}>
         <Route index element={<Navigate to="table" replace />} />
         <Route path="table" element={<TableView />} />

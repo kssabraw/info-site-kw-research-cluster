@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.cost_meter import record_cost
+
 logger = logging.getLogger(__name__)
 
 # PRD scopes out location/language inputs; default to US English.
@@ -49,6 +51,8 @@ class DataForSEOClient:
             # interstitial). Treat as a DataForSEO failure so callers can degrade.
             raise DataForSEOError(f"DataForSEO returned non-JSON for {path}") from exc
         task = (body.get("tasks") or [{}])[0]
+        cost = task.get("cost")
+        record_cost(cost)  # PRD §16.4 — DataForSEO returns a real per-call cost
         logger.info(
             "external_call",
             extra={
@@ -56,7 +60,7 @@ class DataForSEOClient:
                 "service": "dataforseo",
                 "endpoint": path,
                 "latency_ms": latency_ms,
-                "cost_usd": task.get("cost"),
+                "cost_usd": cost,
             },
         )
         if task.get("status_code", 0) >= 40000:

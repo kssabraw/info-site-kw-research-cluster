@@ -17,9 +17,10 @@ a degenerate one-keyword cluster — no keyword data is lost.
 """
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import replace
 
+from app.concurrency import ContextThreadPoolExecutor as ThreadPoolExecutor
 from app.dataforseo import DataForSEOClient
 from app.llm import AnthropicError, AnthropicLLM
 
