@@ -144,7 +144,10 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M5 — Article planning orchestrator + cross-topic dedup** (next; awaiting kickoff)
+**Recursive Fanout (RF) — deepen each silo into sub-topics** (next; spec'd in
+`docs/recursive-fanout-spec.md`). Re-sequenced ahead of the PRD's M6 (site
+architecture) at the owner's direction, because article *volume/depth* is the
+current priority. RF is PRD §7.7, previously unbuilt.
 
 M1 — Foundation: **complete** (signed off 2026-05-21). Built on `m1-foundation`.
 
@@ -198,13 +201,71 @@ noisiest/slowest source; the gate discards most of it). Built on
 - **Stuck-running edge:** a hard crash / deploy mid-run leaves status `running`, so
   re-running that session 409s; recovery is to start a new session (no resume yet).
 
-M5 Done state (per PRD §15.1 / §7.10): SERP fetches for candidate primary keywords;
-per-silo editorial orchestrator (Claude Opus 4.7, tool-use/strict-schema) converts
-statistical groupings into article plans (merge/split/promote-demote/route/drop);
-cross-topic dedup pass; `clusters` table populated with article-level records;
-coverage gaps persist to `coverage_gaps`.
+M5 — Article planning orchestrator + cross-topic dedup: **complete** (signed off
+2026-05-25). Core §7.10 shipped: per-silo editorial orchestrator (Claude Opus 4.7,
+forced tool-use / strict schema), SERP fetch per candidate primary, deterministic
+cross-topic dedup, `clusters` + `coverage_gaps` tables (real RLS), staged
+persistence across the clusters↔keywords FK cycle. Built on
+`claude/youthful-bohr-8MovM`; merged to `main` (single deploy branch).
 
-When M5 is complete and approved, update this section to reflect M6 as the active milestone.
+M5 grew well beyond §7.10 while validating live on `retatrutide` (session
+`ea83f985`). What else shipped under M5:
+- **Async pipeline + status polling (pulled forward from M11).** `/expand`,
+  `/plan-articles`, `/regate` claim the run, submit to a background worker, return
+  202; frontend polls `GET /sessions/{id}/summary`. Kills the 5-min edge wall.
+  `app/jobs.py`; `sessions.last_error`.
+- **Chunked orchestrator.** One Opus call per silo overran token/timeout at 200+
+  groupings; now planned in parallel chunks of `orchestrator_groupings_per_call`
+  (12). A chunk degrades alone; all-silos-degraded → error.
+- **Generic peer-entity filter (beyond §7.6, which left brand detection out).**
+  Grounding (GPT-5.4) emits per-seed `aliases` + `peer_entities` (stored on the
+  session); the gate drops a keyword that names a peer but not the seed/alias.
+  Seed-agnostic — works for any subject (drug/product/place). Killed ~2,100
+  tirzepatide/ozempic/generic-trials keywords on the test seed.
+- **Lever 3 — single-silo routing at the gate** (`relevance_assign_best_silo`,
+  default on). Each keyword goes to its one best silo (argmax raw cosine to the
+  rationale anchor — empirically the best of four candidate signals, per the
+  routing diagnostic), instead of staying active in every silo. Eliminates the
+  cross-silo fanout duplication at source (active == distinct active).
+- **Direct mode** (`POST /plan-articles {"direct": true}`): groupings → articles
+  with no LLM (representative = primary, rest = supporting; singletons included),
+  then dedup. Fast/cheap/deterministic, max article count.
+- **Calibration tooling (read-only, no DataForSEO):** `/regate` (re-gate the
+  stored pool at new threshold/granularity), `/cluster-preview` (resolution
+  sweep), `/routing-diagnostic` (compare silo-anchor signals), `/lever3-simulate`.
+- Relevance threshold default 0.62 → **0.52**; Louvain `resolution` exposed.
+- Migrations added: `clusters`, `session_last_error`, `peer_entities`.
+
+**M5 decisions / divergences (flagged for review):**
+- **Direct mode diverges from §7.10**, which mandates the orchestrator as the core
+  step. The orchestrator remains the default and is fully built; direct mode is an
+  opt-in flag chosen for article *volume* (orchestrator consolidates, which fights
+  a couple-hundred-article goal). Owner is aware and chose direct for now.
+- **Cross-topic dedup is deterministic** (cosine > 0.85 OR top-3 SERP overlap ≥
+  2/3, winner = higher own-silo relevance), not the "single LLM call" §7.10.4 also
+  describes. Reproducible + testable; revisit if editorial dedup is wanted.
+- **Centering (common-mode removal) for routing was tried and reverted** —
+  measured worse; raw rationale-anchor cosine is the routing signal.
+
+**M5 findings that shape RF (the next milestone):**
+- Deep-mining *more* silos (§7.2) adds raw competitor keywords but the relevance
+  gate filters most as off-niche, so the *useful* pool barely grows (~900 active).
+  Mining is not the lever for more genuine articles.
+- Embedding-based silo routing is ~71% accurate and weakly discriminative
+  (everything ≈ "retatrutide"); good enough but not great.
+- **Recursive fanout (§7.7) is the right lever for article volume/depth** — it
+  generates genuinely on-niche sub-topic keywords per silo, unlike competitor
+  mining. Hence RF is next.
+
+**Open / carried-forward into RF and beyond:**
+- The orchestrator-vs-direct default is unresolved (currently orchestrator default,
+  direct via flag). Decide during RF whether direct becomes default.
+- Routing distribution can skew (clinical-trials, or mechanism after re-mining) —
+  a routing-quality refinement is deferred.
+- Session resume in the UI is still M7 (calibration runs are driven via the
+  console against the deployed API; the UI can't reopen a session).
+- Test session `ea83f985` has a misspelled seed (`retratrutide`); the correct
+  spelling was supplied via the alias override. Not a code issue.
 
 ---
 
@@ -213,3 +274,4 @@ When M5 is complete and approved, update this section to reflect M6 as the activ
 | Version | Date | Notes |
 |---|---|---|
 | 1.0 | 2026-05-20 | Initial CLAUDE.md created as part of M1 kickoff. Locks architectural decisions from PRD v1.7. |
+| 1.1 | 2026-05-25 | M5 signed off (orchestrator + dedup, plus async execution, peer-entity filter, Lever-3 routing, direct mode, calibration tooling). Recursive Fanout (§7.7) re-sequenced as the next milestone ahead of the PRD's M6; spec in `docs/recursive-fanout-spec.md`. |

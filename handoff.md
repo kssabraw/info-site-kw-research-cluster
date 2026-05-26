@@ -2,7 +2,7 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-_Last updated: 2026-05-24. Current `main` HEAD: `1ac3cbf`._
+_Last updated: 2026-05-25. Current `main` HEAD: `d1377e2`._
 
 ---
 
@@ -12,18 +12,21 @@ _Last updated: 2026-05-24. Current `main` HEAD: `1ac3cbf`._
 - **M2 — Silo discovery + review:** ✅ complete & signed off. Validated on `retatrutide` (clean silos, zero peer-entity leakage) and `mercury` (disambiguation gate fires).
 - **M3 — Expansion pipeline:** ✅ complete & signed off (2026-05-24). Per-silo expansion + autocomplete + keyword persistence with source attribution. `keyword_suggestions`/`query_fanouts` run once on the bare seed, fanned to all silos.
 - **M4 — Competitor mining + relevance gate + clustering:** ✅ complete & signed off (2026-05-24). Deep-mine selection (§7.2), SERP competitor mining on gated silos + always-mined seed (§7.4), relevance gate w/ junk filter + cross-silo embedding dedup (§7.6), per-silo Louvain clustering → `statistical_clustering_log` (§7.9). Verified live on `retatrutide` (1 gated silo: 3,953 competitor kw, 1,341 active, 4 groupings @ cohesion 0.784). `autocomplete_max` lowered 1500→500. Built on `m4-competitor-clustering`; merged to `main`.
-- **M5+ — not started.** M5 = article planning orchestrator + cross-topic dedup (PRD §15.1, §7.10).
+- **M5 — Article planning orchestrator + cross-topic dedup:** ✅ complete & signed off (2026-05-25). Core §7.10 (Opus 4.7 chunked orchestrator, deterministic cross-topic dedup, `clusters`+`coverage_gaps` schema, staged persistence) **plus** a lot more, validated live on `retatrutide` session `ea83f985`: async background execution + status polling (pulled forward from M11 — kills the 5-min wall), generic peer-entity filter (LLM-derived `aliases`/`peer_entities`), **Lever 3** single-silo routing at the gate, **direct mode** (groupings→articles, no LLM), and calibration tooling (`/regate`, `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate`). Relevance threshold default 0.62→0.52. See `CLAUDE.md` "Active milestone" for the full breakdown + decisions/divergences. Built on `claude/youthful-bohr-8MovM`; merged to `main`.
+- **Next — Recursive Fanout (§7.7):** spec'd, not built. See `docs/recursive-fanout-spec.md`.
 
 ## 2. Immediate next action (resume here)
 
-**M4 is done. Next is M5 — do not start it without a human go-ahead** (milestone discipline: stop for review between milestones). When kicking off M5, read PRD §7.10 (editorial orchestrator: merge/split/promote-demote/route/drop), §7.10.1–.2 (inputs/decisions), the cross-topic dedup pass, and the `clusters` + `coverage_gaps` schema in §13. The orchestrator is **Claude Opus 4.7** in tool-use/strict-schema mode (per locked decisions), run once per silo, consuming each silo's groupings from `statistical_clustering_log` + a SERP fetch per candidate primary keyword.
+**M5 is done. Next is Recursive Fanout (RF)** — re-sequenced ahead of the PRD's M6 (site architecture) at the owner's direction, because article *volume/depth* is the priority. Read **`docs/recursive-fanout-spec.md`** (build plan) + PRD §7.7. RF deepens each silo into sub-topics (each silo → new seed → expansion one level deep, depth-capped at 1); it's the lever for genuinely more on-niche articles (M5 proved deep *mining* doesn't help — the gate filters competitor noise). Stop for a human go-ahead before building (milestone discipline).
 
-**Before M5, decide on #1 (the 5-min wall).** M4 runs the full pipeline synchronously; M5 adds per-candidate SERP fetches + an LLM call per silo, making the synchronous request even longer. The human chose to defer the async fix to **M11** and accept that large runs error in the UI while completing server-side (verify via Supabase). If M5's added latency makes that untenable, revisit (see §4).
+**Key M5 carry-overs to resolve in RF:** (a) orchestrator-vs-direct default (currently orchestrator default, direct via `{"direct": true}` flag); (b) RF cost is 5–8× and trips the (unbuilt, M9) approval gate — need an owner-confirm before spend.
+
+**Calibration workflow that emerged in M5** (reuse it): tuning is done against the **deployed API via browser-console `fetch`** (sandbox has no egress), and results are inspected via the **Supabase MCP tools**, not the UI (no session resume until M7). `/regate` re-runs gate+cluster on the *stored* pool (no DataForSEO) at an overridden threshold / edge / resolution / aliases / peer_entities — the cheap iteration loop. `/cluster-preview` and `/lever3-simulate` are read-only analysis.
 
 ## 3. Deploy & infra state (CRITICAL — caused most of the pain this session)
 
 - **`main` is the single deploy branch** for both Railway and Netlify. Milestones are built on `m{N}-...` branches and **merged to `main` (`--no-ff`)** when validated. Do NOT expect deploys from feature branches.
-- **Railway** service `info-site-kw-research-cluster` (project `AR Tools`): **Root Directory = `backend`**, Dockerfile build, deploy branch `main`. `railway.json` has no `startCommand` (Dockerfile CMD owns port binding). `/healthz` returns the running commit via `RAILWAY_GIT_COMMIT_SHA`.
+- **Railway** service `info-site-kw-research-cluster` (project `AR Tools`): **Root Directory = `backend`**, Dockerfile build, deploy branch `main`. Public URL **`https://info-site-kw-research-cluster-production.up.railway.app`**. `railway.json` has no `startCommand` (Dockerfile CMD owns port binding). `/healthz` returns the running commit via `RAILWAY_GIT_COMMIT_SHA` — use it to confirm a deploy landed before calibrating.
 - **Netlify** site `kw-research-module` (id `dc24cc19-d745-4074-8967-e037f3c5e86a`): base dir `frontend/`, production branch `main`. Env vars set: `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
 - **Supabase** project = **AR-Internal-Tools**, ref **`wvcthtmmcmhkybcesirb`**, URL `https://wvcthtmmcmhkybcesirb.supabase.co`. Accessible via the Supabase MCP tools (apply_migration / execute_sql / get_logs). The `fanout` schema is **exposed in PostgREST** (Settings → API → Exposed schemas) — required, was a manual step.
 - **Env var naming gotcha:** Railway provides the keys as **`SUPABASE_SERVICE_KEY`** and **`SUPABASE_KEY`** (AR Tools convention), NOT `SUPABASE_SERVICE_ROLE_KEY`/`SUPABASE_ANON_KEY`. `app/config.py` uses `AliasChoices` to accept both. Don't rename the shared Railway vars.
@@ -31,7 +34,7 @@ _Last updated: 2026-05-24. Current `main` HEAD: `1ac3cbf`._
 
 ## 4. Known issues / open items
 
-- **The 5-min synchronous wall (BIGGEST open item → M11).** The whole pipeline (`/expand`) runs in one HTTP request. **Railway's edge caps requests at 5 minutes (confirmed not configurable).** A large run exceeds it; the browser errors, but the backend keeps running (sync `def` → threadpool, not cancelled on client disconnect), completes, and persists — so data isn't lost, but the UI never sees it, and there's no session-resume until M7 (verify via Supabase instead). Internal per-stage budgets (`EXPANSION_TIME_BUDGET_S` / `COMPETITOR_TIME_BUDGET_S`, 240s each) are a safety valve to return *before* the edge cap; hitting one truncates the lowest-yield tail (mostly autocomplete) and shows a "partial mining" banner. **Real fix = async + polling, deferred to M11** — but note PRD §15.1 M11 is literally "cost + observability", so confirm the async work has an explicit home there. Mitigation knobs now: `AUTOCOMPLETE_MAX` (already 500), `EXPANSION_MAX_WORKERS`/`COMPETITOR_MAX_WORKERS` (raise to finish faster).
+- **The 5-min synchronous wall — ✅ RESOLVED in M5.** `/expand`, `/plan-articles`, `/regate` now claim the run, submit to a background worker (`app/jobs.py`), and return `202`; the frontend polls `GET /sessions/{id}/summary`. The work runs server-side past the edge cap. Failure reason is stored in `sessions.last_error`. Caveat unchanged: a process restart mid-job strands `status='running'` (no durable queue; recover by starting fresh or resetting status via MCP), and there's still no UI session-resume until M7.
 - **M4 ranked_keywords is domain-level, not URL-level.** §7.4 says "per URL ranks 1–20"; DataForSEO's `ranked_keywords` target is a domain, so we dedupe the top URLs to domains and filter rank ≤ 20 server-side. Verified live (3,953 competitor kw on one silo). The filter path (`ranked_serp_element.serp_item.rank_absolute`) is the documented shape; if it's ever wrong the failure is quiet (mining degrades to 0 + degraded notes, no crash).
 - **M4 hygiene leftovers (low, not fixed):** dead `insert_keywords` in `storage/silo.py` (replaced by `insert_classified_keywords`); `/expand` has no guard against running before `/finalize` (degrades gracefully — all active, no scoring); two gated silos sharing a domain make duplicate `ranked_keywords` calls (minor cost).
 - **M4 stuck-running edge:** the `/expand` run guard (atomic `try_mark_running`) 409s if status is already `running`. A hard crash / deploy mid-run leaves status stuck `running`, so re-running *that* session 409s forever — recover by starting a new session (no resume until M7).
@@ -49,7 +52,8 @@ _Last updated: 2026-05-24. Current `main` HEAD: `1ac3cbf`._
 - `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword DB ops incl. `set_topics_gating`, `get_topic_embeddings`, `insert_classified_keywords`, `try_mark_running`.
 - `llm/openai_client.py` — GPT-5.4 grounding + silo proposal (Responses API + web_search) + `embed()`.
 - `dataforseo/client.py` — DataForSEO calls (demand sample, SERP structure, expansion endpoints, autocomplete; M4: `serp_top_urls`, `ranked_keywords`, `domain_of`).
-- `pipeline/` — `silo_discovery.py` (M2), `expansion.py` (M3), `competitor.py`/`relevance.py`/`clustering.py` (M4), `orchestrate.py` (M4 `run_refinement_pipeline` = expansion→mining→gate→clustering), `models.py`.
+- `pipeline/` — `silo_discovery.py` (M2), `expansion.py` (M3), `competitor.py`/`relevance.py`/`clustering.py` (M4), `orchestrate.py` (M4 `run_refinement_pipeline` + M5 `gate_and_cluster`/`cluster_preview`/`routing_diagnostic`/`simulate_best_silo_clustering`), `models.py`.
+- `pipeline/article_planning/` (M5) — `orchestrate_articles.py` (chunked orchestrator + `direct` mode), `dedup.py`, `serp.py`, `models.py`. `jobs.py` (M5) — async background worker. `llm/anthropic_client.py` — Opus 4.7 tool-use client. `relevance.py` now also does the peer-entity filter + Lever-3 routing.
 
 Frontend: `frontend/src/owner/SiloDiscovery.tsx` is the whole flow (seed → disambiguation → silo review → finalize → **deep-mine selection** → run pipeline → results). `shared/api.ts`, `shared/auth.tsx`, TanStack Query. Progress UI = `WorkingProgress` (discovery ~20–40s; pipeline ~3–6 min estimate).
 
@@ -60,7 +64,7 @@ Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `...
 Backend (from `backend/`, venv at `.venv`):
 ```bash
 . .venv/bin/activate
-python -m pytest -q          # 55 tests, all passing
+python -m pytest -q          # 77 tests, all passing
 ruff check app/ tests/
 python -c "import app.main"   # import smoke test
 ```
