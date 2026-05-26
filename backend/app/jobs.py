@@ -224,6 +224,11 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
             dedup_primary_cosine_threshold=s.dedup_primary_cosine_threshold,
             dedup_serp_overlap_min=s.dedup_serp_overlap_min,
             direct=direct,
+            split_oversized=s.split_oversized_articles,
+            split_min_keywords=s.split_min_keywords,
+            split_resolution=s.split_resolution,
+            split_edge_threshold=s.split_edge_threshold,
+            split_min_subarticle_size=s.split_min_subarticle_size,
         )
         if all_degraded(result):
             # Clear any stale prior plan so an errored run doesn't leave clusters

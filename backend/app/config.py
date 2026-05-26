@@ -65,6 +65,18 @@ class Settings(BaseSettings):
     dedup_primary_cosine_threshold: float = 0.85
     dedup_serp_overlap_min: float = 2 / 3     # top-3 SERP overlap fraction
 
+    # Salience split (PRD §7.10 granularity): after planning, an over-large article
+    # is sub-clustered by keyword-embedding similarity (Louvain at a higher
+    # resolution) and split into multiple articles when it cleanly divides. Runs
+    # automatically in the plan job. Embedding-based (no extra DataForSEO spend);
+    # only articles above the keyword threshold are touched, and tiny sub-clusters
+    # fold back into the largest so the long-tail isn't shattered into thin stubs.
+    split_oversized_articles: bool = True
+    split_min_keywords: int = 40              # only articles larger than this split
+    split_resolution: float = 1.5             # > base -> finer sub-communities
+    split_edge_threshold: float = 0.55        # cosine edge for the sub-graph
+    split_min_subarticle_size: int = 5        # smaller sub-clusters fold into largest
+
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""
     dataforseo_password: str = ""

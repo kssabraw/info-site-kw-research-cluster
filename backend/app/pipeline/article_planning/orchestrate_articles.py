@@ -37,6 +37,7 @@ from .models import (
     TopicPlan,
 )
 from .serp import fetch_candidate_serps
+from .split import split_oversized_articles
 
 logger = logging.getLogger(__name__)
 
@@ -375,6 +376,11 @@ def run_article_planning(
     dedup_primary_cosine_threshold: float = 0.85,
     dedup_serp_overlap_min: float = 2 / 3,
     direct: bool = False,
+    split_oversized: bool = True,
+    split_min_keywords: int = 40,
+    split_resolution: float = 1.5,
+    split_edge_threshold: float = 0.55,
+    split_min_subarticle_size: int = 5,
 ) -> PlanResult:
     """Full §7.10 pass: SERP for each candidate primary -> per-silo orchestrator
     (chunked + parallel) -> cross-topic dedup. Returns the assembled plan;
@@ -394,6 +400,12 @@ def run_article_planning(
         result = PlanResult()
         for topic in topics:
             result.per_topic.append(direct_plan_topic(topic))
+        if split_oversized:
+            split_oversized_articles(
+                result, embed_fn=embed_fn, min_keywords=split_min_keywords,
+                resolution=split_resolution, edge_threshold=split_edge_threshold,
+                min_subarticle_size=split_min_subarticle_size,
+            )
         cross_topic_dedup(
             result,
             topic_embeddings={t.id: t.embedding for t in topics},
@@ -448,6 +460,12 @@ def run_article_planning(
         else:
             result.per_topic.append(_merge_chunk_plans(topic.id, chunks))
 
+    if split_oversized:
+        split_oversized_articles(
+            result, embed_fn=embed_fn, min_keywords=split_min_keywords,
+            resolution=split_resolution, edge_threshold=split_edge_threshold,
+            min_subarticle_size=split_min_subarticle_size,
+        )
     cross_topic_dedup(
         result,
         topic_embeddings={t.id: t.embedding for t in topics},
