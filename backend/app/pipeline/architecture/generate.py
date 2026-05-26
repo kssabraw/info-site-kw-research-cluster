@@ -1,0 +1,291 @@
+"""Site architecture generation (PRD §7.11, prompt B.3).
+
+The final pipeline step. Each accepted silo (that produced at least one article)
+becomes a pillar: a higher-level overview page that links down to its supporting
+articles. Opus 4.7 writes the pillar's *editorial* fields (title, target keyword,
+summary, H2 outline) — the "structured editorial reasoning" §7.11 wants the LLM
+for — while the *linking matrix* is assembled deterministically so the §15.2
+acceptance rules hold by construction rather than by trusting the model:
+
+  1. one pillar per accepted (article-bearing) silo;
+  2. every supporting article links up to its pillar (mandatory);
+  3. no orphans — every supporting article is reachable from its pillar's
+     down-links, so the graph has no orphan node;
+  4. pillars link laterally only where topic-embedding cosine > the threshold.
+
+This mirrors M5's cross-topic dedup, which was likewise made deterministic
+(reproducible + testable) rather than a single LLM call. Divergence from B.3
+(which has the model emit the link structure too) is intentional and flagged.
+
+A per-pillar LLM failure degrades that pillar to a deterministic stub (title =
+silo name, outline from its article names) without sinking the run; if *every*
+pillar degrades the caller treats it as an error (the architecture would just be
+silo names relabeled).
+"""
+
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import numpy as np
+
+from app.llm import AnthropicError, AnthropicLLM
+
+from .models import (
+    ArchitectureResult,
+    ArticleInput,
+    Pillar,
+    PillarInput,
+    SupportingArticle,
+)
+
+logger = logging.getLogger(__name__)
+
+_TOOL_NAME = "submit_pillar"
+_TOOL_DESCRIPTION = (
+    "Emit the pillar overview for this silo: a working title, the broadest "
+    "commercially-meaningful target keyword, a short summary, and a 5-8 item H2 "
+    "outline that maps onto the silo's supporting articles."
+)
+
+_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "target_keyword": {"type": "string"},
+        "summary": {"type": "string"},
+        "h2_outline": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["title", "target_keyword", "summary", "h2_outline"],
+}
+
+_SYSTEM = """You are designing the site architecture for a niche authority site. For one silo, you write the PILLAR PAGE: a high-level overview article that establishes the silo's authority and links down to all its supporting articles.
+
+You are given the silo and the list of supporting articles already planned for it (you do NOT re-plan or invent articles).
+
+Produce, via the submit_pillar tool:
+- title: a real, compelling article title that reflects the silo (e.g. "The Complete Guide to Triple Agonist Drugs"), not just the silo's raw name.
+- target_keyword: the broadest commercially-meaningful keyword for the silo as a whole (the pillar competes for the head term, the supporting articles for the long tail).
+- summary: 1-2 sentences describing what the pillar covers.
+- h2_outline: 5-8 H2 headings that summarize the silo's coverage; each H2 should correspond to one or more of the supporting articles.
+
+Emit your answer through the submit_pillar tool only."""
+
+
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def _build_pillar_prompt(pillar: PillarInput, seed: str, audience: str) -> str:
+    article_lines = "\n".join(
+        f"    - {a.name} (primary keyword: {a.primary_keyword}; intent: {a.intent})"
+        for a in pillar.articles
+    )
+    return (
+        f"SITE SEED: {seed}\n"
+        f"AUDIENCE: {audience or '(unspecified)'}\n\n"
+        f"SILO: {pillar.silo_name}\n"
+        f"Relationship to the seed: {pillar.relationship_type}\n"
+        f"Rationale: {pillar.rationale or '(none)'}\n\n"
+        f"SUPPORTING ARTICLES ({len(pillar.articles)}):\n{article_lines}\n\n"
+        "Write the pillar overview for this silo via the submit_pillar tool."
+    )
+
+
+def _stub_pillar_content(pillar: PillarInput, *, reason: str) -> dict:
+    """Degraded fallback (PRD §16.2): a usable-but-plain pillar derived from the
+    silo + its article names, no LLM. H2 outline is the first 8 article names."""
+    logger.warning(
+        "degraded",
+        extra={"event": "degraded", "step": "architecture", "topic_id": pillar.topic_id,
+               "reason": reason},
+    )
+    return {
+        "title": pillar.silo_name,
+        "target_keyword": pillar.silo_name.lower(),
+        "summary": f"Overview of {pillar.silo_name}.",
+        "h2_outline": [a.name for a in pillar.articles[:8]],
+        "degraded": True,
+    }
+
+
+def _write_pillar_content(
+    pillar: PillarInput, architect: AnthropicLLM, *, seed: str, audience: str
+) -> dict:
+    """Get the LLM's editorial fields for one pillar. One reprompt on a
+    transport/shape failure, then degrade to a deterministic stub for this pillar
+    only (PRD §16.2)."""
+    user = _build_pillar_prompt(pillar, seed, audience)
+    last_error: str | None = None
+    for _ in range(2):
+        prompt = user if last_error is None else (
+            f"{user}\n\nYour previous response could not be used: {last_error}\n"
+            "Return a corrected pillar via the submit_pillar tool."
+        )
+        try:
+            raw = architect.call_tool(
+                system=_SYSTEM,
+                user=prompt,
+                tool_name=_TOOL_NAME,
+                tool_description=_TOOL_DESCRIPTION,
+                input_schema=_INPUT_SCHEMA,
+                purpose="site_architecture",
+            )
+        except AnthropicError as exc:
+            last_error = str(exc)
+            continue
+        title = str(raw.get("title") or "").strip()
+        target = str(raw.get("target_keyword") or "").strip()
+        if not title or not target:
+            last_error = "title and target_keyword are required"
+            continue
+        h2s = [str(h).strip() for h in (raw.get("h2_outline") or []) if str(h).strip()]
+        return {
+            "title": title,
+            "target_keyword": target,
+            "summary": str(raw.get("summary") or "").strip(),
+            "h2_outline": h2s,
+            "degraded": False,
+        }
+    return _stub_pillar_content(pillar, reason=last_error or "architect failed")
+
+
+def _lateral_pillar_links(
+    pillar_topic_ids: list[str],
+    topic_embeddings: dict[str, list[float] | None],
+    threshold: float,
+) -> dict[str, list[str]]:
+    """topic_id -> peer topic_ids whose topic-embedding cosine exceeds `threshold`
+    (PRD §7.11 / §15.2 #4). Symmetric. Silos without an embedding get no links."""
+    vecs = {
+        tid: np.asarray(topic_embeddings[tid], dtype=np.float32)
+        for tid in pillar_topic_ids
+        if topic_embeddings.get(tid) is not None
+    }
+    links: dict[str, list[str]] = {tid: [] for tid in pillar_topic_ids}
+    ids = list(vecs.keys())
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            if _cosine(vecs[ids[i]], vecs[ids[j]]) > threshold:
+                links[ids[i]].append(ids[j])
+                links[ids[j]].append(ids[i])
+    return links
+
+
+def _lateral_article_links(
+    article: ArticleInput,
+    same_silo_ids: set[str],
+    cluster_centroids: dict[str, list[float] | None],
+    *,
+    max_links: int,
+) -> list[str]:
+    """2-3 lateral links to peer supporting articles (PRD §7.11), prioritizing the
+    `peer_article_links` already set by the orchestrator / dedup, then topping up
+    with the nearest same-silo peers by centroid cosine. Capped at `max_links`."""
+    chosen: list[str] = []
+    seen = {article.id}
+    # Priority: existing peer links (may cross silos — from cross-topic dedup).
+    for pid in article.peer_article_links:
+        if pid not in seen and len(chosen) < max_links:
+            chosen.append(pid)
+            seen.add(pid)
+    if len(chosen) >= max_links:
+        return chosen
+    # Top up with nearest same-silo peers by centroid similarity.
+    own = cluster_centroids.get(article.id)
+    if own is not None:
+        own_vec = np.asarray(own, dtype=np.float32)
+        scored: list[tuple[float, str]] = []
+        for cid in same_silo_ids:
+            if cid in seen:
+                continue
+            vec = cluster_centroids.get(cid)
+            if vec is None:
+                continue
+            scored.append((_cosine(own_vec, np.asarray(vec, dtype=np.float32)), cid))
+        scored.sort(reverse=True)
+        for _, cid in scored:
+            if len(chosen) >= max_links:
+                break
+            chosen.append(cid)
+            seen.add(cid)
+    return chosen
+
+
+def run_architecture_generation(
+    *,
+    seed: str,
+    audience: str,
+    pillars_input: list[PillarInput],
+    architect: AnthropicLLM,
+    topic_embeddings: dict[str, list[float] | None],
+    cluster_centroids: dict[str, list[float] | None],
+    skipped_silos: list[str] | None = None,
+    pillar_lateral_cosine_threshold: float = 0.55,
+    lateral_article_links_max: int = 3,
+    max_workers: int = 5,
+) -> ArchitectureResult:
+    """Full §7.11 pass: write each pillar's editorial fields (LLM, parallel per
+    silo), then assemble the linking matrix deterministically. Persistence is the
+    caller's job."""
+    result = ArchitectureResult(
+        seed_keyword=seed, detected_audience=audience,
+        skipped_silos=list(skipped_silos or []),
+    )
+    if not pillars_input:
+        return result
+
+    # ---- LLM editorial content per pillar (parallel) ---------------------
+    content: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
+        futures = {
+            ex.submit(_write_pillar_content, p, architect, seed=seed, audience=audience): p.topic_id
+            for p in pillars_input
+        }
+        for fut in as_completed(futures):
+            content[futures[fut]] = fut.result()
+
+    # ---- deterministic linking matrix ------------------------------------
+    pillar_topic_ids = [p.topic_id for p in pillars_input]
+    lateral_pillars = _lateral_pillar_links(
+        pillar_topic_ids, topic_embeddings, pillar_lateral_cosine_threshold
+    )
+
+    for p in pillars_input:
+        c = content[p.topic_id]
+        article_ids = [a.id for a in p.articles]
+        result.pillars.append(
+            Pillar(
+                topic_id=p.topic_id,
+                silo_name=p.silo_name,
+                title=c["title"],
+                target_keyword=c["target_keyword"],
+                summary=c["summary"],
+                h2_outline=c["h2_outline"],
+                supporting_article_ids=article_ids,  # pillar links DOWN to all (#2/#3)
+                lateral_pillar_links=lateral_pillars.get(p.topic_id, []),
+                degraded=c["degraded"],
+            )
+        )
+        same_silo_ids = set(article_ids)
+        for a in p.articles:
+            result.supporting_articles.append(
+                SupportingArticle(
+                    article_id=a.id,
+                    name=a.name,
+                    intent=a.intent,
+                    parent_pillar_topic_id=p.topic_id,  # links UP to its pillar (#2)
+                    lateral_article_links=_lateral_article_links(
+                        a, same_silo_ids, cluster_centroids,
+                        max_links=lateral_article_links_max,
+                    ),
+                )
+            )
+
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "site_architecture", **result.counts()},
+    )
+    return result

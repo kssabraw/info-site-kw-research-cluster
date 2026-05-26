@@ -618,6 +618,48 @@ def get_clusters(session_id: str, user: AuthedUser = Depends(require_user)) -> d
     }
 
 
+# ---- M6 site architecture (PRD §7.11) -------------------------------------
+@router.post("/sessions/{session_id}/architecture", status_code=status.HTTP_202_ACCEPTED)
+def generate_architecture(
+    session_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Kick off M6 site architecture generation (§7.11) in the background: one
+    pillar per article-bearing silo (editorial fields via Opus) + the internal
+    linking matrix, persisted to site_architecture. Requires a prior
+    /plan-articles (it organizes the existing clusters, never re-plans). Idempotent
+    — re-running regenerates (PRD §9.3). Returns immediately; poll GET /summary for
+    status, then GET /architecture for the result."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    if not store.list_clusters(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No article plan to build an architecture from. "
+            "Run /plan-articles first.",
+        )
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+    jobs.submit_architecture(session_id)
+    return {"status": "running", "session_id": session_id}
+
+
+@router.get("/sessions/{session_id}/architecture")
+def get_architecture(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Read-only site architecture for a session (the M6 API view; the two-panel
+    Architecture View UI is M7). 404 until /architecture has produced one."""
+    _require_session(user, session_id)
+    arch = store.get_architecture(session_id)
+    if not arch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No architecture generated yet. Run POST /architecture first.",
+        )
+    return arch
+
+
 @router.get("/sessions/{session_id}/keywords")
 def get_keywords(
     session_id: str,

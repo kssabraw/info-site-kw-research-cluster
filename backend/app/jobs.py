@@ -22,6 +22,11 @@ from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import get_llm, get_orchestrator
 from app.logging import bind_session_id
+from app.pipeline.architecture import (
+    ArticleInput,
+    PillarInput,
+    run_architecture_generation,
+)
 from app.pipeline.article_planning.models import GroupingInput, TopicInput
 from app.pipeline.article_planning.orchestrate_articles import (
     all_degraded,
@@ -78,6 +83,10 @@ def submit_fanout(
 ) -> None:
     _EXECUTOR.submit(run_fanout_job, session_id, threshold, edge_threshold,
                      resolution, seed_terms, peer_terms)
+
+
+def submit_architecture(session_id: str) -> None:
+    _EXECUTOR.submit(run_architecture_job, session_id)
 
 
 def run_expand_job(session_id: str) -> None:
@@ -358,5 +367,86 @@ def run_fanout_job(
         logger.error(
             "step_failed",
             extra={"event": "step_failed", "step": "fanout_job", "reason": repr(exc)},
+        )
+        store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
+
+
+def run_architecture_job(session_id: str) -> None:
+    """§7.11 Site Architecture: one pillar per article-bearing silo + the internal
+    linking matrix, persisted to site_architecture. Reads the article plan
+    produced by /plan-articles; never re-plans. Idempotent — re-running upserts
+    the architecture row (PRD §9.3 "Regenerate architecture")."""
+    bind_session_id(session_id)
+    try:
+        session = store.get_session(session_id)
+        clusters = store.list_clusters(session_id)
+        topics = store.list_topics(session_id)
+        kw_texts = store.get_keyword_texts(
+            [c["primary_keyword_id"] for c in clusters if c.get("primary_keyword_id")]
+        )
+
+        by_topic: dict[str, list[ArticleInput]] = {}
+        for c in clusters:
+            by_topic.setdefault(c["topic_id"], []).append(
+                ArticleInput(
+                    id=c["id"],
+                    name=c["name"],
+                    primary_keyword=kw_texts.get(c.get("primary_keyword_id") or "")
+                    or c["name"],
+                    intent=c.get("intent") or "informational",
+                    peer_article_links=c.get("peer_article_links") or [],
+                )
+            )
+
+        pillars_input: list[PillarInput] = []
+        skipped: list[str] = []
+        for t in topics:
+            arts = by_topic.get(t["id"]) or []
+            if not arts:
+                skipped.append(t["name"])
+                continue
+            pillars_input.append(
+                PillarInput(
+                    topic_id=t["id"],
+                    silo_name=t["name"],
+                    rationale=t.get("rationale") or "",
+                    relationship_type=t.get("relationship_type") or "",
+                    articles=arts,
+                )
+            )
+
+        s = get_settings()
+        result = run_architecture_generation(
+            seed=session["seed_keyword"],
+            audience=session.get("detected_audience") or "",
+            pillars_input=pillars_input,
+            architect=get_orchestrator(),
+            topic_embeddings=store.get_topic_embeddings(session_id),
+            cluster_centroids=store.get_cluster_centroids(session_id),
+            skipped_silos=skipped,
+            pillar_lateral_cosine_threshold=s.architecture_pillar_lateral_cosine,
+            lateral_article_links_max=s.architecture_lateral_article_links_max,
+            max_workers=s.architect_max_workers,
+        )
+        if result.all_degraded():
+            store.update_session(
+                session_id,
+                {
+                    "status": "error",
+                    "last_error": "Site architecture failed on every silo "
+                    "(architect LLM unavailable). Article plan preserved.",
+                },
+            )
+            return
+        store.persist_architecture(session_id, result.architecture_json())
+        store.update_session(session_id, {"status": "complete"})
+        logger.info(
+            "step_complete",
+            extra={"event": "step_complete", "step": "architecture_job", **result.counts()},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "architecture_job", "reason": repr(exc)},
         )
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
