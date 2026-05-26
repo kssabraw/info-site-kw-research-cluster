@@ -710,7 +710,10 @@ def promote_primary(
     """Make a supporting keyword the article's primary; the old primary demotes
     to supporting (§9.2)."""
     _require_cluster(user, cluster_id)
-    return store.promote_primary(cluster_id, body.keyword_id)
+    try:
+        return store.promote_primary(cluster_id, body.keyword_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.delete("/clusters/{cluster_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -745,9 +748,12 @@ def split_cluster(
     """Split a subset of an article's keywords into a new article (§9.2, manual
     selection). Returns the new article."""
     _require_cluster(user, cluster_id)
-    return store.split_cluster(
-        cluster_id, body.keyword_ids, body.name.strip(), body.primary_keyword_id
-    )
+    try:
+        return store.split_cluster(
+            cluster_id, body.keyword_ids, body.name.strip(), body.primary_keyword_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 # ---- M7b keyword bulk actions (PRD §9.1) ----------------------------------

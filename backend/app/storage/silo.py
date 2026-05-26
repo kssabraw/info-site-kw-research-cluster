@@ -485,12 +485,22 @@ def reset_article_planning(session_id: str) -> None:
         }
     ).eq("session_id", session_id).execute()
 
-    client.table("site_architecture").delete().eq("session_id", session_id).execute()
+    delete_architecture(session_id)
 
     topic_ids = [t["id"] for t in list_topics(session_id)]
     if topic_ids:
         client.table("coverage_gaps").delete().in_("topic_id", topic_ids).execute()
         client.table("clusters").delete().in_("topic_id", topic_ids).execute()
+
+
+def delete_architecture(session_id: str) -> None:
+    """Drop the session's stored site architecture. The architecture (M6 §7.11) is
+    a snapshot keyed on cluster ids, so any edit that adds/removes/repoints clusters
+    must invalidate it or its article references dangle — a fresh /architecture run
+    rebuilds it. Keeps the summary's `architecture` flag honest."""
+    get_service_client().table("site_architecture").delete().eq(
+        "session_id", session_id
+    ).execute()
 
 
 def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
@@ -870,8 +880,19 @@ def update_cluster(cluster_id: str, fields: dict) -> dict:
 
 def promote_primary(cluster_id: str, keyword_id: str) -> dict:
     """Make keyword_id the cluster's primary; the old primary becomes supporting
-    (§9.2). The keyword_id is constrained to the cluster, so a stray id is a no-op."""
+    (§9.2). Raises ValueError if the keyword isn't a member of the cluster —
+    otherwise primary_keyword_id could be left pointing at a foreign keyword."""
     client = get_service_client()
+    member = (
+        client.table("keywords")
+        .select("id")
+        .eq("id", keyword_id)
+        .eq("cluster_id", cluster_id)
+        .limit(1)
+        .execute()
+    )
+    if not member.data:
+        raise ValueError("Keyword is not in this article.")
     client.table("keywords").update({"is_primary_for_cluster": False}).eq(
         "cluster_id", cluster_id
     ).execute()
@@ -899,6 +920,7 @@ def delete_cluster(cluster_id: str) -> None:
     client.table("clusters").delete().eq("id", cluster_id).execute()
     if sid:
         _remove_cluster_from_peers(sid, [cluster_id])
+        delete_architecture(sid)
 
 
 def move_keywords(
@@ -989,6 +1011,7 @@ def merge_clusters(
         fields["name"] = name
     client.table("clusters").update(fields).eq("id", survivor_id).execute()
     _remove_cluster_from_peers(session_id, others, replacement=survivor_id)
+    delete_architecture(session_id)
     return get_cluster(survivor_id)
 
 
@@ -1005,10 +1028,23 @@ def split_cluster(
     if not source:
         raise ValueError("source cluster not found")
     client = get_service_client()
+    # Restrict to keywords that are actually in the source — so the new article's
+    # primary can never be a non-member, and we never steal another cluster's kw.
+    member_ids = [
+        r["id"]
+        for r in client.table("keywords")
+        .select("id")
+        .eq("cluster_id", source_id)
+        .in_("id", keyword_ids)
+        .execute()
+        .data
+        or []
+    ]
+    if not member_ids:
+        raise ValueError("None of the selected keywords belong to this article.")
+    primary = new_primary_id if new_primary_id in member_ids else member_ids[0]
+
     new_id = str(uuid.uuid4())
-    primary = new_primary_id if new_primary_id in keyword_ids else (
-        keyword_ids[0] if keyword_ids else None
-    )
     client.table("clusters").insert(
         {
             "id": new_id,
@@ -1019,22 +1055,23 @@ def split_cluster(
             "is_user_edited": True,
         }
     ).execute()
-    # Only keywords currently in the source move (guards against stealing peers).
     client.table("keywords").update(
         {"cluster_id": new_id, "is_primary_for_cluster": False}
-    ).eq("cluster_id", source_id).in_("id", keyword_ids).execute()
-    if primary:
-        client.table("keywords").update({"is_primary_for_cluster": True}).eq(
-            "id", primary
-        ).eq("cluster_id", new_id).execute()
+    ).in_("id", member_ids).execute()
+    client.table("keywords").update({"is_primary_for_cluster": True}).eq(
+        "id", primary
+    ).eq("cluster_id", new_id).execute()
     # If the source's primary moved to the new article, the source loses its primary.
-    if source.get("primary_keyword_id") in keyword_ids:
+    if source.get("primary_keyword_id") in member_ids:
         client.table("clusters").update({"primary_keyword_id": None}).eq(
             "id", source_id
         ).execute()
     client.table("clusters").update(
         {"centroid_embedding": None, "is_user_edited": True}
     ).eq("id", source_id).execute()
+    sid = cluster_session_id(source_id)
+    if sid:
+        delete_architecture(sid)
     return get_cluster(new_id)
 
 
@@ -1090,6 +1127,12 @@ def accept_gap(gap_id: str) -> dict:
     gap = get_gap(gap_id)
     if not gap:
         raise ValueError("gap not found")
+    # Idempotent: a gap already accepted keeps its existing placeholder article
+    # rather than spawning a duplicate on a double-submit.
+    if gap.get("status") == "accepted" and gap.get("accepted_cluster_id"):
+        existing = get_cluster(gap["accepted_cluster_id"])
+        if existing:
+            return existing
     client = get_service_client()
     new_id = str(uuid.uuid4())
     client.table("clusters").insert(
@@ -1104,6 +1147,9 @@ def accept_gap(gap_id: str) -> dict:
     client.table("coverage_gaps").update(
         {"status": "accepted", "accepted_cluster_id": new_id}
     ).eq("id", gap_id).execute()
+    topic = get_topic(gap["topic_id"])
+    if topic:
+        delete_architecture(topic["session_id"])
     return get_cluster(new_id)
 
 

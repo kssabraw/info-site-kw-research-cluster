@@ -32,6 +32,9 @@ export function ClusterView() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["clusters", sessionId] });
     qc.invalidateQueries({ queryKey: ["keywords-all", sessionId] });
+    // Structural edits (delete/merge/split/accept-gap) clear the stored
+    // architecture server-side, so drop its cached copy too.
+    qc.invalidateQueries({ queryKey: ["architecture", sessionId] });
   };
   const edit = useMutation({
     mutationFn: (fn: () => Promise<unknown>) => fn(),
