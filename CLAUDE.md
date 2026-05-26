@@ -144,10 +144,10 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M6 — Site architecture (PRD §15.1 / §7.11): implemented, pending human review +
-live validation.** Built on `claude/gifted-clarke-pONCI`. After article planning,
-each article-bearing silo becomes a **pillar** (a high-level overview page that
-links down to its supporting articles). New endpoints: `POST /sessions/{id}/
+**M6 — Site architecture (PRD §15.1 / §7.11): merged to `main`; live validation
+pending.** Built on `claude/gifted-clarke-pONCI`, merged `--no-ff`. After article
+planning, each article-bearing silo becomes a **pillar** (a high-level overview
+page that links down to its supporting articles). New endpoints: `POST /sessions/{id}/
 architecture` (async, 202 — poll `GET /summary`, whose payload now carries an
 `architecture` block) and `GET /sessions/{id}/architecture` (read; 404 until
 generated). One `site_architecture` row per session (`session_id` PK → a
@@ -181,6 +181,12 @@ down), mirroring the orchestrator.
   lateral-link assembly treats them as priority seeds, then fills within-silo by
   centroid — so cross-silo article links survive *and* the §7.11 same-silo 2–3
   target is met where peers exist.
+- **Post-review fix (adversarial pass):** `reset_article_planning` now also
+  deletes the session's `site_architecture` row. It's called by the plan/regate/
+  fanout jobs, all of which delete + re-create clusters with fresh ids; without
+  this, a re-plan left the stored architecture pointing at dead cluster ids (and
+  `/summary` reported a stale graph as present). Architecture is downstream of the
+  plan, so a re-plan now requires a fresh `/architecture` run.
 - **No live validation** (sandbox has no egress; the `gpt-5.4`/Anthropic calls and
   the deployed stack). Migration `20260526000000_site_architecture.sql` is
   **applied to the live DB** (via Supabase MCP, 2026-05-26; table present, RLS on).
