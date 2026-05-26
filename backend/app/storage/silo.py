@@ -251,6 +251,7 @@ def list_keywords(
     session_id: str,
     topic_id: str | None = None,
     status: str | None = None,
+    statuses: list[str] | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
@@ -262,10 +263,77 @@ def list_keywords(
     )
     if topic_id:
         q = q.eq("topic_id", topic_id)
-    if status:
+    if statuses:
+        q = q.in_("status", statuses)
+    elif status:
         q = q.eq("status", status)
     res = q.order("created_at").range(offset, offset + limit - 1).execute()
     return res.data
+
+
+def list_sessions(access_token: str, project_id: str) -> list[dict]:
+    """Sessions under a project for the Session Browser (PRD §9.4), newest first.
+    RLS-scoped: only sessions the caller may see are returned. Each row carries a
+    derived `coverage_mode` (from settings) and a `cluster_count` (planned-article
+    count) so the browser can show run status at a glance."""
+    rows = (
+        get_user_client(access_token)
+        .table("sessions")
+        .select(
+            "id, seed_keyword, status, settings, created_at, completed_at"
+        )
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .execute()
+    ).data
+    if not rows:
+        return []
+
+    session_ids = [r["id"] for r in rows]
+    counts = _cluster_counts_by_session(session_ids)
+    out = []
+    for r in rows:
+        settings = r.get("settings") or {}
+        out.append(
+            {
+                "id": r["id"],
+                "seed_keyword": r["seed_keyword"],
+                "status": r["status"],
+                "coverage_mode": settings.get("coverage_mode", "standard"),
+                "cluster_count": counts.get(r["id"], 0),
+                "created_at": r["created_at"],
+                "completed_at": r.get("completed_at"),
+            }
+        )
+    return out
+
+
+def _cluster_counts_by_session(session_ids: list[str]) -> dict[str, int]:
+    """Map session_id -> planned-article (cluster) count. Clusters reference
+    topics, not sessions, so we hop through topics. Service client: RLS visibility
+    was already decided by the user-scoped session read upstream."""
+    client = get_service_client()
+    topics = (
+        client.table("topics")
+        .select("id, session_id")
+        .in_("session_id", session_ids)
+        .execute()
+    ).data
+    if not topics:
+        return {}
+    topic_to_session = {t["id"]: t["session_id"] for t in topics}
+    clusters = (
+        client.table("clusters")
+        .select("topic_id")
+        .in_("topic_id", list(topic_to_session))
+        .execute()
+    ).data
+    counts: dict[str, int] = {}
+    for c in clusters:
+        sid = topic_to_session.get(c["topic_id"])
+        if sid:
+            counts[sid] = counts.get(sid, 0) + 1
+    return counts
 
 
 # ---- M4 deep-mine gating, relevance, clustering ---------------------------

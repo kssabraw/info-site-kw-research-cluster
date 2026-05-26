@@ -117,6 +117,7 @@ class DeepMineBody(BaseModel):
 class SiloDiscoveryResponse(BaseModel):
     session_id: str
     status: str
+    seed_keyword: str | None = None
     detected_audience: str | None = None
     needs_disambiguation: bool = False
     interpretations: list[str] = []
@@ -245,6 +246,7 @@ def get_session(
     return SiloDiscoveryResponse(
         session_id=session_id,
         status=session["status"],
+        seed_keyword=session.get("seed_keyword"),
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
     )
@@ -666,13 +668,40 @@ def get_keywords(
     user: AuthedUser = Depends(require_user),
     topic_id: str | None = None,
     status: str | None = None,
+    statuses: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
+    """Keywords for a session. `statuses` (comma-separated) takes precedence over
+    `status` — the Table/Cluster views pass `active,excluded,covered` to fetch
+    only surviving keywords (PRD §9.1)."""
     _require_session(user, session_id)
-    return store.list_keywords(
-        session_id, topic_id=topic_id, status=status, limit=min(limit, 500), offset=offset
+    status_list = (
+        [s for s in (statuses.split(",") if statuses else []) if s] or None
     )
+    return store.list_keywords(
+        session_id,
+        topic_id=topic_id,
+        status=status,
+        statuses=status_list,
+        limit=min(limit, 500),
+        offset=offset,
+    )
+
+
+# ---- Session browser (PRD §9.4) -------------------------------------------
+@router.get("/projects/{project_id}/sessions")
+def list_project_sessions(
+    project_id: str, user: AuthedUser = Depends(require_user)
+) -> list[dict]:
+    """Sessions under a project, newest first, for the Session Browser (§9.4).
+    Each carries seed, status, coverage mode, cluster count, and timestamps so the
+    UI can resume a session. RLS-scoped to what the caller may see."""
+    if not store.project_visible_to_user(user.access_token, project_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+    return store.list_sessions(user.access_token, project_id)
 
 
 # ---- Topic review actions (PRD §7.1.4) ------------------------------------
