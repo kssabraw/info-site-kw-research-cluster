@@ -41,6 +41,7 @@ export interface Silo {
 export interface SiloDiscovery {
   session_id: string;
   status: string;
+  seed_keyword: string | null;
   detected_audience: string | null;
   needs_disambiguation: boolean;
   interpretations: string[];
@@ -79,6 +80,22 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const getMe = () => request<Me>("/me");
 export const getProjects = () => request<Project[]>("/projects");
+
+// Session Browser (PRD §9.4): sessions under a project, newest first, for
+// resume. cluster_count is the planned-article count; status drives where a
+// resumed session lands (results views vs. still-in-flight).
+export interface SessionListItem {
+  id: string;
+  seed_keyword: string;
+  status: string;
+  coverage_mode: string;
+  cluster_count: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export const listSessions = (projectId: string) =>
+  request<SessionListItem[]>(`/projects/${projectId}/sessions`);
 
 export interface CreateSessionBody {
   seed_keyword: string;
@@ -185,12 +202,46 @@ export interface PipelineSummary {
 export interface Keyword {
   id: string;
   topic_id: string;
+  cluster_id: string | null;
   keyword: string;
   sources: string[];
   status: string;
+  is_primary_for_cluster: boolean;
   relevance_score: number | null;
   created_at: string;
 }
+
+// One planned article (the orchestrator's output). Mirrors fanout.clusters
+// minus the centroid embedding. M7 read shapes; editing lands in M7b.
+export interface Cluster {
+  id: string;
+  topic_id: string;
+  name: string;
+  primary_keyword_id: string | null;
+  intent: string | null;
+  suggested_h2s: string[] | null;
+  peer_article_links: string[] | null;
+  source_statistical_grouping_id: string | null;
+  orchestrator_notes: string | null;
+  is_user_edited: boolean;
+  is_gap_placeholder: boolean;
+  created_at: string;
+}
+
+export interface CoverageGap {
+  id: string;
+  topic_id: string;
+  suggested_title: string;
+  target_keyword: string | null;
+  rationale: string | null;
+  status: "pending" | "accepted" | "dismissed";
+  accepted_cluster_id: string | null;
+}
+
+export const getClusters = (id: string) =>
+  request<{ clusters: Cluster[]; coverage_gaps: CoverageGap[] }>(
+    `/sessions/${id}/clusters`,
+  );
 
 export const setDeepMine = (id: string, topic_ids: string[]) =>
   request<{ gated_topic_ids: string[]; topics: Silo[] }>(`/sessions/${id}/deep-mine`, {
@@ -276,6 +327,26 @@ export const getKeywords = (id: string, topicId: string, limit = 200, status = "
     `/sessions/${id}/keywords?topic_id=${encodeURIComponent(topicId)}` +
       `&status=${encodeURIComponent(status)}&limit=${limit}`,
   );
+
+// The Table/Cluster views need every *surviving* keyword (active + the user
+// states excluded/covered), not just one topic's. The endpoint caps each page
+// at 500, so we page through with offset until a short page comes back. Hard
+// stop at 20 pages (10k) so a runaway never spins forever.
+const SURVIVING_STATUSES = "active,excluded,covered";
+
+export async function getAllSurvivingKeywords(id: string): Promise<Keyword[]> {
+  const pageSize = 500;
+  const all: Keyword[] = [];
+  for (let offset = 0; offset < pageSize * 20; offset += pageSize) {
+    const page = await request<Keyword[]>(
+      `/sessions/${id}/keywords?statuses=${encodeURIComponent(SURVIVING_STATUSES)}` +
+        `&limit=${pageSize}&offset=${offset}`,
+    );
+    all.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return all;
+}
 
 // M6 site architecture (PRD §7.11). One pillar per article-bearing silo + the
 // internal linking matrix. The full two-panel Architecture View is M7.
