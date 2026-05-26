@@ -324,7 +324,11 @@ def list_keywords(
         q = q.in_("status", statuses)
     elif status:
         q = q.eq("status", status)
-    res = q.order("created_at").range(offset, offset + limit - 1).execute()
+    # (created_at, id) is a total order so offset pagination is stable — without
+    # the unique id tiebreaker, rows with tied created_at (bulk inserts share a
+    # timestamp) can shift across page boundaries and duplicate/skip in the
+    # Table/Cluster views' paged "all keywords" fetch.
+    res = q.order("created_at").order("id").range(offset, offset + limit - 1).execute()
     return res.data
 
 
