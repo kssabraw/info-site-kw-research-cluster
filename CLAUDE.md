@@ -182,9 +182,9 @@ down), mirroring the orchestrator.
   centroid — so cross-silo article links survive *and* the §7.11 same-silo 2–3
   target is met where peers exist.
 - **No live validation** (sandbox has no egress; the `gpt-5.4`/Anthropic calls and
-  the migration apply happen on the deployed stack). Migration
-  `20260526000000_site_architecture.sql` is **written but not yet applied** to the
-  live DB. Backend: 93 tests pass, ruff clean, import smoke OK; frontend builds.
+  the deployed stack). Migration `20260526000000_site_architecture.sql` is
+  **applied to the live DB** (via Supabase MCP, 2026-05-26; table present, RLS on).
+  Backend: 93 tests pass, ruff clean, import smoke OK; frontend builds.
 - **Planner default still unresolved** (orchestrator default, direct via
   `{"direct": true}`) — carried in from RF, not touched by M6.
 
@@ -363,4 +363,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.0 | 2026-05-20 | Initial CLAUDE.md created as part of M1 kickoff. Locks architectural decisions from PRD v1.7. |
 | 1.1 | 2026-05-25 | M5 signed off (orchestrator + dedup, plus async execution, peer-entity filter, Lever-3 routing, direct mode, calibration tooling). Recursive Fanout (§7.7) re-sequenced as the next milestone ahead of the PRD's M6; spec in `docs/recursive-fanout-spec.md`. |
 | 1.2 | 2026-05-26 | Recursive Fanout (§7.7, Phase 1) signed off — `/fanout` second-stage that re-expands each silo's top cluster representatives as sub-anchors, cost-gated, re-gate/re-cluster on the enlarged pool. Validated live on `retatrutide` (`4ecefaa1`): 1,007 active recursive keywords, 0 peer leak. Build returns to the PRD sequence; **M6 (site architecture) is next.** |
-| 1.3 | 2026-05-26 | M6 (§7.11 site architecture) **implemented, pending review** — `POST/GET /sessions/{id}/architecture`, `site_architecture` table (one row/session, upsert on regenerate), pillar editorial content via Opus (per-pillar, parallel) + deterministic linking matrix guaranteeing the §15.2 acceptance rules. Migration written but not yet applied to the live DB; no live validation (sandbox egress). Built on `claude/gifted-clarke-pONCI`. |
+| 1.3 | 2026-05-26 | M6 (§7.11 site architecture) **implemented, pending review** — `POST/GET /sessions/{id}/architecture`, `site_architecture` table (one row/session, upsert on regenerate), pillar editorial content via Opus (per-pillar, parallel) + deterministic linking matrix guaranteeing the §15.2 acceptance rules. Migration applied to the live DB (via MCP); no live validation yet (sandbox egress). Built on `claude/gifted-clarke-pONCI`. |
