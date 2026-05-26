@@ -16,9 +16,6 @@ runs surface real numbers (per §8.1).
 
 from dataclasses import dataclass
 
-# Reference config the §8.1 table is quoted at.
-_REF_SILOS = 5
-
 # Flat per-run components ($), independent of silo / deep-mine count.
 _SILO_DISCOVERY = 0.20            # grounding + demand sample + SERP structure
 _DEDUP = 0.10                     # cross-topic dedup pass (1 call)
@@ -51,13 +48,6 @@ class CostEstimate:
     total_usd: float
     breakdown: dict[str, float]
     recursive_multiplier: float | None  # None when not a recursive run
-
-    def as_dict(self) -> dict:
-        return {
-            "estimated_cost_usd": self.total_usd,
-            "breakdown": self.breakdown,
-            "recursive_multiplier": self.recursive_multiplier,
-        }
 
 
 def estimate_cost(

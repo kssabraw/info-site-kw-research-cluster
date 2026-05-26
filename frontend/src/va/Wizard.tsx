@@ -937,9 +937,13 @@ function WaitingStep(p: {
 
   const status = summaryQ.data?.status;
 
-  // Owner approved (or the run is already moving) → into the progress flow.
+  // Once the request is decided and the run is moving, hand off to the progress
+  // screen, which owns every post-approval status (running / awaiting / complete
+  // AND error — a fast-failing approved run can skip straight to error between
+  // 30s polls, and ProgressStep is what surfaces last_error). Only the two
+  // gate states (pending_approval, rejected) stay on this screen.
   useEffect(() => {
-    if (status === "running" || status === "awaiting_article_planning" || status === "complete") {
+    if (status && status !== "pending_approval" && status !== "rejected") {
       p.onApproved();
     }
   }, [status, p]);
