@@ -24,6 +24,8 @@ silo names relabeled).
 """
 
 import logging
+import random
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -111,15 +113,21 @@ def _stub_pillar_content(pillar: PillarInput, *, reason: str) -> dict:
     }
 
 
+_MAX_ATTEMPTS = 3
+
+
 def _write_pillar_content(
     pillar: PillarInput, architect: AnthropicLLM, *, seed: str, audience: str
 ) -> dict:
-    """Get the LLM's editorial fields for one pillar. One reprompt on a
-    transport/shape failure, then degrade to a deterministic stub for this pillar
-    only (PRD §16.2)."""
+    """Get the LLM's editorial fields for one pillar. Retries on a transport/shape
+    failure, then degrades to a deterministic stub for this pillar only (PRD
+    §16.2). On a transport error (rate-limit / overload — the dominant failure when
+    several pillars fire at once) it backs off before retrying, since the SDK's own
+    retries and an immediate reprompt all land in the same throttling window; a
+    shape failure reprompts immediately (no point waiting)."""
     user = _build_pillar_prompt(pillar, seed, audience)
     last_error: str | None = None
-    for _ in range(2):
+    for attempt in range(_MAX_ATTEMPTS):
         prompt = user if last_error is None else (
             f"{user}\n\nYour previous response could not be used: {last_error}\n"
             "Return a corrected pillar via the submit_pillar tool."
@@ -135,6 +143,10 @@ def _write_pillar_content(
             )
         except AnthropicError as exc:
             last_error = str(exc)
+            if attempt < _MAX_ATTEMPTS - 1:
+                # Exponential backoff with jitter to spread retries out of the
+                # shared rate-limit window (1.5s, 3s, capped) before reprompting.
+                time.sleep(min(8.0, 1.5 * (2 ** attempt)) + random.uniform(0, 0.5))
             continue
         title = str(raw.get("title") or "").strip()
         target = str(raw.get("target_keyword") or "").strip()

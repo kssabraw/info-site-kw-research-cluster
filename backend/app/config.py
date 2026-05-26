@@ -125,7 +125,10 @@ class Settings(BaseSettings):
     # M6 site architecture (PRD §7.11). Reuses the orchestrator's Anthropic client
     # (§7.11: "share the same LLM client and credentials"); one editorial call per
     # pillar, run in parallel. The linking matrix is assembled deterministically.
-    architect_max_workers: int = 5
+    # Kept low: live validation showed ~5 simultaneous pillar calls burst Anthropic
+    # rate limits and degraded most pillars to stubs; 2-at-a-time + per-call backoff
+    # cleared it (pillars are few, so throughput isn't the constraint).
+    architect_max_workers: int = 2
     # Pillars link laterally only above this topic-embedding cosine (§15.2 #4).
     architecture_pillar_lateral_cosine: float = 0.55
     # Lateral peer links per supporting article (§7.11 "2-3 lateral links").
