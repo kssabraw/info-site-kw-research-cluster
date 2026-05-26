@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet, useOutletContext, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { getMe, getSession, getSummary, type Silo } from "../shared/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { getMe, getSession, getSummary, planArticles, type Silo } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
 import { CostBanner } from "../shared/CostBanner";
 import { hasResults, statusClass, statusLabel } from "../shared/sessionStatus";
@@ -47,6 +47,16 @@ export function SessionWorkspace() {
   });
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const role: "owner" | "va" = me.data?.role === "owner" ? "owner" : "va";
+
+  const qc = useQueryClient();
+  // Plan articles from the workspace (PRD §7.10). The in-memory creation flow has
+  // its own "Plan articles" button, but a session resumed from the browser (or a
+  // page refresh) lands here, so the workspace needs to be able to kick off
+  // planning too. plan-articles is allowed for both roles (not capability-gated).
+  const planMut = useMutation({
+    mutationFn: () => planArticles(sessionId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["summary", sessionId] }),
+  });
 
   const status = summary.data?.status ?? session.data?.status;
   const topics = session.data?.silos ?? [];
@@ -103,6 +113,28 @@ export function SessionWorkspace() {
               steps via the API.
             </p>
           </div>
+        )}
+
+        {status === "awaiting_article_planning" && (
+          <div className="plan-bar">
+            <div>
+              <p style={{ margin: 0, fontWeight: 600 }}>Keyword pipeline complete — ready to plan.</p>
+              <p className="muted" style={{ margin: "2px 0 0" }}>
+                Turn the statistical groupings into a content map (article planning, §7.10).
+              </p>
+            </div>
+            <button
+              className="btn btn-primary"
+              style={{ width: "auto" }}
+              disabled={planMut.isPending}
+              onClick={() => planMut.mutate()}
+            >
+              {planMut.isPending ? "Starting…" : "Plan articles"}
+            </button>
+          </div>
+        )}
+        {planMut.isError && (
+          <p className="form-error">Couldn’t start planning. Try again.</p>
         )}
 
         {status && hasResults(status) && session.data && (
