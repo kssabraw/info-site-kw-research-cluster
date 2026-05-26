@@ -155,13 +155,12 @@ unbuilt — columns render "—").
 
 **M7 — Owner UI (PRD §15.1 / §9): complete & merged to `main` (2026-05-26).**
 Built on `claude/sweet-ramanujan-PXvK0` (this session's pinned branch — *not* an
-`m7-…` branch, per the session task instruction), merged `--no-ff`. **Note:** the
-remote `main` was sitting at the repo-reset point, so this merge brought the whole
-accumulated M2–M7 history to `main` at once (it was a strict fast-forwardable
-superset — no conflicts). **Live validation on the deployed stack is still
-recommended** — merge happened per owner instruction, but sandbox egress blocked
-browser testing (backend 98 tests + ruff clean, frontend builds strict-clean).
-Split into two parts:
+`m7-…` branch, per the session task instruction), merged `--no-ff`. Remote `main`
+was at the M6 sign-off (`03c3e54`); the merge added the M7 commits cleanly
+(`03c3e54..84f96b9`, no conflicts). **Live validation on the deployed stack is
+still recommended** — merge happened per owner instruction, but sandbox egress
+blocked browser testing (backend 98 tests + ruff clean, frontend builds
+strict-clean). Split into two parts:
 
 **M7a (read-only):** react-router added; the three views render against the
 read-only M1–M6 API. **Table View** (§9.1) — sortable + filterable
@@ -473,4 +472,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.3 | 2026-05-26 | M6 (§7.11 site architecture) **implemented, pending review** — `POST/GET /sessions/{id}/architecture`, `site_architecture` table (one row/session, upsert on regenerate), pillar editorial content via Opus (per-pillar, parallel) + deterministic linking matrix guaranteeing the §15.2 acceptance rules. Migration applied to the live DB (via MCP); no live validation yet (sandbox egress). Built on `claude/gifted-clarke-pONCI`. |
 | 1.4 | 2026-05-26 | M6 **signed off** — validated live on `retatrutide` `4ecefaa1` (315 clusters): 5 pillars, 0 orphans, 0 dangling links, all four §15.2 criteria pass. Fixed transient rate-limit degradation (`architect_max_workers` 5→2 + backoff). Merged to `main`. **M7 (Owner UI) is next.** |
 | 1.5 | 2026-05-26 | M7 (Owner UI, §9) **implemented, pending review + live validation.** M7a: react-router + read-only Table/Cluster/Architecture/Split views + Project+Session Browser (UI session-resume); new reads `GET /projects/{id}/sessions`, `statuses` keyword filter, `seed_keyword` on `GET /sessions/{id}`. M7b: full cluster editing (rename/intent/H2/promote/move/delete/merge/split), gap accept/dismiss, whole-session orchestrator re-run, Table bulk actions, browser archive/move/delete; migration `20260527000000_session_archive.sql` applied live via MCP. Orchestrator-vs-direct default **settled: orchestrator stays default** (no code flip). Built on `claude/sweet-ramanujan-PXvK0`; 98 backend tests pass, frontend builds; not browser-validated (sandbox egress). Deferred/flagged: per-topic re-run, split option (b), session duplicate, metrics enrichment (§7.8). |
-| 1.6 | 2026-05-26 | M7 **merged to `main`** (`--no-ff`, per owner instruction) after an adversarial review pass + fixes: structural cluster edits now invalidate the stored `site_architecture` (was left dangling); `promote_primary`/`split_cluster` guard against a primary pointing at a non-member keyword (→ 400); `accept_gap` is idempotent. Remote `main` had been at the repo-reset point, so the merge brought the full M2–M7 history to `main` at once (strict superset, no conflicts). Live validation on the deployed stack still recommended. **M8 (VA wizard, §10) is next.** |
+| 1.6 | 2026-05-26 | M7 **merged to `main`** (`--no-ff`, per owner instruction) after an adversarial review pass + fixes: structural cluster edits now invalidate the stored `site_architecture` (was left dangling); `promote_primary`/`split_cluster` guard against a primary pointing at a non-member keyword (→ 400); `accept_gap` is idempotent. Remote `main` was at the M6 sign-off (`03c3e54`); the merge added only the M7 commits (`03c3e54..84f96b9`, no conflicts). Live validation on the deployed stack still recommended. **M8 (VA wizard, §10) is next.** |
