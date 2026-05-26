@@ -29,15 +29,20 @@ logger = logging.getLogger(__name__)
 
 
 def _absorb_small(groupings: list[Grouping], min_size: int) -> list[Grouping]:
-    """Fold sub-clusters below `min_size` into the largest one, so a split never
-    produces thin stub articles. Returns the surviving (large-enough) groupings,
-    with the absorbed keywords appended to the largest."""
+    """Keep only sub-clusters of at least `min_size`, folding the rest into the
+    largest, so a split never produces thin stub articles. If NO sub-cluster meets
+    `min_size` (the whole article shattered into dust), return a single grouping so
+    the caller leaves the article whole rather than splitting it into stubs."""
     if len(groupings) <= 1:
         return groupings
     big = [g for g in groupings if g.size >= min_size]
     small = [g for g in groupings if g.size < min_size]
-    if not big or not small:
-        return big or groupings
+    if not big:
+        # Nothing substantial — do NOT split into stubs; signal "no split" by
+        # returning one grouping (the largest), which the caller treats as no-op.
+        return [max(groupings, key=lambda g: g.size)]
+    if not small:
+        return big
     extra = [k for g in small for k in g.keywords]
     largest = max(big, key=lambda g: g.size)
     merged = Grouping(

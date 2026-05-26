@@ -40,6 +40,14 @@ _BLOCKED_TOKENS = frozenset({
     "porn", "porno", "pornography", "xxx", "nsfw", "casino", "casinos",
     "gambling", "viagra", "cialis",
 })
+# Platform / forum / social intent (PRD §7.6 junk): a keyword that names a
+# discussion platform or social network signals the searcher wants *that
+# platform's* threads/videos, not an authority-site article — so an info site
+# never targets it. Whole-word match (so "redditor" or a brand containing these
+# substrings is unaffected). Owner-chosen set; extend here if more surface.
+_PLATFORM_TOKENS = frozenset({
+    "reddit", "quora", "forum", "forums", "youtube", "tiktok", "facebook",
+})
 _MIN_CHARS = 2
 _MAX_WORDS = 12
 
@@ -75,7 +83,7 @@ def _is_junk(keyword: str) -> bool:
     words = _WORD_RE.findall(keyword)
     if not words or len(words) > _MAX_WORDS:
         return True
-    return any(w in _BLOCKED_TOKENS for w in words)
+    return any(w in _BLOCKED_TOKENS or w in _PLATFORM_TOKENS for w in words)
 
 
 def _term_pattern(terms: list[str] | None):

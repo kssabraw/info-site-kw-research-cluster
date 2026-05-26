@@ -73,9 +73,9 @@ class Settings(BaseSettings):
     # fold back into the largest so the long-tail isn't shattered into thin stubs.
     split_oversized_articles: bool = True
     split_min_keywords: int = 40              # only articles larger than this split
-    split_resolution: float = 1.5             # > base -> finer sub-communities
+    split_resolution: float = 1.2             # > base -> finer sub-communities
     split_edge_threshold: float = 0.55        # cosine edge for the sub-graph
-    split_min_subarticle_size: int = 5        # smaller sub-clusters fold into largest
+    split_min_subarticle_size: int = 10       # smaller sub-clusters fold into largest
 
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""

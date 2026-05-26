@@ -81,6 +81,31 @@ def test_cohesive_article_does_not_split():
     assert len(result.per_topic[0].articles) == 1
 
 
+def test_all_tiny_shatter_does_not_split_into_stubs():
+    """If an over-large article fragments into ONLY sub-min-size communities (the
+    real over-fragmentation bug), it must stay whole — never split into stubs.
+    Here each keyword is its own direction, so Louvain makes singletons."""
+    n = 30
+    kws = [f"k{i}" for i in range(n)]
+
+    def embed_orthogonal(keywords: list[str]) -> list[list[float]]:
+        # Each keyword on its own axis -> no edges above threshold -> all singletons.
+        out = []
+        for kw in keywords:
+            v = [0.0] * n
+            v[kws.index(kw)] = 1.0
+            out.append(v)
+        return out
+
+    result = _result(_article("k0", kws[1:]))
+    split_oversized_articles(
+        result, embed_fn=embed_orthogonal,
+        min_keywords=10, resolution=1.0, edge_threshold=0.5, min_subarticle_size=5,
+    )
+    assert len(result.per_topic[0].articles) == 1  # stayed whole, no stubs
+    assert "salience_split_added" not in result.per_topic[0].log
+
+
 def test_tiny_subcluster_folds_into_largest_no_thin_stub():
     # Group B has only 2 members; with min_subarticle_size=5 it should fold back
     # into the large group A rather than spawn a 2-keyword stub article.

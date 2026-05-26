@@ -40,6 +40,31 @@ def test_blocked_tokens_and_length_are_junk_without_embedding():
     assert embed.calls["n"] == 1
 
 
+def test_platform_terms_are_junk_but_substrings_are_safe():
+    embed = make_embed_fn({
+        "retatrutide dosage": _unit(1, 0),
+        "redditor community": _unit(1, 0),  # 'redditor' != 'reddit' -> not blocked
+    })
+    r = run_relevance_gate(
+        per_topic={"t1": {
+            "retatrutide dosage": ["keyword_ideas"],
+            "retatrutide reddit": ["keyword_suggestions"],   # platform -> junk
+            "retatrutide review youtube": ["autocomplete"],  # platform -> junk
+            "best retatrutide forum": ["competitor"],        # platform -> junk
+            "redditor community": ["competitor"],            # whole-word: safe
+        }},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+    )
+    by_kw = {g.keyword: g for g in r.per_topic["t1"]}
+    assert by_kw["retatrutide reddit"].status == "filtered_junk"
+    assert by_kw["retatrutide review youtube"].status == "filtered_junk"
+    assert by_kw["best retatrutide forum"].status == "filtered_junk"
+    assert by_kw["retatrutide dosage"].status == "active"
+    assert by_kw["redditor community"].status == "active"
+
+
 def test_relevance_threshold_splits_active_and_filtered():
     # anchor points along (1,0). "near" is aligned; "far" is orthogonal.
     vectors = {"near kw": _unit(1, 0.1), "far kw": _unit(0, 1)}
