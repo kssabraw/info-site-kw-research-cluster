@@ -24,7 +24,8 @@ const INTENTS = ["informational", "commercial", "transactional", "comparison", "
 // All edits write straight to Postgres and the orchestrator never re-runs on its
 // own (§9.2). "Re-run orchestrator" is an explicit, destructive action.
 export function ClusterView() {
-  const { sessionId, topics } = useSession();
+  const { sessionId, topics, role } = useSession();
+  const isVA = role === "va";
   const qc = useQueryClient();
   const clustersQ = useQuery({ queryKey: ["clusters", sessionId], queryFn: () => getClusters(sessionId) });
   const keywordsQ = useQuery({ queryKey: ["keywords-all", sessionId], queryFn: () => getAllSurvivingKeywords(sessionId) });
@@ -99,6 +100,14 @@ export function ClusterView() {
 
   return (
     <div>
+      {isVA ? (
+        <div className="edit-toolbar">
+          <span className="muted">
+            You can rename articles and move keywords between them. Restructuring
+            (split, merge, delete) is handled by your workspace owner.
+          </span>
+        </div>
+      ) : (
       <div className="edit-toolbar">
         {mergeMode ? (
           <>
@@ -130,6 +139,7 @@ export function ClusterView() {
           </>
         )}
       </div>
+      )}
 
       <div className="cluster-tree">
         {topicsWithContent.map((t) => (
@@ -143,7 +153,7 @@ export function ClusterView() {
             clusterName={clusterName}
             sessionId={sessionId}
             run={run}
-            mergeMode={mergeMode}
+            mergeMode={!isVA && mergeMode}
             mergeSel={mergeSel}
             toggleMerge={toggleMerge}
           />
@@ -212,6 +222,8 @@ function ArticleRow(p: {
   toggleMerge: (id: string) => void;
 }) {
   const { cluster: c, keywords, run } = p;
+  const { role } = useSession();
+  const isVA = role === "va";
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(c.name);
@@ -288,15 +300,19 @@ function ArticleRow(p: {
           </DetailLine>
 
           <DetailLine label="Intent">
-            <select
-              className="select inline-select"
-              value={c.intent ?? "informational"}
-              onChange={(e) => run(() => editCluster(c.id, { intent: e.target.value }))}
-            >
-              {INTENTS.map((i) => (
-                <option key={i} value={i}>{i}</option>
-              ))}
-            </select>
+            {isVA ? (
+              <span>{c.intent ?? "—"}</span>
+            ) : (
+              <select
+                className="select inline-select"
+                value={c.intent ?? "informational"}
+                onChange={(e) => run(() => editCluster(c.id, { intent: e.target.value }))}
+              >
+                {INTENTS.map((i) => (
+                  <option key={i} value={i}>{i}</option>
+                ))}
+              </select>
+            )}
           </DetailLine>
 
           <DetailLine label="Supporting">
@@ -308,9 +324,11 @@ function ArticleRow(p: {
                     <input type="checkbox" checked={splitSel.has(k.id)} onChange={() => toggleSplit(k.id)} />
                   )}
                   <span className="kw-edit-text">{k.keyword}</span>
-                  <button className="link-btn" onClick={() => run(() => promotePrimary(c.id, k.id))}>
-                    make primary
-                  </button>
+                  {!isVA && (
+                    <button className="link-btn" onClick={() => run(() => promotePrimary(c.id, k.id))}>
+                      make primary
+                    </button>
+                  )}
                   <select
                     className="select kw-move-select"
                     value=""
@@ -343,7 +361,9 @@ function ArticleRow(p: {
             ) : (
               <span>
                 {(c.suggested_h2s ?? []).join(" · ") || <span className="cell-muted">none</span>}{" "}
-                <button className="link-btn" onClick={() => { setH2Draft((c.suggested_h2s ?? []).join("\n")); setEditingH2(true); }}>edit</button>
+                {!isVA && (
+                  <button className="link-btn" onClick={() => { setH2Draft((c.suggested_h2s ?? []).join("\n")); setEditingH2(true); }}>edit</button>
+                )}
               </span>
             )}
           </DetailLine>
@@ -351,7 +371,9 @@ function ArticleRow(p: {
           {links.length > 0 && <DetailLine label="Links to">{links.map(p.clusterName).join(", ")}</DetailLine>}
 
           <div className="article-actions">
-            {splitMode ? (
+            {isVA ? (
+              <RequestRestructure articleName={c.name} />
+            ) : splitMode ? (
               <>
                 <span className="muted">{splitSel.size} keyword(s) → new article</span>
                 <button className="btn btn-primary" style={{ width: "auto" }} disabled={!splitSel.size} onClick={doSplit}>Create</button>
@@ -379,12 +401,14 @@ function ArticleRow(p: {
 }
 
 function GapRow({ gap, run }: { gap: CoverageGap; run: (fn: () => Promise<unknown>) => void }) {
+  const { role } = useSession();
+  const isVA = role === "va";
   return (
     <div className="gap-row">
       <span className="gap-mark">⚠ Gap</span>
       <span>{gap.suggested_title}</span>
       {gap.rationale && <span className="cell-muted">— {gap.rationale}</span>}
-      {gap.status === "pending" ? (
+      {gap.status === "pending" && !isVA ? (
         <span className="gap-actions">
           <button className="link-btn" onClick={() => run(() => acceptGap(gap.id))}>Accept</button>
           <button className="link-btn link-danger" onClick={() => run(() => dismissGap(gap.id))}>Dismiss</button>
@@ -393,6 +417,26 @@ function GapRow({ gap, run }: { gap: CoverageGap; run: (fn: () => Promise<unknow
         <span className="badge">{gap.status}</span>
       )}
     </div>
+  );
+}
+
+// Stub for the VA "Request restructure from Owner" action (PRD §10.2). The real
+// owner notification / request queue lands with the approval workflow (M9); for
+// now this just acknowledges the flag locally.
+function RequestRestructure({ articleName }: { articleName: string }) {
+  const [sent, setSent] = useState(false);
+  if (sent) return <span className="muted">Flagged for owner review.</span>;
+  return (
+    <button
+      className="link-btn"
+      title="Owner notifications arrive with the approval workflow"
+      onClick={() => {
+        setSent(true);
+        alert(`Restructure requested for "${articleName}". Owner review arrives in a later update.`);
+      }}
+    >
+      Request restructure from Owner
+    </button>
   );
 }
 

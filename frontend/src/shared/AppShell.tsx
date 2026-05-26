@@ -9,11 +9,13 @@ import { useAuth } from "./auth";
 export function AppShell({ children }: { children: ReactNode }) {
   const { signOut } = useAuth();
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
+  // VAs have no project browser; their home is the wizard (PRD §10.3).
+  const home = me.data?.role === "va" ? "/wizard" : "/projects";
 
   return (
     <>
       <header className="topbar">
-        <Link to="/projects" className="brand" style={{ textDecoration: "none", color: "inherit" }}>
+        <Link to={home} className="brand" style={{ textDecoration: "none", color: "inherit" }}>
           <span className="brand-mark" aria-hidden="true" />
           <span className="brand-name">Topic Fanout</span>
         </Link>

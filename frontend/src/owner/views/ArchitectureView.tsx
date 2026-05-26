@@ -13,7 +13,8 @@ import { useSession } from "../SessionWorkspace";
 // matrix. Regenerate re-runs §7.11. "Send to Brief Generator" is disabled —
 // content-platform-api doesn't exist yet (§16.2).
 export function ArchitectureView() {
-  const { sessionId } = useSession();
+  const { sessionId, role } = useSession();
+  const isVA = role === "va";
   const qc = useQueryClient();
   const arch = useQuery({ queryKey: ["architecture", sessionId], queryFn: () => getArchitecture(sessionId), retry: false });
   const summary = useQuery({ queryKey: ["summary", sessionId], queryFn: () => getSummary(sessionId) });
@@ -45,10 +46,16 @@ export function ArchitectureView() {
     return (
       <div className="card">
         <p style={{ margin: 0, fontWeight: 600 }}>No architecture generated yet.</p>
-        <p className="muted">Generate the pillar / supporting-article site map and its internal links.</p>
-        <button className="btn btn-primary" style={{ width: "auto" }} disabled={busy || regen.isPending} onClick={() => regen.mutate()}>
-          {busy || regen.isPending ? <><span className="spinner-sm" />Generating…</> : "Generate architecture"}
-        </button>
+        {isVA ? (
+          <p className="muted">Your workspace owner generates the pillar / supporting-article site map for this session.</p>
+        ) : (
+          <>
+            <p className="muted">Generate the pillar / supporting-article site map and its internal links.</p>
+            <button className="btn btn-primary" style={{ width: "auto" }} disabled={busy || regen.isPending} onClick={() => regen.mutate()}>
+              {busy || regen.isPending ? <><span className="spinner-sm" />Generating…</> : "Generate architecture"}
+            </button>
+          </>
+        )}
       </div>
     );
   }
@@ -61,9 +68,11 @@ export function ArchitectureView() {
           Generated {new Date(arch.data.generated_at).toLocaleString()}
           {arch.data.is_user_edited && " · edited"}
         </span>
-        <button className="btn btn-ghost" style={{ width: "auto" }} disabled={busy || regen.isPending} onClick={() => regen.mutate()}>
-          {busy || regen.isPending ? <><span className="spinner-sm" />Regenerating…</> : "Regenerate architecture"}
-        </button>
+        {!isVA && (
+          <button className="btn btn-ghost" style={{ width: "auto" }} disabled={busy || regen.isPending} onClick={() => regen.mutate()}>
+            {busy || regen.isPending ? <><span className="spinner-sm" />Regenerating…</> : "Regenerate architecture"}
+          </button>
+        )}
       </div>
       <ArchPanels arch={a} selected={selected} onSelect={setSelected} />
     </div>

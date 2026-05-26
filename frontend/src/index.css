@@ -1107,3 +1107,68 @@ body {
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }
+
+/* ---- M8 VA wizard (PRD §10) ------------------------------------------- */
+.wizard-rail {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  margin: 0 0 20px;
+}
+.wizard-rail-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.wizard-rail-current {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.wizard-rail-done {
+  color: var(--text);
+}
+.wizard-rail-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.wizard-rail-current .wizard-rail-num {
+  background: var(--accent);
+  color: #fff;
+}
+.field-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+.locked-settings {
+  margin-top: 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.locked-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from app import jobs
-from app.auth import AuthedUser, require_user
+from app.auth import AuthedUser, get_role, require_owner, require_user
 from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
@@ -346,6 +346,15 @@ def set_deep_mine(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Topics do not belong to this session: {', '.join(invalid)}",
         )
+    # VA deep-mine cap (PRD §10.2 step 6 / §15.2 §7.2 #3): seed + N additional
+    # silos. The seed is always mined and isn't in `requested`, so cap the list.
+    if get_role(user) != "owner":
+        cap = get_settings().va_deep_mine_max_silos
+        if len(requested) > cap:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"VA mode can deep-mine at most the seed plus {cap} silos.",
+            )
     store.set_topics_gating(session_id, requested)
     return {"gated_topic_ids": requested, "topics": store.list_topics(session_id)}
 
@@ -383,12 +392,13 @@ def session_summary(session_id: str, user: AuthedUser = Depends(require_user)) -
 
 @router.post("/sessions/{session_id}/regate", status_code=status.HTTP_202_ACCEPTED)
 def regate_session(
-    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_user)
+    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Kick off a re-gate (relevance gate + clustering) on the session's stored
     keyword pool at a (possibly overridden) threshold in the background, skipping
     DataForSEO. Returns immediately; poll GET /summary for status. A calibration
-    tool: tune the threshold without re-paying for expansion + mining."""
+    tool: tune the threshold without re-paying for expansion + mining. Owner-only —
+    it adjusts the relevance threshold, which VAs cannot (PRD §11.2)."""
     session = _require_session(user, session_id)
     bind_session_id(session_id)
     if not store.list_all_keyword_pool(session_id):
@@ -434,14 +444,16 @@ def fanout_session(
     session_id: str,
     body: FanoutBody,
     response: Response,
-    user: AuthedUser = Depends(require_user),
+    user: AuthedUser = Depends(require_owner),
 ) -> dict:
     """Recursive Fanout (PRD §7.7, Phase 1). Re-expands each silo's top cluster
     representatives as sub-anchors, then re-gates + re-clusters the enlarged pool.
     Requires a prior /expand (it reads the first pass's clustering log for the
     sub-anchors). Because RF costs 5x-8x a base run, an unconfirmed call returns
     the cost estimate + sub-anchor plan and does NOT spend; set
-    `confirm_cost: true` to start. Runs in the background — poll GET /summary."""
+    `confirm_cost: true` to start. Runs in the background — poll GET /summary.
+    Owner-only: for VAs, recursive fanout is always gated behind the approval
+    workflow (PRD §11.2 / §11.3), which lands in M9; until then it's owner-direct."""
     session = _require_session(user, session_id)
     bind_session_id(session_id)
     clustering_log = session.get("statistical_clustering_log") or {}
@@ -503,7 +515,7 @@ def fanout_session(
 
 @router.post("/sessions/{session_id}/routing-diagnostic")
 def routing_diagnostic_endpoint(
-    session_id: str, body: RoutingDiagnosticBody, user: AuthedUser = Depends(require_user)
+    session_id: str, body: RoutingDiagnosticBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Read-only: compare candidate silo-anchor strategies by routing probe
     keywords (and the active pool) to their argmax-cosine silo. Used to pick the
@@ -531,7 +543,7 @@ def routing_diagnostic_endpoint(
 
 @router.post("/sessions/{session_id}/lever3-simulate")
 def lever3_simulate_endpoint(
-    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_user)
+    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Read-only Lever-3 dry run: argmax-route every active keyword to its best
     silo (raw rationale-anchor cosine) and cluster each silo's reassigned set,
@@ -565,7 +577,7 @@ def lever3_simulate_endpoint(
 
 @router.post("/sessions/{session_id}/cluster-preview")
 def cluster_preview_endpoint(
-    session_id: str, body: ClusterPreviewBody, user: AuthedUser = Depends(require_user)
+    session_id: str, body: ClusterPreviewBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Granularity sweep (read-only): embed + gate the stored keyword pool once,
     then report cluster-size stats for each (edge_threshold, resolution) config.
@@ -689,8 +701,15 @@ def get_clusters(session_id: str, user: AuthedUser = Depends(require_user)) -> d
 def edit_cluster(
     cluster_id: str, body: ClusterEditBody, user: AuthedUser = Depends(require_user)
 ) -> dict:
-    """Rename an article, change its intent, or edit its H2 outline (§9.2)."""
+    """Rename an article, change its intent, or edit its H2 outline (§9.2). VAs may
+    only rename — intent and H2 edits are owner-only (§10.2: VA cluster actions are
+    limited to Rename + Move keyword in/out)."""
     _require_cluster(user, cluster_id)
+    if (body.intent is not None or body.suggested_h2s is not None) and get_role(user) != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="VA mode can only rename an article, not edit its intent or outline.",
+        )
     fields: dict = {}
     if body.name is not None:
         fields["name"] = body.name.strip()
@@ -705,10 +724,10 @@ def edit_cluster(
 
 @router.post("/clusters/{cluster_id}/promote-primary")
 def promote_primary(
-    cluster_id: str, body: PromotePrimaryBody, user: AuthedUser = Depends(require_user)
+    cluster_id: str, body: PromotePrimaryBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Make a supporting keyword the article's primary; the old primary demotes
-    to supporting (§9.2)."""
+    to supporting (§9.2). Owner-only (§10.2: not in the VA cluster-action set)."""
     _require_cluster(user, cluster_id)
     try:
         return store.promote_primary(cluster_id, body.keyword_id)
@@ -717,19 +736,19 @@ def promote_primary(
 
 
 @router.delete("/clusters/{cluster_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_cluster(cluster_id: str, user: AuthedUser = Depends(require_user)) -> None:
+def delete_cluster(cluster_id: str, user: AuthedUser = Depends(require_owner)) -> None:
     """Delete an article; its keywords drop to the topic's Unassigned bucket — they
-    are never destroyed (§9.2)."""
+    are never destroyed (§9.2). Owner-only (§11.2); VAs request restructure instead."""
     _require_cluster(user, cluster_id)
     store.delete_cluster(cluster_id)
 
 
 @router.post("/clusters/merge")
 def merge_clusters(
-    body: MergeClustersBody, user: AuthedUser = Depends(require_user)
+    body: MergeClustersBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Merge two or more articles into one (§9.2). All must belong to one session
-    the caller owns."""
+    the caller owns. Owner-only (§11.2)."""
     _, survivor_sid = _require_cluster(user, body.survivor_id)
     for cid in body.merged_ids:
         _, sid = _require_cluster(user, cid)
@@ -743,10 +762,10 @@ def merge_clusters(
 
 @router.post("/clusters/{cluster_id}/split")
 def split_cluster(
-    cluster_id: str, body: SplitClusterBody, user: AuthedUser = Depends(require_user)
+    cluster_id: str, body: SplitClusterBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Split a subset of an article's keywords into a new article (§9.2, manual
-    selection). Returns the new article."""
+    selection). Returns the new article. Owner-only (§11.2)."""
     _require_cluster(user, cluster_id)
     try:
         return store.split_cluster(
@@ -762,8 +781,14 @@ def bulk_keyword_status(
     session_id: str, body: KeywordStatusBody, user: AuthedUser = Depends(require_user)
 ) -> dict:
     """Bulk exclude / mark-covered / restore-to-active for selected keywords (§9.1).
-    Scoped to the session, so only its keywords are affected."""
+    Scoped to the session, so only its keywords are affected. VAs may not Exclude
+    (§9 / §10.2: the VA bulk menu is Move-to-cluster + Mark-covered only)."""
     _require_session(user, session_id)
+    if body.status == "excluded" and get_role(user) != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="VA mode cannot exclude keywords.",
+        )
     updated = store.set_keywords_status(session_id, body.keyword_ids, body.status)
     return {"updated": updated}
 
@@ -788,14 +813,17 @@ def bulk_keyword_move(
 
 # ---- M7b coverage-gap decisions (PRD §9.2) --------------------------------
 @router.post("/coverage-gaps/{gap_id}/accept")
-def accept_gap(gap_id: str, user: AuthedUser = Depends(require_user)) -> dict:
-    """Accept a flagged gap -> create an empty placeholder article for it (§9.2)."""
+def accept_gap(gap_id: str, user: AuthedUser = Depends(require_owner)) -> dict:
+    """Accept a flagged gap -> create an empty placeholder article for it (§9.2).
+    Owner-only: accepting/dismissing changes the article set, which is an editorial
+    (restructure) decision VAs route to the owner (§10.2)."""
     _require_gap(user, gap_id)
     return store.accept_gap(gap_id)
 
 
 @router.post("/coverage-gaps/{gap_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
-def dismiss_gap(gap_id: str, user: AuthedUser = Depends(require_user)) -> None:
+def dismiss_gap(gap_id: str, user: AuthedUser = Depends(require_owner)) -> None:
+    """Dismiss a flagged gap (§9.2). Owner-only, like accept."""
     _require_gap(user, gap_id)
     store.dismiss_gap(gap_id)
 
@@ -803,14 +831,15 @@ def dismiss_gap(gap_id: str, user: AuthedUser = Depends(require_user)) -> None:
 # ---- M6 site architecture (PRD §7.11) -------------------------------------
 @router.post("/sessions/{session_id}/architecture", status_code=status.HTTP_202_ACCEPTED)
 def generate_architecture(
-    session_id: str, user: AuthedUser = Depends(require_user)
+    session_id: str, user: AuthedUser = Depends(require_owner)
 ) -> dict:
     """Kick off M6 site architecture generation (§7.11) in the background: one
     pillar per article-bearing silo (editorial fields via Opus) + the internal
     linking matrix, persisted to site_architecture. Requires a prior
     /plan-articles (it organizes the existing clusters, never re-plans). Idempotent
     — re-running regenerates (PRD §9.3). Returns immediately; poll GET /summary for
-    status, then GET /architecture for the result."""
+    status, then GET /architecture for the result. Owner-only: VAs get a read-only
+    architecture view and cannot (re)generate it (PRD §11.2 / §10.3)."""
     _require_session(user, session_id)
     bind_session_id(session_id)
     if not store.list_clusters(session_id):
@@ -907,8 +936,9 @@ def patch_session(
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_session(session_id: str, user: AuthedUser = Depends(require_user)) -> None:
-    """Permanently delete a session and all its data (§9.4). Irreversible."""
+def delete_session(session_id: str, user: AuthedUser = Depends(require_owner)) -> None:
+    """Permanently delete a session and all its data (§9.4). Irreversible.
+    Owner-only (§11.2: VAs cannot delete sessions)."""
     _require_session(user, session_id)
     store.delete_session(session_id)
 

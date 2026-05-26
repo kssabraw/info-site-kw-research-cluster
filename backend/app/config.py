@@ -134,6 +134,10 @@ class Settings(BaseSettings):
     # Lateral peer links per supporting article (§7.11 "2-3 lateral links").
     architecture_lateral_article_links_max: int = 3
 
+    # M8 VA mode (PRD §10.2 / §15.2 §7.2 #3). A VA may deep-mine at most the seed
+    # + this many additional silos; the seed is always mined and never counts.
+    va_deep_mine_max_silos: int = 2
+
     # Observability (PRD §16.3)
     log_level: str = "INFO"
 
