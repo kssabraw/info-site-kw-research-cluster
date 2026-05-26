@@ -658,8 +658,19 @@ def get_pipeline_summary(session_id: str) -> dict:
     session = get_session(session_id) or {}
     status = session.get("status")
     last_error = session.get("last_error")
-    if status == "running":
-        return {"status": status, "last_error": last_error,
+    # Approval state (PRD §11.3): always surfaced so the VA's waiting screen can
+    # show the estimate, and the Owner's note on a reject decision.
+    approval = {
+        "required": bool(session.get("approval_required")),
+        "estimated_cost_usd": session.get("estimated_cost_usd"),
+        "note": session.get("approval_note"),
+        "decided_at": session.get("approval_decision_at"),
+    }
+    # A run-in-progress, or a session parked at the approval gate, has no
+    # meaningful expansion/plan counts yet — return the cheap status-only payload
+    # (this endpoint is polled every few seconds).
+    if status in ("running", "pending_approval", "rejected"):
+        return {"status": status, "last_error": last_error, "approval": approval,
                 "expansion": _EMPTY_EXPANSION, "plan": None, "architecture": None}
 
     topics = list_topics(session_id)
@@ -728,6 +739,7 @@ def get_pipeline_summary(session_id: str) -> dict:
     return {
         "status": session.get("status"),
         "last_error": session.get("last_error"),
+        "approval": approval,
         "expansion": {
             "counts": {
                 "active": _count("keywords", session_id=session_id, status="active"),
@@ -1172,3 +1184,101 @@ def delete_session(session_id: str) -> None:
     """Hard-delete a session; topics/keywords/clusters cascade (FK on delete
     cascade). Irreversible — the API gates this behind explicit user intent."""
     get_service_client().table("sessions").delete().eq("id", session_id).execute()
+
+
+# ---- M9 approval workflow + workspace settings (PRD §11.3 / §11.4) ---------
+def get_workspace_settings() -> dict:
+    """The singleton workspace-settings row (PRD §11.4, id=1). Service-side read;
+    callers expose only the non-sensitive fields. Falls back to the v1.7 defaults
+    if the row is somehow absent so the cost gate always has a soft cap."""
+    res = (
+        get_service_client()
+        .table("workspace_settings")
+        .select("*")
+        .eq("id", 1)
+        .limit(1)
+        .execute()
+    )
+    if res.data:
+        return res.data[0]
+    return {
+        "va_soft_cap_usd": 5.00,
+        "owner_cost_confirm_threshold_usd": 6.00,
+        "default_relevance_threshold": 0.62,
+    }
+
+
+def count_gated_topics(session_id: str) -> int:
+    """Number of silos the user gated for competitor mining (the seed is always
+    mined separately and isn't counted here). Drives the cost estimate."""
+    return _count("topics", session_id=session_id, is_gated_for_competitor_mining=True)
+
+
+def list_pending_approvals() -> list[dict]:
+    """Every session awaiting an approval decision (PRD §11.3 step 4), newest
+    first, enriched with the requesting VA's display name + the project name +
+    the deep-mine count so the Owner queue can render a row without N+1 reads.
+    Service-side (the API gates this behind require_owner)."""
+    client = get_service_client()
+    rows = (
+        client.table("sessions")
+        .select(
+            "id, user_id, project_id, seed_keyword, settings, "
+            "estimated_cost_usd, created_at"
+        )
+        .eq("status", "pending_approval")
+        .order("created_at", desc=True)
+        .execute()
+        .data
+    )
+    if not rows:
+        return []
+
+    user_ids = list({r["user_id"] for r in rows})
+    project_ids = list({r["project_id"] for r in rows})
+    session_ids = [r["id"] for r in rows]
+
+    profiles = (
+        client.table("user_profiles")
+        .select("user_id, display_name")
+        .in_("user_id", user_ids)
+        .execute()
+        .data
+    )
+    name_by_user = {p["user_id"]: p.get("display_name") for p in profiles}
+    projects = (
+        client.table("projects").select("id, name").in_("id", project_ids).execute().data
+    )
+    name_by_project = {p["id"]: p["name"] for p in projects}
+
+    # Deep-mine counts per session in one pass over the relevant topics.
+    topics = (
+        client.table("topics")
+        .select("session_id, is_gated_for_competitor_mining")
+        .in_("session_id", session_ids)
+        .execute()
+        .data
+    )
+    gated_by_session: dict[str, int] = {}
+    for t in topics:
+        if t.get("is_gated_for_competitor_mining"):
+            gated_by_session[t["session_id"]] = gated_by_session.get(t["session_id"], 0) + 1
+
+    out = []
+    for r in rows:
+        settings = r.get("settings") or {}
+        out.append(
+            {
+                "session_id": r["id"],
+                "va_display_name": name_by_user.get(r["user_id"]),
+                "project_name": name_by_project.get(r["project_id"]),
+                "seed_keyword": r["seed_keyword"],
+                "coverage_mode": settings.get("coverage_mode", "standard"),
+                "recursive_fanout": bool(settings.get("recursive_fanout")),
+                "topic_count": settings.get("topic_count"),
+                "deep_mine_count": gated_by_session.get(r["id"], 0),
+                "estimated_cost_usd": r.get("estimated_cost_usd"),
+                "submitted_at": r["created_at"],
+            }
+        )
+    return out

@@ -3,18 +3,21 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
+  cancelApproval,
   createSession,
   deleteTopic,
   disambiguateSession,
   editTopic,
   expandSession,
   finalizeSilos,
+  getCostEstimate,
   getProjects,
   getSession,
   getSummary,
   overrideAudience,
   planArticles,
   setDeepMine,
+  submitForApproval,
   type AddTopicBody,
   type EditTopicBody,
   type RelationshipType,
@@ -40,6 +43,7 @@ type Step =
   | "review"
   | "deepmine"
   | "cost"
+  | "waiting"
   | "progress";
 
 // The visible step rail (PRD §10.1). Disambiguation is conditional, so it's not a
@@ -116,6 +120,20 @@ export function Wizard() {
     },
     onSuccess: () => {
       setStep("progress");
+      qc.invalidateQueries({ queryKey: ["summary", sessionId] });
+    },
+    onError: (e) => setError(msg(e)),
+  });
+  // Over-cap / recursive runs go to the Owner instead of starting (PRD §11.3).
+  // Persist the deep-mine selection first (same as run-now) so the approved run
+  // mines the right silos.
+  const submitMut = useMutation({
+    mutationFn: async (gatedIds: string[]) => {
+      await setDeepMine(sessionId!, gatedIds);
+      return submitForApproval(sessionId!);
+    },
+    onSuccess: () => {
+      setStep("waiting");
       qc.invalidateQueries({ queryKey: ["summary", sessionId] });
     },
     onError: (e) => setError(msg(e)),
@@ -210,14 +228,35 @@ export function Wizard() {
 
         {step === "cost" && sessionId && (
           <CostStep
+            sessionId={sessionId}
             gatedCount={gated.length}
-            mode={mode}
             running={runMut.isPending}
+            submitting={submitMut.isPending}
             onBack={() => setStep("deepmine")}
             onRun={() => {
               setError(null);
               runMut.mutate(gated);
             }}
+            onSubmitForApproval={() => {
+              setError(null);
+              submitMut.mutate(gated);
+            }}
+          />
+        )}
+
+        {step === "waiting" && sessionId && (
+          <WaitingStep
+            sessionId={sessionId}
+            onCancelled={() => {
+              setError(null);
+              setStep("deepmine");
+            }}
+            onAdjust={() => {
+              setError(null);
+              setStep("deepmine");
+            }}
+            onApproved={() => setStep("progress")}
+            setError={setError}
           />
         )}
 
@@ -232,8 +271,10 @@ export function Wizard() {
 // ---------------------------------------------------------------------------
 function StepRail({ current }: { current: Step }) {
   // Map the conditional disambiguation step onto the "Review silos" rail entry so
-  // the rail stays stable whether or not disambiguation fires.
-  const activeKey: Step = current === "disambiguation" ? "review" : current;
+  // the rail stays stable whether or not disambiguation fires; the approval
+  // "waiting" screen stays on the "Confirm" rail entry.
+  const activeKey: Step =
+    current === "disambiguation" ? "review" : current === "waiting" ? "cost" : current;
   const idx = RAIL.findIndex((r) => r.key === activeKey);
   return (
     <ol className="wizard-rail">
@@ -703,6 +744,12 @@ function DeepMineStep(p: {
 }) {
   const q = useQuery({ queryKey: ["session", p.sessionId], queryFn: () => getSession(p.sessionId) });
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Live cost estimate as boxes are checked (PRD §7.2 #2). React Query caches per
+  // selection count, so toggling is instant after the first fetch of each count.
+  const est = useQuery({
+    queryKey: ["cost-estimate", p.sessionId, selected.size],
+    queryFn: () => getCostEstimate(p.sessionId, selected.size),
+  });
 
   if (q.isLoading) return <p className="muted">Loading silos…</p>;
   if (q.isError) return <p className="form-error">Failed to load silos.</p>;
@@ -760,7 +807,16 @@ function DeepMineStep(p: {
       </div>
 
       <p className="field-hint" style={{ marginTop: 12 }}>
-        Estimated cost: {mineEstimate(selected.size)} — within your workspace cap.
+        {est.data ? (
+          <>
+            Estimated cost: ${est.data.estimated_cost_usd.toFixed(2)}
+            {est.data.requires_approval
+              ? " — above your workspace cap, so this needs Owner approval."
+              : " — within your workspace cap."}
+          </>
+        ) : (
+          "Estimating cost…"
+        )}
       </p>
 
       <div className="toolbar" style={{ marginTop: 16 }}>
@@ -773,39 +829,162 @@ function DeepMineStep(p: {
   );
 }
 
-// Rough static estimate (PRD §10.2 wants a live figure; a real cost endpoint is
-// M9/M11). Bands give the VA a sense of scale without a backend call.
-function mineEstimate(extra: number): string {
-  const low = (0.5 + extra * 0.4).toFixed(2);
-  const high = (0.9 + extra * 0.7).toFixed(2);
-  return `~$${low}–$${high}`;
-}
-
 // ---------------------------------------------------------------------------
+// Step 7 — cost confirmation (PRD §10.2 step 7 / §11.3). The authoritative
+// estimate comes from the backend (§8.1 model). Under the soft cap → "Run now";
+// over the cap (or recursive) → "Submit for approval", which parks the run for
+// the Owner rather than starting it.
 function CostStep(p: {
+  sessionId: string;
   gatedCount: number;
-  mode: "standard" | "comprehensive";
   running: boolean;
+  submitting: boolean;
   onBack: () => void;
   onRun: () => void;
+  onSubmitForApproval: () => void;
 }) {
+  const est = useQuery({
+    queryKey: ["cost-estimate", p.sessionId, p.gatedCount],
+    queryFn: () => getCostEstimate(p.sessionId, p.gatedCount),
+  });
+  const busy = p.running || p.submitting;
+
+  if (est.isLoading) return <div className="card"><p className="muted">Estimating cost…</p></div>;
+  if (est.isError || !est.data)
+    return (
+      <div className="card">
+        <p className="form-error">Couldn’t estimate the cost. Go back and try again.</p>
+        <button className="btn btn-ghost" style={{ width: "auto" }} onClick={p.onBack}>Back</button>
+      </div>
+    );
+
+  const e = est.data;
+  const needsApproval = e.requires_approval;
+
   return (
     <div className="card" style={{ maxWidth: 520 }}>
       <h1 className="page-title">Confirm and run</h1>
       <p className="muted">
         Mining the seed{p.gatedCount > 0 ? ` plus ${p.gatedCount} silo${p.gatedCount > 1 ? "s" : ""}` : ""}
-        {" · "}{p.mode} coverage.
+        {" · "}{e.coverage_mode} coverage · {e.silo_count} silos.
       </p>
-      <p className="field-hint">
-        Estimated cost {mineEstimate(p.gatedCount)} — under the workspace cap, so no approval
-        is needed.
-      </p>
+
+      <div className="cost-summary">
+        <span className="cost-figure">${e.estimated_cost_usd.toFixed(2)}</span>
+        <span className="muted"> estimated · cap ${e.va_soft_cap_usd.toFixed(2)}</span>
+      </div>
+
+      {needsApproval ? (
+        <p className="field-hint">
+          This run is above your workspace cap
+          {e.recursive_fanout ? " (recursive deep research)" : ""}, so it needs Owner approval
+          before it can start. You’ll be notified when the Owner decides.
+        </p>
+      ) : (
+        <p className="field-hint">Under the workspace cap, so no approval is needed.</p>
+      )}
+
       <div className="toolbar">
-        <button className="btn btn-ghost" style={{ width: "auto" }} disabled={p.running} onClick={p.onBack}>
+        <button className="btn btn-ghost" style={{ width: "auto" }} disabled={busy} onClick={p.onBack}>
           Back
         </button>
-        <button className="btn btn-primary" style={{ width: "auto" }} disabled={p.running} onClick={p.onRun}>
-          {p.running ? "Starting…" : "Run now"}
+        {needsApproval ? (
+          <button
+            className="btn btn-primary"
+            style={{ width: "auto" }}
+            disabled={busy}
+            onClick={p.onSubmitForApproval}
+          >
+            {p.submitting ? "Submitting…" : "Submit for approval"}
+          </button>
+        ) : (
+          <button className="btn btn-primary" style={{ width: "auto" }} disabled={busy} onClick={p.onRun}>
+            {p.running ? "Starting…" : "Run now"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Approval waiting screen (PRD §11.3 / §10.2 step 7). Polls the summary every 30s
+// (the §11.3 cadence). When the Owner approves, the session leaves
+// pending_approval → running/awaiting_article_planning/complete and we hand off
+// to the progress screen; on reject we show the Owner's note and let the VA
+// adjust + resubmit.
+function WaitingStep(p: {
+  sessionId: string;
+  onCancelled: () => void;
+  onAdjust: () => void;
+  onApproved: () => void;
+  setError: (v: string | null) => void;
+}) {
+  const qc = useQueryClient();
+  const summaryQ = useQuery({
+    queryKey: ["summary", p.sessionId],
+    queryFn: () => getSummary(p.sessionId),
+    refetchInterval: (q) => (q.state.data?.status === "pending_approval" ? 30000 : false),
+  });
+  const cancelMut = useMutation({
+    mutationFn: () => cancelApproval(p.sessionId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["summary", p.sessionId] });
+      p.onCancelled();
+    },
+    onError: (e) => p.setError(msg(e)),
+  });
+
+  const status = summaryQ.data?.status;
+
+  // Once the request is decided and the run is moving, hand off to the progress
+  // screen, which owns every post-approval status (running / awaiting / complete
+  // AND error — a fast-failing approved run can skip straight to error between
+  // 30s polls, and ProgressStep is what surfaces last_error). Only the two
+  // gate states (pending_approval, rejected) stay on this screen.
+  useEffect(() => {
+    if (status && status !== "pending_approval" && status !== "rejected") {
+      p.onApproved();
+    }
+  }, [status, p]);
+
+  if (status === "rejected") {
+    const note = summaryQ.data?.approval.note;
+    return (
+      <div className="card" style={{ maxWidth: 520 }}>
+        <h1 className="page-title">Request not approved</h1>
+        <p className="muted">The Owner didn’t approve this run.</p>
+        {note && <div className="banner">Note from the Owner: {note}</div>}
+        <p className="field-hint">
+          You can adjust the run — fewer silos or standard coverage often brings the cost under
+          the cap — and resubmit.
+        </p>
+        <div className="toolbar">
+          <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onAdjust}>
+            Adjust &amp; resubmit
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const est = summaryQ.data?.approval.estimated_cost_usd;
+  return (
+    <div className="card" style={{ textAlign: "center", maxWidth: 520 }}>
+      <div className="spinner" />
+      <h1 className="page-title" style={{ marginTop: 12 }}>Waiting for approval</h1>
+      <p className="muted">
+        Your run{est != null ? ` (estimated $${est.toFixed(2)})` : ""} is with the Owner for
+        approval. This screen updates automatically when they decide.
+      </p>
+      <div className="toolbar" style={{ justifyContent: "center" }}>
+        <button
+          className="btn btn-ghost"
+          style={{ width: "auto" }}
+          disabled={cancelMut.isPending}
+          onClick={() => cancelMut.mutate()}
+        >
+          {cancelMut.isPending ? "Cancelling…" : "Cancel request"}
         </button>
       </div>
     </div>

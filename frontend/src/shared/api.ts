@@ -185,9 +185,20 @@ export interface SummaryPlanTopic {
   gaps: number;
 }
 
+// Approval state on the summary payload (PRD §11.3). The VA's waiting screen
+// reads `note` (set on a reject) and `estimated_cost_usd`; `decided_at` is set
+// once the Owner acts.
+export interface SummaryApproval {
+  required: boolean;
+  estimated_cost_usd: number | null;
+  note: string | null;
+  decided_at: string | null;
+}
+
 export interface PipelineSummary {
   status: string;
   last_error: string | null;
+  approval: SummaryApproval;
   expansion: {
     counts: PipelineCounts;
     topics: PipelineTopicCount[];
@@ -471,3 +482,75 @@ export const generateArchitecture = (id: string) =>
 
 export const getArchitecture = (id: string) =>
   request<SiteArchitecture>(`/sessions/${id}/architecture`);
+
+// ---- M9 cost estimate + approval workflow (PRD §8.4 / §11.3) -------------
+export interface CostEstimate {
+  session_id: string;
+  estimated_cost_usd: number;
+  breakdown: Record<string, number>;
+  recursive_multiplier: number | null;
+  silo_count: number;
+  deep_mine_count: number;
+  coverage_mode: string;
+  recursive_fanout: boolean;
+  va_soft_cap_usd: number;
+  requires_approval: boolean;
+  approval_triggers: string[];
+}
+
+// Authoritative server-side estimate (PRD §8.1). `gatedCount` previews the
+// wizard's not-yet-persisted deep-mine selection so the cost updates live.
+export const getCostEstimate = (id: string, gatedCount?: number) =>
+  request<CostEstimate>(
+    `/sessions/${id}/cost-estimate` +
+      (gatedCount != null ? `?gated_count=${gatedCount}` : ""),
+  );
+
+export interface WorkspaceSettings {
+  va_soft_cap_usd: number;
+  owner_cost_confirm_threshold_usd: number;
+  default_relevance_threshold: number;
+}
+
+export const getWorkspaceSettings = () =>
+  request<WorkspaceSettings>("/workspace-settings");
+
+// Park a run at the approval gate (does not start the pipeline). The deep-mine
+// selection must already be persisted via setDeepMine (same as run-now).
+export const submitForApproval = (id: string) =>
+  request<CostEstimate & { status: string }>(`/sessions/${id}/submit-for-approval`, {
+    method: "POST",
+  });
+
+export const cancelApproval = (id: string) =>
+  request<{ status: string; session_id: string }>(`/sessions/${id}/cancel-approval`, {
+    method: "POST",
+  });
+
+// Owner approval queue (PRD §11.3 step 4).
+export interface ApprovalQueueItem {
+  session_id: string;
+  va_display_name: string | null;
+  project_name: string | null;
+  seed_keyword: string;
+  coverage_mode: string;
+  recursive_fanout: boolean;
+  topic_count: number | null;
+  deep_mine_count: number;
+  estimated_cost_usd: number | null;
+  submitted_at: string;
+}
+
+export const listApprovals = () => request<ApprovalQueueItem[]>("/approvals");
+
+export const approveSession = (id: string, note?: string) =>
+  request<{ status: string; session_id: string }>(`/sessions/${id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+
+export const rejectSession = (id: string, note?: string) =>
+  request<{ status: string; session_id: string }>(`/sessions/${id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });

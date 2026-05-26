@@ -7,6 +7,7 @@ pipeline: expansion + competitor mining + relevance gate + statistical clusterin
 """
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 from app import jobs
 from app.auth import AuthedUser, get_role, require_owner, require_user
 from app.config import get_settings
+from app.cost import estimate_cost, requires_approval
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
@@ -114,6 +116,11 @@ class DeepMineBody(BaseModel):
     topic_ids: list[str] = Field(default_factory=list)
 
 
+class ApprovalDecisionBody(BaseModel):
+    # Optional Owner note attached on approve/reject (PRD §11.3 step 5).
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class SiloDiscoveryResponse(BaseModel):
     session_id: str
     status: str
@@ -168,6 +175,48 @@ def _resolve_peer_terms(session: dict, body) -> tuple[list[str], list[str]]:
     peers = body.peer_entities if getattr(body, "peer_entities", None) is not None else (session.get("peer_entities") or [])
     seed_terms = [t for t in [seed, *aliases] if t]
     return seed_terms, list(peers)
+
+
+def _estimate_for_session(session: dict, gated_count: int | None) -> dict:
+    """Cost estimate + approval-gate decision for a session (PRD §8.1 / §8.4).
+    `gated_count` lets the wizard preview a not-yet-persisted deep-mine selection;
+    when None, the persisted gated-topic count is used. Approval is needed for a VA
+    when the estimate exceeds the workspace soft cap OR recursive fanout is on."""
+    settings = session.get("settings") or {}
+    silo_count = len(store.list_topics(session["id"]))
+    gated = (
+        gated_count
+        if gated_count is not None
+        else store.count_gated_topics(session["id"])
+    )
+    recursive = bool(settings.get("recursive_fanout"))
+    estimate = estimate_cost(
+        coverage_mode=settings.get("coverage_mode", "standard"),
+        silo_count=silo_count,
+        deep_mine_count=gated,
+        recursive_fanout=recursive,
+        enrich_with_metrics=bool(settings.get("enrich_with_metrics")),
+    )
+    ws = store.get_workspace_settings()
+    soft_cap = float(ws.get("va_soft_cap_usd") or 0.0)
+    needs_approval, triggers = requires_approval(
+        estimated_cost_usd=estimate.total_usd,
+        soft_cap_usd=soft_cap,
+        recursive_fanout=recursive,
+    )
+    return {
+        "session_id": session["id"],
+        "estimated_cost_usd": estimate.total_usd,
+        "breakdown": estimate.breakdown,
+        "recursive_multiplier": estimate.recursive_multiplier,
+        "silo_count": silo_count,
+        "deep_mine_count": gated,
+        "coverage_mode": settings.get("coverage_mode", "standard"),
+        "recursive_fanout": recursive,
+        "va_soft_cap_usd": soft_cap,
+        "requires_approval": needs_approval,
+        "approval_triggers": triggers,
+    }
 
 
 def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
@@ -366,13 +415,25 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
     The work runs past the 5-min edge cap, so the frontend polls
     GET /sessions/{id}/summary for status. The atomic run guard rejects a
     double-submit (409)."""
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
     bind_session_id(session_id)
     if not store.list_topics(session_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No silos to expand. Finalize at least one silo first.",
         )
+    # Approval gate, enforced server-side (PRD §8.4 / §11.3): a VA cannot start a
+    # run that exceeds the workspace cost cap by calling /expand directly — it must
+    # go through the approval workflow. The Owner's approve action kicks the run
+    # via jobs.submit_expand (not this endpoint), so an approved run is unaffected.
+    if get_role(user) != "owner":
+        est = _estimate_for_session(session, None)
+        if est["requires_approval"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This run exceeds the workspace cost cap. Submit it for "
+                "approval instead of running it directly.",
+            )
     if not store.try_mark_running(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -380,6 +441,183 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
         )
     jobs.submit_expand(session_id)
     return {"status": "running", "session_id": session_id}
+
+
+# ---- M9 cost estimate + approval workflow (PRD §8.4 / §11.3) --------------
+@router.get("/workspace-settings")
+def get_workspace_settings(user: AuthedUser = Depends(require_user)) -> dict:
+    """Non-sensitive workspace settings (PRD §11.4) the wizard needs: the VA soft
+    cap and the locked defaults. Any profiled user may read (matches the RLS
+    SELECT policy); only the Owner can change them (a settings-update UI is out of
+    M9 scope — values are managed in the DB for now)."""
+    ws = store.get_workspace_settings()
+    return {
+        "va_soft_cap_usd": float(ws.get("va_soft_cap_usd") or 0.0),
+        "owner_cost_confirm_threshold_usd": float(
+            ws.get("owner_cost_confirm_threshold_usd") or 0.0
+        ),
+        "default_relevance_threshold": float(
+            ws.get("default_relevance_threshold") or 0.0
+        ),
+    }
+
+
+@router.get("/sessions/{session_id}/cost-estimate")
+def cost_estimate(
+    session_id: str,
+    user: AuthedUser = Depends(require_user),
+    gated_count: int | None = None,
+) -> dict:
+    """Estimate the run's cost from its config (PRD §8.1) and report whether it
+    trips the approval gate (PRD §8.4). `gated_count` previews the wizard's
+    not-yet-persisted deep-mine selection; omit it to use the persisted count."""
+    session = _require_session(user, session_id)
+    if gated_count is not None and gated_count < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="gated_count must be >= 0"
+        )
+    return _estimate_for_session(session, gated_count)
+
+
+@router.post("/sessions/{session_id}/submit-for-approval")
+def submit_for_approval(
+    session_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Park a run at the approval gate (PRD §11.3 step 2): store the cost estimate,
+    set status=pending_approval + approval_required, and DO NOT start the pipeline.
+    The deep-mine selection must already be persisted (the wizard calls /deep-mine
+    first, same as the run-now path). Allowed from a pre-run state — a fresh run
+    after silo review, or a previously rejected run being resubmitted."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    if session["status"] not in ("awaiting_silo_review", "rejected"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This session is not in a state that can be submitted for approval.",
+        )
+    if not store.list_topics(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Finalize at least one silo before submitting for approval.",
+        )
+    est = _estimate_for_session(session, None)
+    store.update_session(
+        session_id,
+        {
+            "status": "pending_approval",
+            "approval_required": True,
+            "estimated_cost_usd": est["estimated_cost_usd"],
+            # Clear any decision from a prior reject so a resubmission is fresh.
+            "approval_note": None,
+            "approval_decided_by_user_id": None,
+            "approval_decision_at": None,
+        },
+    )
+    logger.info(
+        "approval_submitted",
+        extra={"event": "approval_submitted",
+               "estimated_cost_usd": est["estimated_cost_usd"]},
+    )
+    return {"status": "pending_approval", **est}
+
+
+@router.post("/sessions/{session_id}/cancel-approval")
+def cancel_approval(
+    session_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Withdraw a pending approval request (PRD §11.3 / §10.2 step 7 "cancel").
+    Returns the session to the pre-run review state so the VA can adjust and
+    resubmit or run a (now cheaper) configuration."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    if session["status"] != "pending_approval":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No pending approval request to cancel.",
+        )
+    store.update_session(
+        session_id, {"status": "awaiting_silo_review", "approval_required": False}
+    )
+    return {"status": "awaiting_silo_review", "session_id": session_id}
+
+
+@router.get("/approvals")
+def list_approvals(user: AuthedUser = Depends(require_owner)) -> list[dict]:
+    """The Owner's approval queue (PRD §11.3 step 4): every session awaiting a
+    decision, enriched with VA name, project, seed, settings, estimate, and the
+    submitted-at time. Owner-only (§11.2: "Approve VA requests" is Owner-only; a VA
+    cannot see another VA's queue)."""
+    return store.list_pending_approvals()
+
+
+@router.post("/sessions/{session_id}/approve")
+def approve_session(
+    session_id: str,
+    body: ApprovalDecisionBody,
+    user: AuthedUser = Depends(require_owner),
+) -> dict:
+    """Approve a pending run (PRD §11.3 step 6): record the decision, flip the
+    session to running, and kick off the pipeline (the cost-bearing /expand, same
+    entry point as a run-now session). Owner-only."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    if session["status"] != "pending_approval":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This session is not awaiting approval.",
+        )
+    if not store.list_topics(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No silos to expand for this session.",
+        )
+    # Claim the run atomically (pending_approval -> running) before recording the
+    # decision, so a double-approve can't double-spend.
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+    store.update_session(
+        session_id,
+        {
+            "approval_decided_by_user_id": user.id,
+            "approval_decision_at": datetime.now(timezone.utc).isoformat(),
+            "approval_note": (body.note or "").strip() or None,
+        },
+    )
+    jobs.submit_expand(session_id)
+    logger.info("approval_approved", extra={"event": "approval_approved"})
+    return {"status": "running", "session_id": session_id}
+
+
+@router.post("/sessions/{session_id}/reject")
+def reject_session(
+    session_id: str,
+    body: ApprovalDecisionBody,
+    user: AuthedUser = Depends(require_owner),
+) -> dict:
+    """Reject a pending run (PRD §11.3 step 7): record the decision + optional note
+    and set status=rejected. The pipeline does not start. The VA sees the note and
+    can adjust + resubmit. Owner-only."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    if session["status"] != "pending_approval":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This session is not awaiting approval.",
+        )
+    store.update_session(
+        session_id,
+        {
+            "status": "rejected",
+            "approval_decided_by_user_id": user.id,
+            "approval_decision_at": datetime.now(timezone.utc).isoformat(),
+            "approval_note": (body.note or "").strip() or None,
+        },
+    )
+    logger.info("approval_rejected", extra={"event": "approval_rejected"})
+    return {"status": "rejected", "session_id": session_id}
 
 
 @router.get("/sessions/{session_id}/summary")

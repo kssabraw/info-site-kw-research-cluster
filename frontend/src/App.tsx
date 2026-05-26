@@ -4,6 +4,7 @@ import { useAuth } from "./shared/auth";
 import { Login } from "./shared/Login";
 import { getMe } from "./shared/api";
 import { ProjectsPage } from "./owner/ProjectsPage";
+import { ApprovalsPage } from "./owner/ApprovalsPage";
 import { NewSession } from "./owner/NewSession";
 import { SessionWorkspace } from "./owner/SessionWorkspace";
 import { TableView } from "./owner/views/TableView";
@@ -42,6 +43,7 @@ function OwnerRoutes() {
     <Routes>
       <Route path="/" element={<Navigate to="/projects" replace />} />
       <Route path="/projects" element={<ProjectsPage />} />
+      <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="/session/new" element={<NewSession />} />
       <Route path="/session/:id" element={<SessionWorkspace />}>
         <Route index element={<Navigate to="table" replace />} />
