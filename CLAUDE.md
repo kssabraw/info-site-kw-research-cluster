@@ -144,12 +144,129 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M9 — Approval workflow (PRD §15.1 / §11.3): next.** Real cost estimate before
-submission; soft-cap + `recursive_fanout` trigger the approval flow for VA
-sessions; Owner approval queue UI with approve/reject + note; VA notified on
-decision; 30-second polling. M8 stubbed the cost-confirmation step (VAs proceed
-without approval) and left `/fanout` owner-only — M9 wires the real gate. Stop for
-a human go-ahead before building (milestone discipline).
+**M10 — CSV export (PRD §15.1 / §12): next.** Three formats (flat keyword list,
+topic-grouped, site-architecture); Postgres-live generation; snapshots written to
+Supabase Storage under `csv-snapshots/{user_id}/{session_id}/{ts}.csv`; a
+`csv_exports` table tracking who exported what when; per-session Exports tab + re-
+download. Export is in the §11.2 capability matrix for both roles. Stop for a human
+go-ahead before building (milestone discipline).
+
+---
+
+**M9 — Approval workflow (PRD §15.1 / §11.3): complete, pending review + live
+validation.** Built on `claude/jolly-heisenberg-Z06PH` (this session's pinned
+branch — *not* an `m9-…` branch, per the session task instruction). **No
+schema/migration** — every approval column (`estimated_cost_usd`,
+`approval_required`, `approval_decided_by_user_id`, `approval_decision_at`,
+`approval_note`) and the `pending_approval`/`rejected` statuses already exist from
+M1; M9 is logic + UI only. Backend **137 tests pass** (116 prior + 9 cost +
+12 approvals), ruff clean, import smoke OK; frontend builds strict-clean (tsc +
+vite). **Not browser-validated** (sandbox egress blocked, standing constraint) —
+validate the VA submit → Owner approve/reject → VA-sees-decision round-trip on the
+deployed stack.
+
+**Where the gate sits (the §11.3 ambiguity, resolved conservatively):** §11.3
+describes the *whole run* as gated, but in our build silo discovery already runs
+synchronously at `POST /sessions` (cheap LLM) and the expensive DataForSEO work is
+`/expand`. M9 puts the approval gate at the **cost-bearing `/expand`** — i.e. the
+wizard's cost-confirmation step. An approved session then runs `/expand` via the
+*same* entry point as a run-now session. Silo discovery + finalize happen before
+the gate as they did in M8. Flagged.
+
+**Cost model (`backend/app/cost.py`, pure + unit-tested):** `estimate_cost(...)`
+derives a dollar figure from the run config (coverage mode, silo count, deep-mine
+count, `recursive_fanout`, `enrich_with_metrics`) using per-component rates
+back-derived from the §8.1 table (calibrated at its 5-silo/3-deep-mined reference;
+reconstructs the subtotals within a few cents and scales sensibly). Verified:
+standard+metrics and comprehensive+metrics land **under** the $5 VA cap; a 10-silo
+comprehensive+metrics run and any recursive run land **over** it — exactly the §8.4
+intent. `requires_approval(...)` = estimate > soft cap **OR** recursive. Recursive
+uses the §7.7 low multiplier (5×) for the headline number (moot for the gate —
+recursive always trips it). Rates are module constants to recalibrate after the
+first ~10 production runs (per §8.1).
+
+**Backend endpoints (`api/sessions.py`):** `GET /workspace-settings` (soft cap +
+locked defaults; require_user, matches the RLS SELECT policy); `GET
+/sessions/{id}/cost-estimate?gated_count=N` (authoritative estimate + breakdown +
+soft cap + `requires_approval` + triggers; `gated_count` previews the wizard's
+not-yet-persisted deep-mine selection, else the persisted count); `POST
+/sessions/{id}/submit-for-approval` (stores estimate, sets `pending_approval` +
+`approval_required`, clears any prior decision, does **not** start the pipeline;
+allowed from `awaiting_silo_review` or `rejected` [resubmit]); `POST
+/sessions/{id}/cancel-approval` (→ back to `awaiting_silo_review`); `GET /approvals`
+(**owner-only**, the queue, enriched with VA display name + project name + deep-mine
+count); `POST /sessions/{id}/approve` (**owner-only**; records decider/time/note,
+`try_mark_running` → `submit_expand`); `POST /sessions/{id}/reject` (**owner-only**;
+sets `rejected` + note, no pipeline). The `/summary` payload gained an `approval`
+block (`required`, `estimated_cost_usd`, `note`, `decided_at`) so the VA's waiting
+screen sees the decision; `pending_approval`/`rejected` short-circuit to the cheap
+status-only payload like `running`. Storage helpers (`storage/silo.py`):
+`get_workspace_settings`, `count_gated_topics`, `list_pending_approvals`. New tests:
+`tests/test_cost.py` (9), `tests/test_approvals.py` (12, monkeypatched store like
+`test_roles.py`).
+
+**Frontend:** the wizard's **CostStep** now fetches the real estimate (replacing
+M8's static `mineEstimate` band) and branches: under cap → **Run now** (unchanged:
+`setDeepMine` + `expand`); over cap / recursive → **Submit for approval**
+(`setDeepMine` + `submit-for-approval` → new **WaitingStep**). WaitingStep polls
+`/summary` every 30s (the §11.3 cadence); on approve the session leaves
+`pending_approval` → `running`/`awaiting_article_planning`/`complete` and the
+wizard hands off to the existing ProgressStep (which still auto-chains expand →
+plan); on reject it shows the Owner's note + an **Adjust & resubmit** path; a
+**Cancel request** button calls `cancel-approval`. DeepMineStep now shows the live
+server estimate (per-selection-count, React-Query-cached) instead of the static
+band. New Owner **Approvals** page (`owner/ApprovalsPage.tsx`, route `/approvals`):
+a queue with a decision modal (approve / reject + optional note), 30s polling. The
+**AppShell** topbar gained an owner-only **Approvals** link with a pending-count
+badge (30s polling, `enabled: isOwner` so a VA never calls the owner-only
+`/approvals`). New `api.ts`: `getCostEstimate`, `getWorkspaceSettings`,
+`submitForApproval`, `cancelApproval`, `listApprovals`, `approveSession`,
+`rejectSession`, the `SummaryApproval` field on `PipelineSummary`.
+
+**M9 decisions / divergences (flagged for review):**
+- **Gate at `/expand`, not the whole run** (see above). An approved VA run still
+  ends at the article plan (architecture stays owner-only, carried from M8).
+- **No "clone into a new draft" on reject** (§11.3 step 7 wording). Instead the
+  *same* session is reusable: `submit-for-approval` is allowed from `rejected`, and
+  if the VA reduces scope under the cap the CostStep flips to **Run now** and
+  `/expand` runs directly from `rejected` (`try_mark_running` allows it). Cloning a
+  session means re-running silo discovery; reuse is cheaper + simpler. The VA can't
+  change `coverage_mode` without a new session (it's set at creation) — flagged.
+- **Approval-queue "submitted at" = the session `created_at`**, not a true
+  submission timestamp (there's no `approval_submitted_at` column and M9 adds no
+  migration). For a wizard run, creation → submission is usually a couple minutes,
+  so it's a close approximation. Flagged; add a column if exactness matters.
+- **The estimate reads the *actual* `enrich_with_metrics` (false for VAs), not the
+  decorative "Metrics: On · locked" toggle** (§7.8 metrics enrichment is still
+  unbuilt, an M7/M8 carry). So the estimate is honest about what runs; it just
+  doesn't match the (cosmetic) toggle. Decide alongside §7.8.
+- **The VA cost gate is largely latent at current rates + metrics-off:** with
+  `enrich_with_metrics` false (the VA reality), even the most expensive
+  non-recursive VA run (comprehensive, 10 silos, 2 deep-mined) estimates ~$4.80 —
+  under the $5 cap. So in practice the cost-trigger fires only if the Owner lowers
+  `va_soft_cap_usd` or once §7.8 metrics is built. This is the literal §8.4 intent
+  ("most non-recursive runs pass; only recursive + unusually expensive require
+  approval"), but it means the *recursive* trigger is the main intended gate — and
+  that one isn't a VA UI control yet (above). `/expand` enforces the gate
+  server-side regardless (a VA over-cap direct call → 403), so it's correct, just
+  rarely hit. Flagged.
+- **Owner-offline approval has the M8 chaining gap:** approve kicks `/expand`, but
+  the expand → plan-articles chain is still **client-driven** (the wizard's
+  ProgressStep). If the VA's browser is closed when the Owner approves, the run
+  expands and parks at `awaiting_article_planning` until the VA reopens — and VAs
+  have no session browser (M8) to find it again (the `/session/:id` route works if
+  they have the URL). Server-side chaining + a VA resume surface are out of M9
+  scope (explicitly). Flagged — the most likely thing to want next.
+- **`recursive_fanout` is still not a VA wizard control** (§10.2: "not exposed…
+  available only via explicit approval request"). The wizard's createSession sends
+  `recursive_fanout: false`, so the wizard's approval trigger is purely cost > cap.
+  `/fanout` stays owner-only (carried from M8 / RF). A VA-initiated recursive
+  request path isn't wired — the cost-gate path is. Flagged as the literal §11.2
+  "VA recursive → always approval" not being reachable from the VA UI yet.
+- **`GET /workspace-settings` exists but the wizard reads the cap from the
+  cost-estimate response** (which already carries `va_soft_cap_usd`), so the
+  standalone endpoint is currently only used as documentation of the §11.4 read.
+  Kept because the task called for it + it backs a future settings UI.
 
 ---
 
@@ -562,3 +679,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.5 | 2026-05-26 | M7 (Owner UI, §9) **implemented, pending review + live validation.** M7a: react-router + read-only Table/Cluster/Architecture/Split views + Project+Session Browser (UI session-resume); new reads `GET /projects/{id}/sessions`, `statuses` keyword filter, `seed_keyword` on `GET /sessions/{id}`. M7b: full cluster editing (rename/intent/H2/promote/move/delete/merge/split), gap accept/dismiss, whole-session orchestrator re-run, Table bulk actions, browser archive/move/delete; migration `20260527000000_session_archive.sql` applied live via MCP. Orchestrator-vs-direct default **settled: orchestrator stays default** (no code flip). Built on `claude/sweet-ramanujan-PXvK0`; 98 backend tests pass, frontend builds; not browser-validated (sandbox egress). Deferred/flagged: per-topic re-run, split option (b), session duplicate, metrics enrichment (§7.8). |
 | 1.6 | 2026-05-26 | M7 **merged to `main`** (`--no-ff`, per owner instruction) after an adversarial review pass + fixes: structural cluster edits now invalidate the stored `site_architecture` (was left dangling); `promote_primary`/`split_cluster` guard against a primary pointing at a non-member keyword (→ 400); `accept_gap` is idempotent. Remote `main` was at the M6 sign-off (`03c3e54`); the merge added only the M7 commits (`03c3e54..84f96b9`, no conflicts). Live validation on the deployed stack still recommended. **M8 (VA wizard, §10) is next.** |
 | 1.7 | 2026-05-26 | M8 (VA wizard, §10) **complete & merged to `main`** (per owner instruction; still pending live validation). Role-gated app (`App.tsx`): owner → §9 Owner UI (unchanged); VA → new `frontend/src/va/Wizard.tsx` 9-step linear wizard (step-gated: disambiguation only when ambiguous; settings locked to topic_count + coverage_mode; deep-mine capped at seed + 2; cost confirmation stubbed to "Run now") + a restricted results surface (Table/Cluster/read-only Architecture via a new `role` on `SessionCtx`; no Split/merge/delete/promote/gap/exclude; "Request restructure" stub). Server-side enforcement (defense in depth, §10.3/§11.2): new `require_owner` dep + `get_role()` gate cluster delete/merge/split/promote-primary, gap accept/dismiss, `/architecture`, session delete, `/regate`, `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate`, `/fanout`; in-handler checks for the deep-mine cap (`va_deep_mine_max_silos=2`), VA rename-only `PATCH /clusters`, and VA no-exclude bulk status. Built on `claude/exciting-cannon-jTTVb`, merged `--no-ff` to `main`; 116 backend tests (18 new in `tests/test_roles.py`) + ruff clean, frontend builds; not browser-validated. Flagged: architecture stays owner-only (so a VA run ends at the article plan; Architecture tab is owner-pending), metrics toggle is decorative (§7.8 unbuilt), no "+ New project" (no endpoint), static cost band. **M9 (approval workflow, §11.3) is next.** |
+| 1.8 | 2026-05-26 | M9 (approval workflow, §11.3) **complete, pending review + live validation.** No schema/migration (all approval columns + the `pending_approval`/`rejected` statuses exist from M1). New pure cost model `backend/app/cost.py` (§8.1-derived; standard/comprehensive+metrics stay under the $5 VA cap, oversized + recursive runs exceed it). Gate placed at the cost-bearing `/expand` (the conservative read of §11.3's whole-run framing, since silo discovery already runs at `POST /sessions`). New endpoints: `GET /workspace-settings`, `GET /sessions/{id}/cost-estimate`, `POST /sessions/{id}/submit-for-approval` + `/cancel-approval` (VA), `GET /approvals` + `POST /sessions/{id}/approve` + `/reject` (owner-only); `/summary` gained an `approval` block. Frontend: wizard CostStep fetches the real estimate + branches Run-now vs Submit-for-approval → new WaitingStep (30s poll, cancel, adjust-&-resubmit on reject); Owner Approvals page (`/approvals`) + decision modal; AppShell owner-only Approvals nav badge. Built on `claude/jolly-heisenberg-Z06PH`; 137 backend tests (9 cost + 12 approvals new) + ruff clean, frontend builds; not browser-validated. Flagged: gate at `/expand`; reject reuses the same session (no clone); queue "submitted at" = `created_at`; estimate reads actual (false) metrics flag; owner-offline approval keeps M8's client-driven expand→plan chain; `recursive_fanout` still not a VA wizard control. **M10 (CSV export, §12) is next.** |
