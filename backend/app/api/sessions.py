@@ -1,22 +1,29 @@
-"""Silo-discovery endpoints (M2).
+"""Session endpoints: silo discovery (M2) + keyword pipeline (M3/M4).
 
-Lifecycle: create a session (runs grounding + proposal), optionally resolve a
-disambiguation choice, review/edit the proposed silos, then finalize — which
-embeds each silo and halts (expansion is M3).
+Lifecycle: create a session (grounding + proposal), optionally resolve
+disambiguation, review/edit silos, finalize (embeds each silo), pick which silos
+to deep-mine (§7.2), then run /expand — which now runs the full refinement
+pipeline: expansion + competitor mining + relevance gate + statistical clustering.
 """
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
+from app import jobs
 from app.auth import AuthedUser, require_user
 from app.config import get_settings
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
-from app.pipeline.expansion import ExpansionTopic, build_anchor, run_expansion
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
+from app.pipeline.orchestrate import (
+    cluster_preview,
+    routing_diagnostic,
+    simulate_best_silo_clustering,
+)
+from app.pipeline.recursive_fanout import count_sub_anchors, derive_sub_anchors
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -34,6 +41,7 @@ class CreateSessionBody(BaseModel):
     disambiguation_hint: str | None = None
     topic_count: int = Field(default=5, ge=3, le=10)
     coverage_mode: str = Field(default="standard", pattern="^(standard|comprehensive)$")
+    recursive_fanout: bool = False
 
 
 class DisambiguateBody(BaseModel):
@@ -57,9 +65,59 @@ class EditTopicBody(BaseModel):
     relationship_type: RelationshipType | None = None
 
 
+class RegateBody(BaseModel):
+    # Optional per-call overrides so threshold + clustering granularity can be
+    # tuned without changing the Railway env. Omitted values fall back to config.
+    relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
+    # Peer-entity filter overrides (for testing on sessions whose grounding ran
+    # before this existed). Omitted -> use the session's stored lists.
+    aliases: list[str] | None = None
+    peer_entities: list[str] | None = None
+
+
+class FanoutBody(BaseModel):
+    # Recursive Fanout (PRD §7.7). RF is a 5x-8x cost step, so it will not spend
+    # unless `confirm_cost` is true — an unconfirmed call returns the cost
+    # estimate and the sub-anchor plan instead of starting. (The VA approval
+    # workflow is M9; until then owner-direct runs gate on this explicit flag.)
+    confirm_cost: bool = False
+    # Same per-call gate/clustering overrides as /regate (the enlarged pool is
+    # gated + clustered after the recursive expansion).
+    relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
+    aliases: list[str] | None = None
+    peer_entities: list[str] | None = None
+
+
+class RoutingDiagnosticBody(BaseModel):
+    # Probe keywords to route under each candidate silo-anchor strategy.
+    probes: list[str] = Field(min_length=1, max_length=50)
+    active_sample_per_topic: int = Field(default=80, ge=1, le=400)
+
+
+class ClusterPreviewBody(BaseModel):
+    # Granularity sweep: gate once, then report cluster stats for each
+    # (edge_threshold, resolution) config. Read-only — nothing is persisted.
+    relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    configs: list[tuple[float, float]] = Field(
+        default_factory=lambda: [(0.55, 1.0), (0.7, 1.0), (0.75, 1.5), (0.8, 2.0)],
+        max_length=12,
+    )
+
+
+class DeepMineBody(BaseModel):
+    # Silos the user chose to mine for competitor keywords (PRD §7.2). The seed
+    # is always mined regardless; an empty list means "seed only".
+    topic_ids: list[str] = Field(default_factory=list)
+
+
 class SiloDiscoveryResponse(BaseModel):
     session_id: str
     status: str
+    seed_keyword: str | None = None
     detected_audience: str | None = None
     needs_disambiguation: bool = False
     interpretations: list[str] = []
@@ -75,6 +133,41 @@ def _require_session(user: AuthedUser, session_id: str) -> dict:
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return session
+
+
+def _require_cluster(user: AuthedUser, cluster_id: str) -> tuple[dict, str]:
+    """Resolve a cluster and verify the caller may edit it (via its session's RLS).
+    Returns (cluster, session_id)."""
+    cluster = store.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    sid = store.cluster_session_id(cluster_id)
+    if not sid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    _require_session(user, sid)
+    return cluster, sid
+
+
+def _require_gap(user: AuthedUser, gap_id: str) -> dict:
+    gap = store.get_gap(gap_id)
+    if not gap:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap not found")
+    topic = store.get_topic(gap["topic_id"])
+    if not topic:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap not found")
+    _require_session(user, topic["session_id"])
+    return gap
+
+
+def _resolve_peer_terms(session: dict, body) -> tuple[list[str], list[str]]:
+    """Seed terms (seed + aliases) and peer terms for the peer-entity filter.
+    Request-body overrides win (for sessions whose grounding predates the lists),
+    else use what grounding stored on the session."""
+    seed = session.get("seed_keyword") or ""
+    aliases = body.aliases if getattr(body, "aliases", None) is not None else (session.get("aliases") or [])
+    peers = body.peer_entities if getattr(body, "peer_entities", None) is not None else (session.get("peer_entities") or [])
+    seed_terms = [t for t in [seed, *aliases] if t]
+    return seed_terms, list(peers)
 
 
 def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
@@ -100,7 +193,11 @@ def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
             detail=f"Silo discovery could not complete: {exc}",
         ) from exc
 
-    store.update_session(session["id"], {"detected_audience": result.detected_audience})
+    store.update_session(session["id"], {
+        "detected_audience": result.detected_audience,
+        "aliases": result.aliases,
+        "peer_entities": result.peer_entities,
+    })
 
     if result.needs_disambiguation:
         return SiloDiscoveryResponse(
@@ -146,7 +243,7 @@ def create_session(
         settings={
             "topic_count": body.topic_count,
             "coverage_mode": body.coverage_mode,
-            "recursive_fanout": False,
+            "recursive_fanout": body.recursive_fanout,
             "enrich_with_metrics": False,
         },
     )
@@ -173,6 +270,7 @@ def get_session(
     return SiloDiscoveryResponse(
         session_id=session_id,
         status=session["status"],
+        seed_keyword=session.get("seed_keyword"),
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
     )
@@ -231,65 +329,517 @@ def finalize_silos(session_id: str, user: AuthedUser = Depends(require_user)) ->
     return {"finalized": True, "topic_count": len(topics)}
 
 
-# ---- M3 expansion ---------------------------------------------------------
-@router.post("/sessions/{session_id}/expand")
-def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
-    session = _require_session(user, session_id)
+# ---- M4 deep-mine selection (PRD §7.2) ------------------------------------
+@router.post("/sessions/{session_id}/deep-mine")
+def set_deep_mine(
+    session_id: str, body: DeepMineBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Record which silos to mine for competitor keywords. The seed is always
+    mined; this only gates the additional silos."""
+    _require_session(user, session_id)
     bind_session_id(session_id)
-    topics = store.list_topics(session_id)
-    if not topics:
+    valid_ids = {t["id"] for t in store.list_topics(session_id)}
+    requested = list(dict.fromkeys(body.topic_ids))  # dedupe, preserve order
+    invalid = [tid for tid in requested if tid not in valid_ids]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Topics do not belong to this session: {', '.join(invalid)}",
+        )
+    store.set_topics_gating(session_id, requested)
+    return {"gated_topic_ids": requested, "topics": store.list_topics(session_id)}
+
+
+# ---- M3 expansion + M4 mining/relevance/clustering ------------------------
+@router.post("/sessions/{session_id}/expand", status_code=status.HTTP_202_ACCEPTED)
+def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Kick off the §7.3–§7.9 pipeline in the background and return immediately.
+    The work runs past the 5-min edge cap, so the frontend polls
+    GET /sessions/{id}/summary for status. The atomic run guard rejects a
+    double-submit (409)."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    if not store.list_topics(session_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No silos to expand. Finalize at least one silo first.",
         )
-
-    seed = session["seed_keyword"]
-    store.update_session(session_id, {"status": "running"})
-    s = get_settings()
-    try:
-        result = run_expansion(
-            topics=[
-                ExpansionTopic(
-                    id=t["id"], anchor=build_anchor(seed, t["name"]), name=t["name"]
-                )
-                for t in topics
-            ],
-            dfs=get_dataforseo(),
-            keyword_ideas_limit=s.keyword_ideas_limit,
-            keyword_suggestions_limit=s.keyword_suggestions_limit,
-            query_fanouts_limit=s.query_fanouts_limit,
-            paa_tier1_seeds=s.paa_tier1_seeds,
-            paa_tier2_cap=s.paa_tier2_cap,
-            autocomplete_max=s.autocomplete_max,
-            max_workers=s.expansion_max_workers,
-            time_budget_s=s.expansion_time_budget_s,
-        )
-        store.delete_keywords_for_session(session_id)
-        count = store.insert_keywords(session_id, result.per_topic)
-    except Exception as exc:
-        store.update_session(session_id, {"status": "error"})
-        logger.error(
-            "step_failed",
-            extra={"event": "step_failed", "step": "expansion", "reason": repr(exc)},
-        )
+    if not store.try_mark_running(session_id):
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Keyword expansion failed. The session was marked as errored; try again.",
-        ) from exc
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A pipeline run is already in progress for this session.",
+        )
+    jobs.submit_expand(session_id)
+    return {"status": "running", "session_id": session_id}
 
-    # M3 is the current pipeline terminus; later milestones move this downstream.
-    store.update_session(session_id, {"status": "complete"})
 
-    names = {t["id"]: t["name"] for t in topics}
+@router.get("/sessions/{session_id}/summary")
+def session_summary(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Status + expansion/plan counts. Polled by the frontend to drive the UI and
+    to resume a session on refresh; `plan` is null until the orchestrator runs."""
+    _require_session(user, session_id)
+    return store.get_pipeline_summary(session_id)
+
+
+@router.post("/sessions/{session_id}/regate", status_code=status.HTTP_202_ACCEPTED)
+def regate_session(
+    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Kick off a re-gate (relevance gate + clustering) on the session's stored
+    keyword pool at a (possibly overridden) threshold in the background, skipping
+    DataForSEO. Returns immediately; poll GET /summary for status. A calibration
+    tool: tune the threshold without re-paying for expansion + mining."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    if not store.list_all_keyword_pool(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No keywords to re-gate. Run /expand first.",
+        )
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+    s = get_settings()
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
+    threshold = (
+        body.relevance_threshold
+        if body.relevance_threshold is not None
+        else s.relevance_threshold
+    )
+    edge = (
+        body.clustering_edge_threshold
+        if body.clustering_edge_threshold is not None
+        else s.clustering_edge_threshold
+    )
+    resolution = (
+        body.clustering_resolution
+        if body.clustering_resolution is not None
+        else s.clustering_resolution
+    )
+    jobs.submit_regate(session_id, threshold, edge, resolution, seed_terms, peer_terms)
     return {
-        "expanded": True,
-        "keyword_count": count,
-        "degraded_notes": result.degraded_notes,
-        "topics": [
-            {"topic_id": tid, "name": names.get(tid, ""), "keyword_count": len(kws)}
-            for tid, kws in result.per_topic.items()
-        ],
+        "status": "running",
+        "session_id": session_id,
+        "relevance_threshold": threshold,
+        "clustering_edge_threshold": edge,
+        "clustering_resolution": resolution,
+        "peer_entities": peer_terms,
     }
+
+
+@router.post("/sessions/{session_id}/fanout", status_code=status.HTTP_202_ACCEPTED)
+def fanout_session(
+    session_id: str,
+    body: FanoutBody,
+    response: Response,
+    user: AuthedUser = Depends(require_user),
+) -> dict:
+    """Recursive Fanout (PRD §7.7, Phase 1). Re-expands each silo's top cluster
+    representatives as sub-anchors, then re-gates + re-clusters the enlarged pool.
+    Requires a prior /expand (it reads the first pass's clustering log for the
+    sub-anchors). Because RF costs 5x-8x a base run, an unconfirmed call returns
+    the cost estimate + sub-anchor plan and does NOT spend; set
+    `confirm_cost: true` to start. Runs in the background — poll GET /summary."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    clustering_log = session.get("statistical_clustering_log") or {}
+    topics = store.list_topics(session_id)
+    topic_ids = [t["id"] for t in topics]
+    sub_anchors = derive_sub_anchors(
+        clustering_log=clustering_log,
+        topic_ids=topic_ids,
+        per_silo=get_settings().fanout_subanchors_per_silo,
+    )
+    total = count_sub_anchors(sub_anchors)
+    if total == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No sub-anchors to fan out. Run /expand first so the silos have "
+            "statistical groupings to deepen.",
+        )
+
+    s = get_settings()
+    estimate = {
+        "sub_anchors_total": total,
+        "sub_anchors_per_silo": {
+            t["name"]: len(sub_anchors.get(t["id"], [])) for t in topics
+        },
+        "cost_multiplier_range": [s.fanout_cost_multiplier_low, s.fanout_cost_multiplier_high],
+        "note": "Recursive Fanout costs roughly 5x-8x a base run (PRD §7.7). "
+        "Re-send with confirm_cost=true to start.",
+    }
+    if not body.confirm_cost:
+        # Nothing was queued — this is a read-only cost preview, not an accepted
+        # run, so override the route's default 202.
+        response.status_code = status.HTTP_200_OK
+        return {"status": "estimate", "session_id": session_id, "estimate": estimate}
+
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
+    threshold = (
+        body.relevance_threshold
+        if body.relevance_threshold is not None
+        else s.relevance_threshold
+    )
+    edge = (
+        body.clustering_edge_threshold
+        if body.clustering_edge_threshold is not None
+        else s.clustering_edge_threshold
+    )
+    resolution = (
+        body.clustering_resolution
+        if body.clustering_resolution is not None
+        else s.clustering_resolution
+    )
+    jobs.submit_fanout(session_id, threshold, edge, resolution, seed_terms, peer_terms)
+    return {"status": "running", "session_id": session_id, "estimate": estimate}
+
+
+@router.post("/sessions/{session_id}/routing-diagnostic")
+def routing_diagnostic_endpoint(
+    session_id: str, body: RoutingDiagnosticBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Read-only: compare candidate silo-anchor strategies by routing probe
+    keywords (and the active pool) to their argmax-cosine silo. Used to pick the
+    keyword->silo routing signal empirically. No persistence, no status change."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    session = store.get_session(session_id) or {}
+    topics = store.list_topics(session_id)
+    if not topics:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No silos.")
+    active_by_topic = {
+        t["id"]: [k["keyword"] for k in store.list_keywords(
+            session_id, topic_id=t["id"], status="active", limit=body.active_sample_per_topic)]
+        for t in topics
+    }
+    return routing_diagnostic(
+        seed=session.get("seed_keyword", ""),
+        topics=[(t["id"], t["name"]) for t in topics],
+        rationale_embeddings=store.get_topic_embeddings(session_id),
+        active_by_topic=active_by_topic,
+        probes=body.probes,
+        embed_fn=get_llm().embed,
+    )
+
+
+@router.post("/sessions/{session_id}/lever3-simulate")
+def lever3_simulate_endpoint(
+    session_id: str, body: RegateBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Read-only Lever-3 dry run: argmax-route every active keyword to its best
+    silo (raw rationale-anchor cosine) and cluster each silo's reassigned set,
+    reporting per-silo grouping counts. Measures the Lever-3 outcome before
+    building it. No persistence, no status change."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    pool = store.list_all_keyword_pool(session_id)
+    if not pool:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="No keywords. Run /expand first.")
+    s = get_settings()
+    topics = store.list_topics(session_id)
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
+    return simulate_best_silo_clustering(
+        per_topic_lists=pool,
+        topic_names={t["id"]: t["name"] for t in topics},
+        topic_embeddings=store.get_topic_embeddings(session_id),
+        embed_fn=get_llm().embed,
+        relevance_threshold=(body.relevance_threshold
+                             if body.relevance_threshold is not None else s.relevance_threshold),
+        edge_threshold=(body.clustering_edge_threshold
+                        if body.clustering_edge_threshold is not None else s.clustering_edge_threshold),
+        resolution=(body.clustering_resolution
+                    if body.clustering_resolution is not None else s.clustering_resolution),
+        clustering_max_nodes=s.clustering_max_nodes,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
+    )
+
+
+@router.post("/sessions/{session_id}/cluster-preview")
+def cluster_preview_endpoint(
+    session_id: str, body: ClusterPreviewBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Granularity sweep (read-only): embed + gate the stored keyword pool once,
+    then report cluster-size stats for each (edge_threshold, resolution) config.
+    Synchronous (no persistence, no status change) — it's a quick analysis call
+    used to pick clustering settings before committing a /regate."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    pool = store.list_all_keyword_pool(session_id)
+    if not pool:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No keywords to preview. Run /expand first.",
+        )
+    s = get_settings()
+    threshold = (
+        body.relevance_threshold
+        if body.relevance_threshold is not None
+        else s.relevance_threshold
+    )
+    topics = store.list_topics(session_id)
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
+    return cluster_preview(
+        per_topic_lists=pool,
+        topic_names={t["id"]: t["name"] for t in topics},
+        topic_embeddings=store.get_topic_embeddings(session_id),
+        embed_fn=get_llm().embed,
+        relevance_threshold=threshold,
+        configs=[(float(e), float(r)) for e, r in body.configs],
+        relevance_embed_batch=s.relevance_embed_batch,
+        clustering_max_nodes=s.clustering_max_nodes,
+        seed_terms=seed_terms,
+        peer_terms=peer_terms,
+    )
+
+
+class PlanArticlesBody(BaseModel):
+    # direct=True skips the LLM orchestrator: every grouping (incl. singletons)
+    # becomes an article, then cross-topic dedup collapses duplicates.
+    direct: bool = False
+
+
+# ---- M7b editing bodies (PRD §9.1 / §9.2 / §9.4) --------------------------
+_INTENT_RE = "^(informational|commercial|transactional|comparison|navigational)$"
+
+
+class ClusterEditBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+    intent: str | None = Field(default=None, pattern=_INTENT_RE)
+    suggested_h2s: list[str] | None = None
+
+
+class PromotePrimaryBody(BaseModel):
+    keyword_id: str = Field(min_length=1)
+
+
+class MergeClustersBody(BaseModel):
+    survivor_id: str = Field(min_length=1)
+    merged_ids: list[str] = Field(min_length=1)
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class SplitClusterBody(BaseModel):
+    keyword_ids: list[str] = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=300)
+    primary_keyword_id: str | None = None
+
+
+class KeywordStatusBody(BaseModel):
+    keyword_ids: list[str] = Field(min_length=1)
+    status: str = Field(pattern="^(active|excluded|covered)$")
+
+
+class KeywordMoveBody(BaseModel):
+    keyword_ids: list[str] = Field(min_length=1)
+    cluster_id: str | None = None  # None -> Unassigned bucket
+
+
+class SessionPatchBody(BaseModel):
+    project_id: str | None = None
+    archived: bool | None = None
+
+
+@router.post("/sessions/{session_id}/plan-articles", status_code=status.HTTP_202_ACCEPTED)
+def plan_articles(
+    session_id: str,
+    user: AuthedUser = Depends(require_user),
+    body: PlanArticlesBody | None = None,
+) -> dict:
+    """Kick off M5 article planning (§7.10) in the background: SERP for candidate
+    primaries -> per-silo orchestrator -> cross-topic dedup -> persist clusters +
+    coverage gaps. With body {"direct": true}, skips the orchestrator (groupings
+    -> articles directly). Returns immediately; poll GET /summary for status."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    if not (session.get("statistical_clustering_log") or {}).get("topics"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No statistical clustering to plan from. Run /expand first.",
+        )
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+    jobs.submit_plan(session_id, direct=bool(body and body.direct))
+    return {"status": "running", "session_id": session_id, "direct": bool(body and body.direct)}
+
+
+@router.get("/sessions/{session_id}/clusters")
+def get_clusters(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Read-only article plan + coverage gaps for a session."""
+    _require_session(user, session_id)
+    return {
+        "clusters": store.list_clusters(session_id),
+        "coverage_gaps": store.list_coverage_gaps(session_id),
+    }
+
+
+# ---- M7b cluster editing (PRD §9.2) ---------------------------------------
+@router.patch("/clusters/{cluster_id}")
+def edit_cluster(
+    cluster_id: str, body: ClusterEditBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Rename an article, change its intent, or edit its H2 outline (§9.2)."""
+    _require_cluster(user, cluster_id)
+    fields: dict = {}
+    if body.name is not None:
+        fields["name"] = body.name.strip()
+    if body.intent is not None:
+        fields["intent"] = body.intent
+    if body.suggested_h2s is not None:
+        fields["suggested_h2s"] = [h.strip() for h in body.suggested_h2s if h.strip()]
+    if not fields:
+        return store.get_cluster(cluster_id)
+    return store.update_cluster(cluster_id, fields)
+
+
+@router.post("/clusters/{cluster_id}/promote-primary")
+def promote_primary(
+    cluster_id: str, body: PromotePrimaryBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Make a supporting keyword the article's primary; the old primary demotes
+    to supporting (§9.2)."""
+    _require_cluster(user, cluster_id)
+    try:
+        return store.promote_primary(cluster_id, body.keyword_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.delete("/clusters/{cluster_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_cluster(cluster_id: str, user: AuthedUser = Depends(require_user)) -> None:
+    """Delete an article; its keywords drop to the topic's Unassigned bucket — they
+    are never destroyed (§9.2)."""
+    _require_cluster(user, cluster_id)
+    store.delete_cluster(cluster_id)
+
+
+@router.post("/clusters/merge")
+def merge_clusters(
+    body: MergeClustersBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Merge two or more articles into one (§9.2). All must belong to one session
+    the caller owns."""
+    _, survivor_sid = _require_cluster(user, body.survivor_id)
+    for cid in body.merged_ids:
+        _, sid = _require_cluster(user, cid)
+        if sid != survivor_sid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="All merged articles must belong to the same session.",
+            )
+    return store.merge_clusters(survivor_sid, body.survivor_id, body.merged_ids, name=body.name)
+
+
+@router.post("/clusters/{cluster_id}/split")
+def split_cluster(
+    cluster_id: str, body: SplitClusterBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Split a subset of an article's keywords into a new article (§9.2, manual
+    selection). Returns the new article."""
+    _require_cluster(user, cluster_id)
+    try:
+        return store.split_cluster(
+            cluster_id, body.keyword_ids, body.name.strip(), body.primary_keyword_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+# ---- M7b keyword bulk actions (PRD §9.1) ----------------------------------
+@router.post("/sessions/{session_id}/keywords/status")
+def bulk_keyword_status(
+    session_id: str, body: KeywordStatusBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Bulk exclude / mark-covered / restore-to-active for selected keywords (§9.1).
+    Scoped to the session, so only its keywords are affected."""
+    _require_session(user, session_id)
+    updated = store.set_keywords_status(session_id, body.keyword_ids, body.status)
+    return {"updated": updated}
+
+
+@router.post("/sessions/{session_id}/keywords/move")
+def bulk_keyword_move(
+    session_id: str, body: KeywordMoveBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Move selected keywords to another article, or to Unassigned (cluster_id
+    null) (§9.1 / §9.2)."""
+    _require_session(user, session_id)
+    if body.cluster_id is not None:
+        _, sid = _require_cluster(user, body.cluster_id)
+        if sid != session_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target article belongs to a different session.",
+            )
+    updated = store.move_keywords(session_id, body.keyword_ids, body.cluster_id)
+    return {"updated": updated}
+
+
+# ---- M7b coverage-gap decisions (PRD §9.2) --------------------------------
+@router.post("/coverage-gaps/{gap_id}/accept")
+def accept_gap(gap_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Accept a flagged gap -> create an empty placeholder article for it (§9.2)."""
+    _require_gap(user, gap_id)
+    return store.accept_gap(gap_id)
+
+
+@router.post("/coverage-gaps/{gap_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_gap(gap_id: str, user: AuthedUser = Depends(require_user)) -> None:
+    _require_gap(user, gap_id)
+    store.dismiss_gap(gap_id)
+
+
+# ---- M6 site architecture (PRD §7.11) -------------------------------------
+@router.post("/sessions/{session_id}/architecture", status_code=status.HTTP_202_ACCEPTED)
+def generate_architecture(
+    session_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Kick off M6 site architecture generation (§7.11) in the background: one
+    pillar per article-bearing silo (editorial fields via Opus) + the internal
+    linking matrix, persisted to site_architecture. Requires a prior
+    /plan-articles (it organizes the existing clusters, never re-plans). Idempotent
+    — re-running regenerates (PRD §9.3). Returns immediately; poll GET /summary for
+    status, then GET /architecture for the result."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    if not store.list_clusters(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No article plan to build an architecture from. "
+            "Run /plan-articles first.",
+        )
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+    jobs.submit_architecture(session_id)
+    return {"status": "running", "session_id": session_id}
+
+
+@router.get("/sessions/{session_id}/architecture")
+def get_architecture(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Read-only site architecture for a session (the M6 API view; the two-panel
+    Architecture View UI is M7). 404 until /architecture has produced one."""
+    _require_session(user, session_id)
+    arch = store.get_architecture(session_id)
+    if not arch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No architecture generated yet. Run POST /architecture first.",
+        )
+    return arch
 
 
 @router.get("/sessions/{session_id}/keywords")
@@ -297,11 +847,70 @@ def get_keywords(
     session_id: str,
     user: AuthedUser = Depends(require_user),
     topic_id: str | None = None,
+    status: str | None = None,
+    statuses: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
+    """Keywords for a session. `statuses` (comma-separated) takes precedence over
+    `status` — the Table/Cluster views pass `active,excluded,covered` to fetch
+    only surviving keywords (PRD §9.1)."""
     _require_session(user, session_id)
-    return store.list_keywords(session_id, topic_id=topic_id, limit=min(limit, 500), offset=offset)
+    status_list = (
+        [s for s in (statuses.split(",") if statuses else []) if s] or None
+    )
+    return store.list_keywords(
+        session_id,
+        topic_id=topic_id,
+        status=status,
+        statuses=status_list,
+        limit=min(limit, 500),
+        offset=offset,
+    )
+
+
+# ---- Session browser (PRD §9.4) -------------------------------------------
+@router.get("/projects/{project_id}/sessions")
+def list_project_sessions(
+    project_id: str,
+    user: AuthedUser = Depends(require_user),
+    include_archived: bool = False,
+) -> list[dict]:
+    """Sessions under a project, newest first, for the Session Browser (§9.4).
+    Each carries seed, status, coverage mode, cluster count, and timestamps so the
+    UI can resume a session. RLS-scoped to what the caller may see. Archived
+    sessions are hidden unless include_archived=true."""
+    if not store.project_visible_to_user(user.access_token, project_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+    return store.list_sessions(user.access_token, project_id, include_archived=include_archived)
+
+
+@router.patch("/sessions/{session_id}")
+def patch_session(
+    session_id: str, body: SessionPatchBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Session-browser mutations (§9.4): archive/unarchive, or move to another
+    project the caller owns."""
+    _require_session(user, session_id)
+    if body.project_id is not None:
+        if not store.project_visible_to_user(user.access_token, body.project_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Target project not found"
+            )
+        store.move_session(session_id, body.project_id)
+    if body.archived is not None:
+        store.set_session_archived(session_id, body.archived)
+    return {"session_id": session_id, "moved": body.project_id is not None,
+            "archived": body.archived}
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(session_id: str, user: AuthedUser = Depends(require_user)) -> None:
+    """Permanently delete a session and all its data (§9.4). Irreversible."""
+    _require_session(user, session_id)
+    store.delete_session(session_id)
 
 
 # ---- Topic review actions (PRD §7.1.4) ------------------------------------

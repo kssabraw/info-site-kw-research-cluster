@@ -45,6 +45,26 @@ class Settings(BaseSettings):
     # cosine distance >= this threshold. Tunable during MVP testing.
     ambiguity_separation_threshold: float = 0.5
 
+    # Anthropic — article planning orchestrator (Claude Opus 4.7, tool-use /
+    # strict-schema JSON; PRD §7.10, §14.2). Reuses the AR Tools ANTHROPIC_API_KEY.
+    anthropic_api_key: str = ""
+    orchestrator_model: str = "claude-opus-4-7"
+    orchestrator_max_tokens: int = 16000
+    orchestrator_timeout_s: int = 120         # PRD §16.2: >120s -> retry once then degrade
+    # The orchestrator runs per silo, but a silo with many groupings overruns a
+    # single call (huge prompt + output -> timeout/truncation). Plan in chunks of
+    # this many groupings, run in parallel, so each call stays small and fast.
+    orchestrator_groupings_per_call: int = 12
+    orchestrator_max_workers: int = 5         # parallel orchestrator calls
+
+    # M5 article planning (PRD §7.10).
+    candidate_serp_top_n: int = 10            # top organic URLs per candidate primary
+    candidate_serp_max_workers: int = 8
+    candidate_serp_time_budget_s: int = 120
+    # Cross-topic dedup thresholds (§7.10.4).
+    dedup_primary_cosine_threshold: float = 0.85
+    dedup_serp_overlap_min: float = 2 / 3     # top-3 SERP overlap fraction
+
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""
     dataforseo_password: str = ""
@@ -56,9 +76,63 @@ class Settings(BaseSettings):
     query_fanouts_limit: int = 300
     paa_tier1_seeds: int = 8          # tier-1 questions used as tier-2 seeds
     paa_tier2_cap: int = 40           # max tier-2 questions per silo (PRD §7.3)
-    autocomplete_max: int = 1500      # safety cap on autocomplete calls per run
+    autocomplete_max: int = 500       # safety cap on autocomplete calls per run
+                                      # (autocomplete is the noisiest/slowest source;
+                                      #  most of it gets filtered by the relevance gate)
     expansion_max_workers: int = 8    # parallel endpoint/silo workers
     expansion_time_budget_s: int = 240  # hard cap on a single expansion run (4 min)
+
+    # M4 competitor mining (PRD §7.4).
+    competitor_top_n_standard: int = 5       # top organic URLs mined per silo
+    competitor_top_n_comprehensive: int = 10
+    ranked_keywords_limit: int = 500         # ranked keywords pulled per domain
+    competitor_max_position: int = 20        # organic rank ceiling (1..N)
+    competitor_max_workers: int = 8
+    competitor_time_budget_s: int = 240
+
+    # M4 relevance gate (PRD §7.6) + clustering (§7.9).
+    relevance_threshold: float = 0.52        # cosine cutoff vs parent topic embedding
+    # Lever 3: assign each keyword to its single best silo (argmax cosine to the
+    # silo anchor) instead of keeping it active in every silo it passes in. Kills
+    # the cross-silo duplication that dedup otherwise has to clean up.
+    relevance_assign_best_silo: bool = True
+    relevance_embed_batch: int = 1000        # keywords per embedding request
+    clustering_edge_threshold: float = 0.55  # min cosine for a graph edge
+    # Louvain resolution: >1 favors more, smaller communities (finer granularity).
+    clustering_resolution: float = 1.0
+    # Cap on keywords clustered per topic. The similarity graph is O(n^2), so
+    # bound n to keep memory in check; the top-N most-relevant actives are
+    # clustered, the long-tail remainder stays active but unclustered.
+    clustering_max_nodes: int = 2500
+
+    # Recursive Fanout (PRD §7.7, Phase 1). RF deepens each silo by re-expanding
+    # its top cluster representatives as sub-anchors. Mining at this level is off
+    # (M5 finding: mining adds noise the gate rejects).
+    fanout_subanchors_per_silo: int = 6      # top-N cluster reps re-expanded per silo
+    fanout_subanchor_max_workers: int = 8
+    # RF expands N silos x fanout_subanchors_per_silo anchors in one run, so a flat
+    # budget that suits a base /expand (a handful of silos) starves a wide fan-out
+    # and truncates its tail. Scale the budget by the sub-anchor count instead:
+    # max(floor, per_anchor x count), capped. RF runs in the background worker, so
+    # the cap can exceed Railway's 5-min edge limit (that only bounds the request).
+    fanout_time_budget_per_anchor_s: float = 25.0
+    fanout_time_budget_floor_s: float = 60.0
+    fanout_time_budget_cap_s: int = 900
+    # Cost surfaced to the owner before an RF run (§7.7: 5x-8x the base run).
+    fanout_cost_multiplier_low: float = 5.0
+    fanout_cost_multiplier_high: float = 8.0
+
+    # M6 site architecture (PRD §7.11). Reuses the orchestrator's Anthropic client
+    # (§7.11: "share the same LLM client and credentials"); one editorial call per
+    # pillar, run in parallel. The linking matrix is assembled deterministically.
+    # Kept low: live validation showed ~5 simultaneous pillar calls burst Anthropic
+    # rate limits and degraded most pillars to stubs; 2-at-a-time + per-call backoff
+    # cleared it (pillars are few, so throughput isn't the constraint).
+    architect_max_workers: int = 2
+    # Pillars link laterally only above this topic-embedding cosine (§15.2 #4).
+    architecture_pillar_lateral_cosine: float = 0.55
+    # Lateral peer links per supporting article (§7.11 "2-3 lateral links").
+    architecture_lateral_article_links_max: int = 3
 
     # Observability (PRD §16.3)
     log_level: str = "INFO"

@@ -152,4 +152,6 @@ def run_silo_discovery(
         detected_audience=detected_audience,
         silos=silos,
         degraded_notes=degraded,
+        aliases=grounding.aliases,
+        peer_entities=grounding.peer_entities,
     )

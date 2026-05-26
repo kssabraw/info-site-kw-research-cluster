@@ -77,7 +77,9 @@ class FakeDFS:
 
 
 def _run(dfs, **kw):
-    return run_expansion(topics=[ExpansionTopic(id="t1", anchor="seed")], dfs=dfs, **kw)
+    return run_expansion(
+        seed="seed", topics=[ExpansionTopic(id="t1", anchor="seed")], dfs=dfs, **kw
+    )
 
 
 def test_aggregates_and_dedupes_sources_case_insensitively():
@@ -89,6 +91,73 @@ def test_aggregates_and_dedupes_sources_case_insensitively():
     assert kws["b"] == ["keyword_ideas", "keyword_suggestions"]
     assert kws["d"] == ["query_fanouts"]
     assert r.degraded_notes == []
+
+
+class _AnchorRecorderDFS(FakeDFS):
+    """Records which anchor each endpoint was called with."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.seen: dict[str, str] = {}
+
+    def keyword_ideas(self, anchor, limit=0):
+        self.seen["keyword_ideas"] = anchor
+        return list(self.ideas)
+
+    def keyword_suggestions(self, anchor, limit=0):
+        self.seen["keyword_suggestions"] = anchor
+        return list(self.suggestions)
+
+    def query_fanouts(self, anchor, limit=0):
+        self.seen["query_fanouts"] = anchor
+        return list(self.fanouts)
+
+    def people_also_ask(self, anchor):
+        self.seen["paa"] = anchor
+        return []
+
+
+def test_seed_sensitive_endpoints_use_bare_seed_not_silo_anchor():
+    # keyword_ideas + PAA get the per-silo broad anchor; suggestions + fanouts
+    # get the bare seed (they need a real keyword to yield volume).
+    dfs = _AnchorRecorderDFS(ideas=["a"], suggestions=["b"], fanouts=["c"])
+    run_expansion(
+        seed="retatrutide",
+        topics=[
+            ExpansionTopic(
+                id="t1",
+                anchor="retatrutide obesity & metabolic uses",
+                name="Obesity & Metabolic Uses",
+            )
+        ],
+        dfs=dfs,
+    )
+    assert dfs.seen["keyword_ideas"] == "retatrutide obesity & metabolic uses"
+    assert dfs.seen["paa"] == "retatrutide obesity & metabolic uses"
+    assert dfs.seen["keyword_suggestions"] == "retatrutide"
+    assert dfs.seen["query_fanouts"] == "retatrutide"
+
+
+def test_seed_level_suggestions_fanouts_attach_to_every_silo():
+    # The single seed-level call's results land in all silo pools.
+    dfs = FakeDFS(ideas=["a"], suggestions=["s1"], fanouts=["f1"])
+    r = run_expansion(
+        seed="retatrutide",
+        topics=[
+            ExpansionTopic(id="t1", anchor="a1"),
+            ExpansionTopic(id="t2", anchor="a2"),
+        ],
+        dfs=dfs,
+    )
+    for tid in ("t1", "t2"):
+        assert r.per_topic[tid]["s1"] == ["keyword_suggestions"]
+        assert r.per_topic[tid]["f1"] == ["query_fanouts"]
+
+
+def test_seed_level_source_failure_degrades_without_silo_name():
+    dfs = FakeDFS(ideas=["a"], fail=("keyword_suggestions",))
+    r = _run(dfs)
+    assert any(n == "Partial expansion: keyword_suggestions unavailable." for n in r.degraded_notes)
 
 
 def test_paa_two_tier_and_cap():
@@ -128,6 +197,7 @@ def test_non_string_keyword_is_skipped_not_crashed():
 def test_degraded_note_uses_silo_name_not_anchor():
     dfs = FakeDFS(fail=("keyword_ideas",))
     r = run_expansion(
+        seed="retatrutide",
         topics=[ExpansionTopic(id="t1", anchor="retatrutide weight loss use", name="weight loss use")],
         dfs=dfs,
     )
@@ -186,6 +256,7 @@ def test_time_budget_caps_the_run():
     # A tiny budget against slow endpoints must stop and flag, not hang.
     started = time.monotonic()
     r = run_expansion(
+        seed="seed",
         topics=[ExpansionTopic(id="t1", anchor="seed")],
         dfs=_SlowDFS(),
         max_workers=1,

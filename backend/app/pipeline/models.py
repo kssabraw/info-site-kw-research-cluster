@@ -28,6 +28,10 @@ class GroundingResult(BaseModel):
     detected_audience: str | None = None
     is_ambiguous: bool = False
     interpretations: list[str] = Field(default_factory=list)
+    # Seed nicknames/abbreviations and peer/competitor entities, used by the
+    # generic peer-entity filter in the relevance gate (§5.1, §7.6).
+    aliases: list[str] = Field(default_factory=list)
+    peer_entities: list[str] = Field(default_factory=list)
 
 
 class ProposedSilo(BaseModel):
@@ -49,3 +53,6 @@ class SiloDiscoveryResult(BaseModel):
     silos: list[ProposedSilo] = Field(default_factory=list)
     # Human-readable degraded-mode notes surfaced to the UI (PRD §16.2).
     degraded_notes: list[str] = Field(default_factory=list)
+    # Per-seed peer-entity filter inputs (seed nicknames + competitor entities).
+    aliases: list[str] = Field(default_factory=list)
+    peer_entities: list[str] = Field(default_factory=list)

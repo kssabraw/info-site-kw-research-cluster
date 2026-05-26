@@ -10,10 +10,13 @@ import {
   finalizeSilos,
   getKeywords,
   getSession,
+  getSummary,
   overrideAudience,
+  planArticles,
+  setDeepMine,
   type AddTopicBody,
   type EditTopicBody,
-  type ExpansionResult,
+  type PipelineSummary,
   type RelationshipType,
   type Silo,
   type SiloDiscovery as Discovery,
@@ -23,7 +26,10 @@ import {
   RELATIONSHIP_OPTIONS,
 } from "../shared/relationshipTypes";
 
-type Step = "form" | "disambiguation" | "review" | "finalized" | "expanded";
+// The pipeline steps run in the background; "pipeline" is a polling-driven view
+// that renders progress / results from the session summary.
+type Step = "form" | "disambiguation" | "review" | "finalized" | "pipeline";
+type Phase = "expanding" | "planning";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
@@ -74,12 +80,35 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
     onError: (e) => setError(msg(e)),
   });
 
-  const [expansion, setExpansion] = useState<ExpansionResult | null>(null);
+  // Pipeline runs in the background; we poll the session summary to drive the UI.
+  const [phase, setPhase] = useState<Phase>("expanding");
+  const summaryQ = useQuery({
+    queryKey: ["summary", sessionId],
+    queryFn: () => getSummary(sessionId!),
+    enabled: !!sessionId && step === "pipeline",
+    // Poll while a run is in progress; stop once it reaches a terminal status.
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 4000 : false),
+  });
+
   const expandMut = useMutation({
-    mutationFn: () => expandSession(sessionId!),
-    onSuccess: (r) => {
-      setExpansion(r);
-      setStep("expanded");
+    // The deep-mine selection (§7.2) is saved, then the pipeline kicks off async.
+    mutationFn: async (gatedTopicIds: string[]) => {
+      await setDeepMine(sessionId!, gatedTopicIds);
+      return expandSession(sessionId!);
+    },
+    onSuccess: () => {
+      setPhase("expanding");
+      setStep("pipeline");
+      qc.invalidateQueries({ queryKey: ["summary", sessionId] });
+    },
+    onError: (e) => setError(msg(e)),
+  });
+
+  const planMut = useMutation({
+    mutationFn: () => planArticles(sessionId!),
+    onSuccess: () => {
+      setPhase("planning");
+      qc.invalidateQueries({ queryKey: ["summary", sessionId] });
     },
     onError: (e) => setError(msg(e)),
   });
@@ -165,42 +194,28 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
 
-        {step === "finalized" && expandMut.isPending && (
-          <WorkingProgress
-            stages={EXPANSION_STAGES}
-            targetS={90}
-            estimate="usually 2–4 minutes"
+        {step === "finalized" && !expandMut.isPending && sessionId && (
+          <DeepMineSelection
+            sessionId={sessionId}
+            onExit={onExit}
+            onRun={(gatedIds) => {
+              setError(null);
+              expandMut.mutate(gatedIds);
+            }}
           />
         )}
 
-        {step === "finalized" && !expandMut.isPending && (
-          <div className="card">
-            <h1 className="page-title">Silos finalized</h1>
-            <p className="muted">
-              Your silos are locked and embedded. Next, expand each silo into a keyword
-              pool (DataForSEO ideas, suggestions, fan-outs, People-Also-Ask, and
-              autocomplete).
-            </p>
-            <div className="toolbar">
-              <button className="btn btn-ghost" onClick={onExit}>
-                Back to projects
-              </button>
-              <button
-                className="btn btn-primary"
-                style={{ width: "auto" }}
-                onClick={() => {
-                  setError(null);
-                  expandMut.mutate();
-                }}
-              >
-                Run keyword expansion
-              </button>
-            </div>
-          </div>
-        )}
-
-        {step === "expanded" && expansion && sessionId && (
-          <ExpansionResults expansion={expansion} sessionId={sessionId} onExit={onExit} />
+        {step === "pipeline" && sessionId && (
+          <PipelineView
+            phase={phase}
+            summary={summaryQ.data ?? null}
+            sessionId={sessionId}
+            onExit={onExit}
+            onPlan={() => {
+              setError(null);
+              planMut.mutate();
+            }}
+          />
         )}
       </main>
     </>
@@ -221,9 +236,17 @@ const DISCOVERY_STAGES: Stage[] = [
 ];
 
 const EXPANSION_STAGES: Stage[] = [
-  { until: 30, label: "Pulling keyword ideas, suggestions, and fan-outs per silo" },
-  { until: 55, label: "Mining People-Also-Ask questions" },
-  { until: Infinity, label: "Autocomplete enrichment" },
+  { until: 40, label: "Pulling keyword ideas, suggestions, fan-outs, and PAA per silo" },
+  { until: 70, label: "Autocomplete enrichment" },
+  { until: 110, label: "Mining competitor ranked keywords" },
+  { until: 150, label: "Scoring relevance against each silo" },
+  { until: Infinity, label: "Clustering keywords per silo" },
+];
+
+const PLANNING_STAGES: Stage[] = [
+  { until: 40, label: "Fetching SERPs for candidate primary keywords" },
+  { until: 95, label: "Planning articles per silo (merge / split / promote / drop)" },
+  { until: Infinity, label: "Deduplicating articles across silos" },
 ];
 
 function WorkingProgress({
@@ -266,34 +289,88 @@ function WorkingProgress({
 }
 
 // ---------------------------------------------------------------------------
-function ExpansionResults(p: {
-  expansion: ExpansionResult;
+// Polling-driven view of a background pipeline run. The work runs server-side
+// (past the 5-min edge cap), so we poll the session summary and render progress,
+// results, or an error from its status.
+function PipelineView(p: {
+  phase: Phase;
+  summary: PipelineSummary | null;
   sessionId: string;
   onExit: () => void;
+  onPlan: () => void;
+}) {
+  const { summary, phase } = p;
+  const status = summary?.status;
+
+  if (!summary || status === "running") {
+    return phase === "planning" ? (
+      <WorkingProgress stages={PLANNING_STAGES} targetS={120} estimate="usually 1–4 minutes" />
+    ) : (
+      <WorkingProgress stages={EXPANSION_STAGES} targetS={150} estimate="usually 3–6 minutes" />
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <div className="card">
+        <h1 className="page-title">The run hit an error</h1>
+        <p className="form-error">{summary.last_error ?? "The pipeline failed."}</p>
+        <p className="muted">
+          Any data collected before the failure was saved. You can start a new session
+          or retry from the project list.
+        </p>
+        <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
+          Back to projects
+        </button>
+      </div>
+    );
+  }
+
+  if (status === "complete" && summary.plan) {
+    return <PlanResults plan={summary.plan} onExit={p.onExit} />;
+  }
+
+  // awaiting_article_planning: expansion done, ready to plan articles.
+  return (
+    <ExpansionResults
+      expansion={summary.expansion}
+      sessionId={p.sessionId}
+      onExit={p.onExit}
+      onPlan={p.onPlan}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+function ExpansionResults(p: {
+  expansion: PipelineSummary["expansion"];
+  sessionId: string;
+  onExit: () => void;
+  onPlan: () => void;
 }) {
   const { expansion } = p;
   const [openTopic, setOpenTopic] = useState<string | null>(null);
+  const c = expansion.counts;
 
   return (
     <>
-      <h1 className="page-title">Keyword expansion complete</h1>
+      <h1 className="page-title">Keyword pipeline complete</h1>
       <p className="muted">
-        {expansion.keyword_count.toLocaleString()} keywords across{" "}
-        {expansion.topics.length} silos.
+        {c.active.toLocaleString()} relevant keywords across {expansion.topics.length} silos
+        {" · "}
+        {(c.filtered_relevance + c.filtered_junk).toLocaleString()} filtered out (
+        {c.filtered_relevance.toLocaleString()} off-topic, {c.filtered_junk.toLocaleString()}{" "}
+        junk).
       </p>
-
-      {expansion.degraded_notes.map((note) => (
-        <div className="banner" key={note}>
-          {note}
-        </div>
-      ))}
 
       {expansion.topics.map((t) => (
         <div className="silo-card" key={t.topic_id}>
           <div className="silo-head">
             <p className="silo-name">{t.name}</p>
             <div className="silo-actions">
-              <span className="muted">{t.keyword_count.toLocaleString()} keywords</span>
+              <span className="muted">
+                {t.active.toLocaleString()} keywords · {t.grouping_count} groupings
+              </span>
               <button
                 className="link-btn"
                 onClick={() => setOpenTopic(openTopic === t.topic_id ? null : t.topic_id)}
@@ -309,12 +386,138 @@ function ExpansionResults(p: {
       ))}
 
       <div className="toolbar">
-        <span className="muted">Expansion done — clustering arrives in a later milestone.</span>
+        <span className="muted">
+          Groupings are an internal signal. Plan articles to turn them into a content map.
+        </span>
+        <div className="silo-actions">
+          <button className="btn btn-ghost" style={{ width: "auto" }} onClick={p.onExit}>
+            Done
+          </button>
+          <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onPlan}>
+            Plan articles
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Read-only article-plan summary (M5 verification). Full table/cluster/
+// architecture views + editing land in M7.
+function PlanResults(p: { plan: NonNullable<PipelineSummary["plan"]>; onExit: () => void }) {
+  const { plan } = p;
+  return (
+    <>
+      <h1 className="page-title">Article plan ready</h1>
+      <p className="muted">
+        {plan.clusters.toLocaleString()} articles planned across {plan.topics.length} silos
+        {" · "}
+        {plan.gaps.toLocaleString()} coverage gaps flagged
+        {" · "}
+        {plan.dropped.toLocaleString()} keywords dropped
+        {" · "}
+        {plan.collisions.toLocaleString()} cross-silo duplicates merged.
+      </p>
+
+      {plan.topics.map((t) => (
+        <div className="silo-card" key={t.topic_id}>
+          <div className="silo-head">
+            <p className="silo-name">{t.name}</p>
+            <span className="muted">
+              {t.articles} articles · {t.gaps} gaps
+            </span>
+          </div>
+        </div>
+      ))}
+
+      <div className="toolbar">
+        <span className="muted">
+          Editable table, cluster, and architecture views arrive in a later milestone.
+        </span>
         <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
           Done
         </button>
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Deep-mine selection (PRD §7.2): the user picks which silos to mine for
+// competitor keywords. The seed is always mined and shown as a locked row.
+function DeepMineSelection(p: {
+  sessionId: string;
+  onRun: (gatedTopicIds: string[]) => void;
+  onExit: () => void;
+}) {
+  const q = useQuery({
+    queryKey: ["session", p.sessionId],
+    queryFn: () => getSession(p.sessionId),
+  });
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  if (q.isLoading) return <p className="muted">Loading silos…</p>;
+  if (q.isError) return <p className="form-error">Failed to load silos.</p>;
+  const silos = q.data?.silos ?? [];
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div className="card">
+      <h1 className="page-title">Choose silos to deep-mine</h1>
+      <p className="muted">
+        Competitor mining pulls the keywords competitors already rank for. The seed is always
+        mined; pick the silos worth the extra SERP cost (2–3 is a good budget). You can also
+        run with none selected.
+      </p>
+
+      <div className="keyword-grid" style={{ marginTop: 16 }}>
+        <label className="keyword-row" style={{ opacity: 0.7 }}>
+          <span>
+            <input type="checkbox" checked disabled style={{ marginRight: 8 }} />
+            Seed keyword (always mined)
+          </span>
+          <span className="keyword-sources">required</span>
+        </label>
+        {silos.map((s) => (
+          <label className="keyword-row" key={s.id} style={{ cursor: "pointer" }}>
+            <span>
+              <input
+                type="checkbox"
+                checked={selected.has(s.id)}
+                onChange={() => toggle(s.id)}
+                style={{ marginRight: 8 }}
+              />
+              {s.name}
+            </span>
+            <span className="keyword-sources">
+              {RELATIONSHIP_LABELS[s.relationship_type]}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className="toolbar" style={{ marginTop: 16 }}>
+        <button className="btn btn-ghost" onClick={p.onExit}>
+          Back to projects
+        </button>
+        <button
+          className="btn btn-primary"
+          style={{ width: "auto" }}
+          onClick={() => p.onRun([...selected])}
+        >
+          Run keyword pipeline
+          {selected.size > 0 ? ` (mine ${selected.size + 1} silos)` : " (seed only)"}
+        </button>
+      </div>
+    </div>
   );
 }
 

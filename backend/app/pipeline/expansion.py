@@ -1,9 +1,12 @@
 """Per-silo keyword expansion (PRD §7.3) + autocomplete enrichment (§7.5).
 
-For each finalized silo, four DataForSEO endpoints run in parallel
-(keyword_ideas, keyword_suggestions, query_fanouts, PAA two tiers deep). The
-deduped keyword pool is then enriched via autocomplete. A failure on one
-endpoint degrades that silo's pool but never blocks the others (§16.2).
+keyword_ideas and PAA (two tiers deep) run per silo on the silo anchor.
+keyword_suggestions and query_fanouts are phrase/seed-match endpoints that only
+yield volume on a real, searched keyword, so they run once on the bare seed and
+their results attach to every silo (the M4 relevance gate sorts them per-silo).
+All of this runs in parallel; the deduped pool is then enriched via
+autocomplete. A failure on one endpoint degrades that pool but never blocks the
+others (§16.2).
 
 M3 stops here: keywords are persisted raw with source attribution. Relevance
 gating, competitor mining, and clustering are M4.
@@ -64,6 +67,7 @@ def _add(pool: dict[str, set[str]], keyword: str, source: str) -> None:
 
 def run_expansion(
     *,
+    seed: str,
     topics: list[ExpansionTopic],
     dfs: DataForSEOClient,
     keyword_ideas_limit: int = 1000,
@@ -74,6 +78,7 @@ def run_expansion(
     autocomplete_max: int = 1500,
     max_workers: int = 8,
     time_budget_s: float = 240.0,
+    include_seed_level: bool = True,
 ) -> ExpansionResult:
     result = ExpansionResult()
     deadline = time.monotonic() + time_budget_s
@@ -93,19 +98,28 @@ def run_expansion(
                 continue
         return tier1, tier2[:paa_tier2_cap]
 
-    # ----- Phase 1: base expansion (parallel across topic x endpoint) -------
-    base_jobs = {
-        "keyword_ideas": lambda a: dfs.keyword_ideas(a, keyword_ideas_limit),
-        "keyword_suggestions": lambda a: dfs.keyword_suggestions(a, keyword_suggestions_limit),
-        "query_fanouts": lambda a: dfs.query_fanouts(a, query_fanouts_limit),
-        "paa": paa_two_tier,
-    }
-
+    # ----- Phase 1: base expansion (parallel) -------------------------------
+    # keyword_ideas (broad ideation) and PAA run per silo on the broad silo
+    # anchor. keyword_suggestions and query_fanouts are phrase/seed-match
+    # endpoints that only yield volume on a real, searched keyword (the bare
+    # seed) — a silo-qualified anchor returns near-zero — so they run once on
+    # the seed and attach to every silo; M4's relevance gate sorts them
+    # per-silo. A None topic in `futures` means "attach to all silos".
     pool_exec = ThreadPoolExecutor(max_workers=max_workers)
     futures = {}
     for t in topics:
-        for source, fn in base_jobs.items():
-            futures[pool_exec.submit(fn, t.anchor)] = (t, source)
+        futures[pool_exec.submit(dfs.keyword_ideas, t.anchor, keyword_ideas_limit)] = (
+            t, "keyword_ideas")
+        futures[pool_exec.submit(paa_two_tier, t.anchor)] = (t, "paa")
+    # keyword_suggestions / query_fanouts are bare-seed phrase-match endpoints.
+    # Recursive fanout already ran them on the seed in the first pass, so it skips
+    # them here (include_seed_level=False) — re-running the same seed only
+    # re-pays for identical results.
+    if include_seed_level:
+        futures[pool_exec.submit(dfs.keyword_suggestions, seed, keyword_suggestions_limit)] = (
+            None, "keyword_suggestions")
+        futures[pool_exec.submit(dfs.query_fanouts, seed, query_fanouts_limit)] = (
+            None, "query_fanouts")
 
     try:
         for fut in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
@@ -115,14 +129,16 @@ def run_expansion(
             except Exception as exc:
                 # Any failure (HTTP error, non-JSON body, unexpected result
                 # shape) degrades this source only; the others still land (§16.2).
-                label = topic.name or topic.anchor
+                label = (topic.name or topic.anchor) if topic else None
                 result.degraded_notes.append(
                     f"Partial expansion for silo “{label}”: {source} unavailable."
+                    if label
+                    else f"Partial expansion: {source} unavailable."
                 )
                 logger.warning(
                     "degraded",
                     extra={"event": "degraded", "step": "expansion",
-                           "topic": label, "source": source, "reason": str(exc)},
+                           "topic": label or "*", "source": source, "reason": str(exc)},
                 )
                 continue
             if source == "paa":
@@ -131,6 +147,12 @@ def run_expansion(
                     _add(pools[topic.id], kw, "paa_t1")
                 for kw in tier2:
                     _add(pools[topic.id], kw, "paa_t2")
+            elif topic is None:
+                # Seed-level source (keyword_suggestions / query_fanouts):
+                # attach to every silo's pool; the M4 relevance gate sorts them.
+                for tid in pools:
+                    for kw in data:
+                        _add(pools[tid], kw, source)
             else:
                 for kw in data:
                     _add(pools[topic.id], kw, source)
