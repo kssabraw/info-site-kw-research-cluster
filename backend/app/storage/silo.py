@@ -271,6 +271,41 @@ def list_keywords(
     return res.data
 
 
+_SURVIVING_STATUSES = ("active", "excluded", "covered")
+
+
+def list_surviving_keywords(session_id: str) -> list[dict]:
+    """Every surviving keyword (active / excluded / covered) for a session, paged.
+    This is the pool the Table/Cluster views show (PRD §9.1), so it's what the
+    flat + topic-grouped CSV exports build from (PRD §12 "matching the data shown
+    in the UI"). Excludes the gate/orchestrator-discarded statuses
+    (filtered_relevance / filtered_junk / dropped_by_orchestrator). Volume/KD/CPC
+    columns don't exist yet (metrics enrichment §7.8 unbuilt), so they're omitted
+    here and render blank in the CSV."""
+    client = get_service_client()
+    out: list[dict] = []
+    offset = 0
+    page = 1000
+    while True:
+        res = (
+            client.table("keywords")
+            .select(
+                "topic_id, cluster_id, keyword, sources, status, relevance_score"
+            )
+            .eq("session_id", session_id)
+            .in_("status", list(_SURVIVING_STATUSES))
+            .order("id")
+            .range(offset, offset + page - 1)
+            .execute()
+        )
+        rows = res.data or []
+        out.extend(rows)
+        if len(rows) < page:
+            break
+        offset += page
+    return out
+
+
 def list_sessions(
     access_token: str, project_id: str, include_archived: bool = False
 ) -> list[dict]:
