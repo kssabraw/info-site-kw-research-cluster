@@ -38,18 +38,18 @@ _Last updated: 2026-05-25. Current `main` HEAD: `d1377e2`._
 - **M4 ranked_keywords is domain-level, not URL-level.** §7.4 says "per URL ranks 1–20"; DataForSEO's `ranked_keywords` target is a domain, so we dedupe the top URLs to domains and filter rank ≤ 20 server-side. Verified live (3,953 competitor kw on one silo). The filter path (`ranked_serp_element.serp_item.rank_absolute`) is the documented shape; if it's ever wrong the failure is quiet (mining degrades to 0 + degraded notes, no crash).
 - **M4 hygiene leftovers (low, not fixed):** dead `insert_keywords` in `storage/silo.py` (replaced by `insert_classified_keywords`); `/expand` has no guard against running before `/finalize` (degrades gracefully — all active, no scoring); two gated silos sharing a domain make duplicate `ranked_keywords` calls (minor cost).
 - **M4 stuck-running edge:** the `/expand` run guard (atomic `try_mark_running`) 409s if status is already `running`. A hard crash / deploy mid-run leaves status stuck `running`, so re-running *that* session 409s forever — recover by starting a new session (no resume until M7).
-- **Tuning notes (calibration):** clustering yields few large communities (4 groupings, edge threshold 0.55) — raise the edge threshold / Louvain resolution if M5's orchestrator wants finer input; relevance threshold 0.62 filters hard on a single broad silo (~10–14% retained). PAA tier-1 still returns 0 on silos whose broad anchor isn't a natural Google query (smallest contributor; left as-is).
-- **`gpt-5.4` + `web_search`** (silo discovery) work in prod but were never verifiable from the sandbox; `OPENAI_SILO_MODEL` / `OPENAI_WEB_SEARCH_TOOL` env vars allow correction without a code change.
-- **Session resume in the UI:** the data persists at every step, but the frontend can't reopen a session — **deferred to M7** (Project + Session Browser, §9.4).
-- **`status: complete`** is set at the end of the M4 pipeline as the "current pipeline terminus"; M5 must move this downstream.
+- **M5 calibration learnings (carry into RF):** (a) raw rationale-anchor cosine is the best keyword→silo routing signal of the four tested — silo-name routing dumps everything into one silo; common-mode centering was *worse* and reverted. (b) Routing is ~71% accurate; embeddings are weakly discriminative (everything ≈ the seed). (c) Deep competitor mining of more silos adds raw volume but the gate filters most as off-niche, so the *useful* pool barely grows (~900 active) — **mining is not the lever for more articles; recursive fanout is.** (d) Good config found for `retatrutide`: threshold ~0.50, edge 0.55, Louvain `resolution` 1.2 (the `/expand` default resolution is 1.0 = coarser; re-gate to 1.2 after a fresh expand).
+- **`gpt-5.4` + `web_search`** (silo discovery) work in prod but were never verifiable from the sandbox; `OPENAI_SILO_MODEL` / `OPENAI_WEB_SEARCH_TOOL` env vars allow correction without a code change. Grounding now also emits per-seed `aliases` + `peer_entities` for the peer filter — unverifiable from the sandbox, so confirm on a fresh live seed.
+- **Session resume in the UI:** the data persists at every step, but the frontend can't reopen a session — **deferred to M7** (Project + Session Browser, §9.4). Hence calibration is console+MCP driven (see §2).
+- **Test session state:** `ea83f985` (seed typo'd as `retratrutide`; correct spelling supplied via the `aliases` override, now stored). Currently `awaiting_article_planning`, ~893 active, 0 persisted clusters, after a 5-silo deep-mine re-expand at the coarse default resolution 1.0. To resume on it: `/regate` at res 1.2, then `/plan-articles {"direct": true}`.
 
 ## 5. Architecture quick map (backend `backend/app/`)
 
 - `main.py` — FastAPI app, CORS, correlation-id middleware, routers.
 - `config.py` — `Settings` (pydantic-settings); env aliases; expansion knobs.
-- `api/` — `health.py`, `projects.py`, `sessions.py` (silo discovery + `/deep-mine` + `/expand` full-pipeline endpoints).
+- `api/` — `health.py`, `projects.py`, `sessions.py`. Session endpoints: silo discovery, `/finalize`, `/deep-mine`, `/expand` (async), `/plan-articles` (async; body `{"direct": true}` skips the orchestrator), `/regate` (async; body overrides threshold/edge/resolution/aliases/peer_entities), `/summary` (poll), `/clusters` (read), `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate` (read-only analysis).
 - `auth/dependencies.py` — `require_user` (verifies Supabase JWT via service client; logs real reason on failure).
-- `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword DB ops incl. `set_topics_gating`, `get_topic_embeddings`, `insert_classified_keywords`, `try_mark_running`.
+- `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword/cluster DB ops incl. `set_topics_gating`, `get_topic_embeddings`, `insert_classified_keywords`, `try_mark_running`, `get_session`, `list_all_keyword_pool` (re-gate pool reconstruction), `persist_article_plan` (staged cluster write), `reset_article_planning`, `get_pipeline_summary`, `list_clusters`.
 - `llm/openai_client.py` — GPT-5.4 grounding + silo proposal (Responses API + web_search) + `embed()`.
 - `dataforseo/client.py` — DataForSEO calls (demand sample, SERP structure, expansion endpoints, autocomplete; M4: `serp_top_urls`, `ranked_keywords`, `domain_of`).
 - `pipeline/` — `silo_discovery.py` (M2), `expansion.py` (M3), `competitor.py`/`relevance.py`/`clustering.py` (M4), `orchestrate.py` (M4 `run_refinement_pipeline` + M5 `gate_and_cluster`/`cluster_preview`/`routing_diagnostic`/`simulate_best_silo_clustering`), `models.py`.
@@ -57,7 +57,7 @@ _Last updated: 2026-05-25. Current `main` HEAD: `d1377e2`._
 
 Frontend: `frontend/src/owner/SiloDiscovery.tsx` is the whole flow (seed → disambiguation → silo review → finalize → **deep-mine selection** → run pipeline → results). `shared/api.ts`, `shared/auth.tsx`, TanStack Query. Progress UI = `WorkingProgress` (discovery ~20–40s; pipeline ~3–6 min estimate).
 
-Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `..._topics.sql` (M2), `..._keywords.sql` (M3), `..._keywords_relevance.sql` (M4: `keywords.relevance_score`). All applied to the live DB.
+Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `..._topics.sql` (M2), `..._keywords.sql` (M3), `..._keywords_relevance.sql` (M4), `...20260525000000_clusters.sql` (M5: `clusters` + `coverage_gaps` + orchestrator keyword cols + `awaiting_article_planning` status), `..._session_last_error.sql` (M5), `..._peer_entities.sql` (M5: `sessions.aliases` + `peer_entities`). All applied to the live DB.
 
 ## 6. Useful commands / queries
 
@@ -72,7 +72,7 @@ Frontend (from `frontend/`): `npm run build` (tsc + vite).
 
 Per-silo / per-source breakdown for the latest run (run via Supabase MCP `execute_sql`, project `wvcthtmmcmhkybcesirb`):
 ```sql
-with latest as (select id from fanout.sessions where seed_keyword='retatrutide' and status='complete' order by created_at desc limit 1)
+with latest as (select id from fanout.sessions where seed_keyword ilike 'ret%rutide' order by created_at desc limit 1)
 select t.name, count(k.*) total,
   count(k.*) filter (where 'keyword_ideas'=any(k.sources)) ideas,
   count(k.*) filter (where 'keyword_suggestions'=any(k.sources)) suggestions,
