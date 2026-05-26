@@ -145,6 +145,10 @@ class Settings(BaseSettings):
 
     # Observability (PRD §16.3)
     log_level: str = "INFO"
+    # Cost attribution (PRD §16.4): the background jobs flush the running actual
+    # cost to sessions.actual_cost_usd + cost_breakdown on this cadence, so the
+    # live cost banner (§8.4) updates while the pipeline runs.
+    cost_flush_interval_s: float = 10.0
 
     # CORS — comma-separated list of allowed frontend origins. "*" allows all.
     cors_allow_origins: str = "*"

@@ -17,8 +17,10 @@ resume lands.
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 
 from app.config import get_settings
+from app.cost_attribution import metered_run
 from app.dataforseo import get_dataforseo
 from app.llm import get_llm, get_orchestrator
 from app.logging import bind_session_id
@@ -51,6 +53,23 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
 
 def _short(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
+
+
+def _metered(step: str):
+    """Wrap a job so its external-API spend is metered and flushed to
+    `actual_cost_usd` + `cost_breakdown` live (PRD §16.4). The meter is bound on
+    the job thread and inherited by the pipeline's nested workers via
+    `ContextThreadPoolExecutor`. `session_id` is always the first argument."""
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(session_id: str, *args, **kwargs):
+            with metered_run(session_id, step):
+                return fn(session_id, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def submit_expand(session_id: str) -> None:
@@ -89,6 +108,7 @@ def submit_architecture(session_id: str) -> None:
     _EXECUTOR.submit(run_architecture_job, session_id)
 
 
+@_metered("expand")
 def run_expand_job(session_id: str) -> None:
     """§7.3–§7.9: expansion + competitor mining + relevance gate + clustering."""
     bind_session_id(session_id)
@@ -160,6 +180,7 @@ def run_expand_job(session_id: str) -> None:
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
 
 
+@_metered("article_planning")
 def run_plan_job(session_id: str, direct: bool = False) -> None:
     """§7.10: SERP for candidate primaries + per-silo orchestrator + dedup.
     With direct=True, skips the orchestrator (groupings -> articles + dedup)."""
@@ -236,6 +257,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
 
 
+@_metered("regate")
 def run_regate_job(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     seed_terms: list[str], peer_terms: list[str],
@@ -287,6 +309,7 @@ def run_regate_job(
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
 
 
+@_metered("recursive_fanout")
 def run_fanout_job(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     seed_terms: list[str], peer_terms: list[str],
@@ -371,6 +394,7 @@ def run_fanout_job(
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
 
 
+@_metered("architecture")
 def run_architecture_job(session_id: str) -> None:
     """§7.11 Site Architecture: one pillar per article-bearing silo + the internal
     linking matrix, persisted to site_architecture. Reads the article plan

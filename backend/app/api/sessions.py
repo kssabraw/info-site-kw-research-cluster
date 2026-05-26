@@ -16,6 +16,7 @@ from app import jobs
 from app.auth import AuthedUser, get_role, require_owner, require_user
 from app.config import get_settings
 from app.cost import estimate_cost, requires_approval
+from app.cost_attribution import metered_sync
 from app.dataforseo import get_dataforseo
 from app.llm import LLMError, get_llm
 from app.logging import bind_session_id
@@ -223,18 +224,23 @@ def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
     """Run silo discovery for a session and persist the outcome."""
     settings = session.get("settings") or {}
     coverage_mode = settings.get("coverage_mode", "standard")
+    bind_session_id(session["id"])
     try:
-        result = run_silo_discovery(
-            seed=session["seed_keyword"],
-            topic_count=int(settings.get("topic_count", 5)),
-            audience_hint=session.get("audience_hint"),
-            disambiguation_hint=session.get("disambiguation_hint")
-            or session.get("disambiguation_choice"),
-            llm=get_llm(),
-            dfs=get_dataforseo(),
-            serp_top_n=10 if coverage_mode == "comprehensive" else 5,
-            ambiguity_separation_threshold=get_settings().ambiguity_separation_threshold,
-        )
+        # Silo discovery runs synchronously in the request (cheap LLM + DataForSEO
+        # sample). Meter its cost into the session's running total so actual_cost
+        # reflects the full §8.1 run, not just the background pipeline (§16.4).
+        with metered_sync(session["id"], "silo_discovery"):
+            result = run_silo_discovery(
+                seed=session["seed_keyword"],
+                topic_count=int(settings.get("topic_count", 5)),
+                audience_hint=session.get("audience_hint"),
+                disambiguation_hint=session.get("disambiguation_hint")
+                or session.get("disambiguation_choice"),
+                llm=get_llm(),
+                dfs=get_dataforseo(),
+                serp_top_n=10 if coverage_mode == "comprehensive" else 5,
+                ambiguity_separation_threshold=get_settings().ambiguity_separation_threshold,
+            )
     except LLMError as exc:
         store.update_session(session["id"], {"status": "error"})
         raise HTTPException(
@@ -626,6 +632,19 @@ def session_summary(session_id: str, user: AuthedUser = Depends(require_user)) -
     to resume a session on refresh; `plan` is null until the orchestrator runs."""
     _require_session(user, session_id)
     return store.get_pipeline_summary(session_id)
+
+
+@router.get("/sessions/{session_id}/debug")
+def session_debug(
+    session_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Owner debug view (PRD §15.3 #8 / §15.3 #7): the raw statistical clustering
+    log + orchestrator decision log (merge/split/drop rationales, dedup
+    collisions) + the cost attribution for any session. Owner-only — VAs cannot
+    review orchestrator internals (§11.2); a VA gets 403 at the dependency layer.
+    `_require_session` still scopes it to a session the caller can see."""
+    _require_session(user, session_id)
+    return store.get_session_debug(session_id)
 
 
 @router.post("/sessions/{session_id}/regate", status_code=status.HTTP_202_ACCEPTED)

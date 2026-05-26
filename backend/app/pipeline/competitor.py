@@ -12,9 +12,10 @@ candidate pool (~3,000–7,500 keywords at the default budget).
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass, field
 
+from app.concurrency import ContextThreadPoolExecutor as ThreadPoolExecutor
 from app.dataforseo import DataForSEOClient
 
 logger = logging.getLogger(__name__)

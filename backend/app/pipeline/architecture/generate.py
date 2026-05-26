@@ -26,10 +26,11 @@ silo names relabeled).
 import logging
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 
 import numpy as np
 
+from app.concurrency import ContextThreadPoolExecutor as ThreadPoolExecutor
 from app.llm import AnthropicError, AnthropicLLM
 
 from .models import (

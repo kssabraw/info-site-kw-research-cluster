@@ -13,6 +13,8 @@ import time
 
 from anthropic import Anthropic
 
+from app.cost_meter import llm_token_cost, record_cost
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,6 +69,10 @@ class AnthropicLLM:
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
         usage = getattr(resp, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        cost = llm_token_cost(self._model, input_tokens, output_tokens)
+        record_cost(cost)  # PRD §16.4 — token-derived cost
         logger.info(
             "llm_call",
             extra={
@@ -74,10 +80,10 @@ class AnthropicLLM:
                 "purpose": purpose,
                 "provider": "anthropic",
                 "model": self._model,
-                "prompt_tokens": getattr(usage, "input_tokens", None),
-                "completion_tokens": getattr(usage, "output_tokens", None),
+                "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens,
                 "latency_ms": latency_ms,
-                "cost_usd": None,  # populated in M11 (PRD §16.4 cost attribution)
+                "cost_usd": cost,
                 "status": "success",
             },
         )

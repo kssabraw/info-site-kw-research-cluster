@@ -107,6 +107,49 @@ def update_session(session_id: str, fields: dict) -> dict:
     return row.data[0]
 
 
+def get_session_cost(session_id: str) -> tuple[float, dict]:
+    """Current cumulative (actual_cost_usd, cost_breakdown) for a session, the
+    base a new run adds its metered spend onto (PRD §16.4)."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select("actual_cost_usd, cost_breakdown")
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    row = res.data[0] if res.data else {}
+    return float(row.get("actual_cost_usd") or 0.0), dict(row.get("cost_breakdown") or {})
+
+
+def flush_session_cost(session_id: str, total: float, breakdown: dict) -> None:
+    """Single-row UPDATE of the running cost (PRD §16.4 — accumulator flush). Kept
+    to two columns so it never collides with a job's status write on other cols."""
+    (
+        get_service_client()
+        .table("sessions")
+        .update({"actual_cost_usd": total, "cost_breakdown": breakdown})
+        .eq("id", session_id)
+        .execute()
+    )
+
+
+def get_session_debug(session_id: str) -> dict:
+    """Raw debug payload for the Owner debug view (PRD §15.3 #8): the statistical
+    clustering log (Louvain groupings) + the orchestrator log (per-topic
+    merge/split/drop rationales + dedup collisions) + the cost attribution."""
+    session = get_session(session_id) or {}
+    return {
+        "status": session.get("status"),
+        "seed_keyword": session.get("seed_keyword"),
+        "estimated_cost_usd": session.get("estimated_cost_usd"),
+        "actual_cost_usd": session.get("actual_cost_usd"),
+        "cost_breakdown": session.get("cost_breakdown") or {},
+        "statistical_clustering_log": session.get("statistical_clustering_log"),
+        "orchestrator_log": session.get("orchestrator_log"),
+    }
+
+
 def try_mark_running(session_id: str) -> bool:
     """Atomically claim a session for a pipeline run: set status='running' only
     if it isn't already running. Returns True if this caller acquired the run,
@@ -701,12 +744,20 @@ def get_pipeline_summary(session_id: str) -> dict:
         "note": session.get("approval_note"),
         "decided_at": session.get("approval_decision_at"),
     }
+    # Live cost (PRD §8.4 / §16.4) — surfaced in every payload (incl. the cheap
+    # running one) so the cost banner updates as the background job flushes.
+    cost = {
+        "estimated_cost_usd": session.get("estimated_cost_usd"),
+        "actual_cost_usd": session.get("actual_cost_usd"),
+        "breakdown": session.get("cost_breakdown") or {},
+    }
     # A run-in-progress, or a session parked at the approval gate, has no
     # meaningful expansion/plan counts yet — return the cheap status-only payload
     # (this endpoint is polled every few seconds).
     if status in ("running", "pending_approval", "rejected"):
         return {"status": status, "last_error": last_error, "approval": approval,
-                "expansion": _EMPTY_EXPANSION, "plan": None, "architecture": None}
+                "cost": cost, "expansion": _EMPTY_EXPANSION, "plan": None,
+                "architecture": None}
 
     topics = list_topics(session_id)
     topic_ids = [t["id"] for t in topics]
@@ -775,6 +826,7 @@ def get_pipeline_summary(session_id: str) -> dict:
         "status": session.get("status"),
         "last_error": session.get("last_error"),
         "approval": approval,
+        "cost": cost,
         "expansion": {
             "counts": {
                 "active": _count("keywords", session_id=session_id, status="active"),
