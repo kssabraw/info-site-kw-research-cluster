@@ -2,20 +2,35 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-_Last updated: 2026-05-28. **M10 (CSV export, §12) complete & merged to `main`**
-(per owner instruction; merged `--no-ff`, remote `main` was at the M9 merge
-`1e0db30`, conflict-free) — built on `claude/wonderful-allen-oTKaO`. Still pending
-live validation (sandbox egress). Three formats (flat / topic_grouped
-as a `.zip` / architecture) from current Postgres state via **pure, unit-tested**
+_Last updated: 2026-05-29. **M11 (cost + observability, §16) complete — the FINAL
+milestone; M1–M11 all built.** Pending review + live validation (sandbox egress).
+Built on `claude/exciting-davinci-tZGwH` (off `main` `4b10ed2`); **not yet merged
+to `main`** — the owner decides the merge. Real-metered per-step cost attribution
+(`app/cost_meter.py` `CostMeter`: DataForSEO's real per-call charge + token-derived
+LLM cost) flushed live to `sessions.actual_cost_usd` + a new `cost_breakdown` jsonb
+every 10s from the background jobs (`app/cost_attribution.py`), cumulative across a
+session's runs. `app/concurrency.py::ContextThreadPoolExecutor` propagates the
+meter + `session_id`/`correlation_id` into the pipeline's nested API-call threads
+(also fixes a latent §16.3 gap where those logs had `session_id: null`). `GET
+/summary` carries a live `cost` block → `shared/CostBanner.tsx` on the Owner
+workspace + VA progress screen. Owner-only `GET /sessions/{id}/debug` + `owner/
+DebugView.tsx` expose `statistical_clustering_log` + `orchestrator_log` + cost
+(§15.3 #8). Migration `20260529000000_session_cost_breakdown.sql` applied live via
+MCP. 176 backend tests (11 new) + ruff clean, frontend builds strict-clean. **Live
+cost numbers / banner / debug view NOT sandbox-validated.** With M11 there is no
+next milestone to build — what's left is the §15.3 live-validation checklist (§2
+below). The prior M10 entry follows._
+
+_M10 (CSV export, §12) **complete & merged to `main`** (per owner instruction;
+merged `--no-ff`, remote `main` was at the M9 merge `1e0db30`, conflict-free) —
+built on `claude/wonderful-allen-oTKaO`. Three formats (flat / topic_grouped as a
+`.zip` / architecture) from current Postgres state via **pure, unit-tested**
 builders (`backend/app/csv_export.py`); backend uploads to the new private
 **`csv-snapshots`** Storage bucket and serves a time-limited signed URL
 (`storage/exports.py`, **deploy-only — sandbox can't reach Storage**); new router
-`api/exports.py` (`POST /sessions/{id}/export?format=…`, `GET
-/sessions/{id}/exports`, `GET /exports/{id}/download`); migration
-`20260528000000_csv_exports.sql` + the bucket **applied live via MCP**; frontend
-**Exports tab** on both Owner + VA workspaces. 164 backend tests + ruff clean,
-frontend builds. CSV formula-injection hardened. Next: **M11 (cost + observability,
-§16)**. The prior M9 entry follows._
+`api/exports.py`; migration `20260528000000_csv_exports.sql` + the bucket
+**applied live via MCP**; frontend **Exports tab** on both Owner + VA workspaces.
+CSV formula-injection hardened._
 
 _M9 (approval workflow, §11.3) **complete & merged to `main`** (per owner instruction; merged `--no-ff`, remote `main` was at `27f5731`, conflict-free) — built on `claude/jolly-heisenberg-Z06PH` (this session's pinned branch). **No schema/migration** (all approval columns + statuses exist from M1). New pure cost model (`backend/app/cost.py`, §8.1-derived); the approval gate sits at the cost-bearing `/expand` (conservative read of §11.3). New endpoints: `/workspace-settings`, `/sessions/{id}/cost-estimate`, `/submit-for-approval` + `/cancel-approval` (VA), `/approvals` + `/approve` + `/reject` (owner-only); `/summary` gained an `approval` block. Frontend: wizard CostStep fetches the real estimate + branches Run-now vs Submit-for-approval → WaitingStep (30s poll, cancel, adjust-&-resubmit); Owner Approvals page + nav badge. 139 backend tests (9 cost + 14 approvals new) + ruff clean; frontend builds strict-clean. **NOT browser-validated** (sandbox egress) — validate VA submit → Owner approve/reject → VA-sees-decision on the deployed stack. M8 is also still not browser-validated. Next: M10 (CSV export, §12)._
 
@@ -34,13 +49,43 @@ _M9 (approval workflow, §11.3) **complete & merged to `main`** (per owner instr
 - **M8 — VA wizard (PRD §15.1 / §10):** ✅ **complete & merged to `main` (2026-05-26, per owner instruction).** Role-gated app: `App.tsx` reads `me.role` and routes owners to the §9 Owner UI (unchanged) and VAs to a new 9-step linear wizard (`frontend/src/va/Wizard.tsx`) + a restricted results surface. Step gating per §10.1 (disambiguation only when ambiguous; settings limited to topic_count + coverage_mode; deep-mine capped at seed + 2; cost confirmation **stubbed to "Run now"** — approval is M9; progress auto-chains expand → plan-articles). Restricted results reuse the Owner views via a new `role` on `SessionWorkspace`'s `SessionCtx`: VA = Table + Cluster + read-only Architecture (no Split); Cluster = rename + move-keyword only; Table bulk = covered + move only; "Request restructure" is a local stub. **Server-side enforcement** (defense in depth — service-role writes bypass RLS): new `require_owner` dep + `get_role()` (`app/auth/dependencies.py`) gate cluster delete/merge/split/promote-primary, gap accept/dismiss, `/architecture`, session delete, `/regate` + calibration tools, `/fanout`; in-handler checks for the deep-mine cap (`va_deep_mine_max_silos=2`), VA rename-only `PATCH /clusters`, VA no-exclude bulk status. 116 tests (18 new in `tests/test_roles.py`), ruff clean; frontend builds. Built on `claude/exciting-cannon-jTTVb`, merged `--no-ff` to `main`. No schema change. Flagged: architecture owner-only (VA run ends at the plan; Architecture tab owner-pending), metrics toggle decorative (§7.8 unbuilt), no "+ New project" (no endpoint), static cost band.
 - **M9 — Approval workflow (PRD §15.1 / §11.3):** ✅ **complete & merged to `main`** (per owner instruction, merged `--no-ff`, conflict-free; still pending live validation). Real cost estimate (pure `app/cost.py`, §8.1-derived); the approval gate sits at the cost-bearing `/expand` (conservative read of §11.3 — silo discovery already runs at `POST /sessions`). VA wizard: CostStep fetches the authoritative estimate and branches under-cap → **Run now** vs over-cap/recursive → **Submit for approval** → **WaitingStep** (polls `/summary` every 30s; cancel; on reject shows the Owner's note + adjust-&-resubmit). Owner: **Approvals** page (`/approvals`) + decision modal (approve/reject + note) + an AppShell nav badge (owner-only, 30s poll). New endpoints: `GET /workspace-settings`, `GET /sessions/{id}/cost-estimate?gated_count=N`, `POST /sessions/{id}/submit-for-approval` + `/cancel-approval` (require_user), `GET /approvals` + `POST /sessions/{id}/approve` + `/reject` (require_owner); `/summary` carries an `approval` block. **No schema change** (M1 already had the columns + `pending_approval`/`rejected`). 139 backend tests (9 in `test_cost.py`, 14 in `test_approvals.py`) + ruff clean; frontend builds. Built on `claude/jolly-heisenberg-Z06PH`, merged `--no-ff` to `main` (conflict-free). See `CLAUDE.md` "Active milestone" for the full breakdown + decisions/divergences (gate placement, reject reuses the session, queue submitted-at = created_at, owner-offline chaining gap, recursive not a VA control).
 - **M10 — CSV export (PRD §15.1 / §12):** ✅ **complete & merged to `main`** (per owner instruction, merged `--no-ff`, conflict-free; still pending live validation). Three formats from current Postgres state via pure builders (`backend/app/csv_export.py`): flat (one row/keyword, §9.1 cols, Volume/KD/CPC blank), topic_grouped (one CSV/topic → single `.zip`), architecture (one row/page; 400 if no architecture). Backend uploads to the private `csv-snapshots` bucket + serves a signed URL (`storage/exports.py`); new router `api/exports.py`. Migration `20260528000000_csv_exports.sql` (`fanout.csv_exports` + real RLS) + the bucket applied live via MCP. Frontend Exports tab on both Owner + VA. 164 backend tests + ruff clean, frontend builds. **Storage upload / signed URLs / live round-trip NOT sandbox-validated — deploy-only.** See `CLAUDE.md` "Active milestone" for full decisions/divergences.
-- **Next — M11 (cost + observability, §16):** live cost banner during the pipeline, per-step cost attribution (`actual_cost_usd`), structured logs (§16.3), Owner debug view (`statistical_clustering_log` + `orchestrator_log`). Stop for a human go-ahead before building.
+- **M11 — Cost confirmation + observability (PRD §15.1 / §16):** ✅ **complete, pending review + live validation** (built on `claude/exciting-davinci-tZGwH`, not yet merged). Real-metered per-step cost → `actual_cost_usd` + new `cost_breakdown` jsonb, flushed live every 10s from the jobs (`app/cost_meter.py` + `app/cost_attribution.py`); `ContextThreadPoolExecutor` (`app/concurrency.py`) propagates the meter + correlation/session ids into nested pipeline threads; the four external-call sites populate `cost_usd`; live cost banner on `/summary` (`shared/CostBanner.tsx`) on Owner + VA; owner-only `GET /sessions/{id}/debug` + `owner/DebugView.tsx` (clustering + orchestrator logs + cost). Migration `20260529000000_session_cost_breakdown.sql` applied live via MCP. 176 backend tests + ruff clean; frontend builds. See `CLAUDE.md` "Active milestone" for full decisions/divergences. **With M11 the M1–M11 build sequence is done — no next milestone; remaining work is live validation (§2).**
 
 ## 2. Immediate next action (resume here)
 
-**M10 is merged to `main` (per owner instruction) — the merge triggers the Railway +
-Netlify deploys.** The migration + the `csv-snapshots` bucket are already applied to
-the live DB via MCP, so the deploy is consistent and can be validated immediately.
+**M11 is built on `claude/exciting-davinci-tZGwH` but NOT merged.** The owner
+decides the merge (milestone discipline). The `cost_breakdown` migration is already
+applied to the live DB via MCP, so once the branch merges to `main` the Railway +
+Netlify deploys will be schema-consistent. **With M11, the M1–M11 build is complete
+— there is no next milestone to start.** What remains is the §15.3
+Definition-of-Done live validation that the sandbox can't run (no egress).
+
+**M11 live-validation checklist (deploy the branch first):**
+1. Run a standard, metrics-off session through to `complete` (`/expand` →
+   `/plan-articles` → `/architecture`). While it runs, confirm the **cost banner**
+   on the Owner workspace (and the VA wizard progress screen) shows a climbing
+   "Cost so far" that updates roughly every poll (~4s UI / 10s flush).
+2. On the completed session, confirm `actual_cost_usd` lands **within ±25% of the
+   §8.1 standard estimate (~$2.80)** — §15.3 #7. (Metrics-off only; §7.8 is
+   unbuilt, so the "+metrics" line can't be exercised.) If LLM cost is wildly off,
+   recalibrate the `_LLM_RATES` / `_EMBED_RATES` constants in `app/cost_meter.py`
+   against the real OpenAI/Anthropic invoices (the rates are estimates; DataForSEO
+   cost is the real per-call charge, so error is LLM-side).
+3. As **owner**, open **Debug** (link in the session workspace head → `/session/
+   :id/debug`): confirm the per-step **cost_breakdown table**, the
+   **orchestrator_log** (merge/split/drop rationales + dedup collisions), and the
+   **statistical_clustering_log** all render. As a **VA**, confirm `GET
+   /sessions/{id}/debug` → **403** (and the Debug link/route are absent).
+4. Inspect Railway logs: confirm `external_call` / `llm_call` entries now carry a
+   real `cost_usd` (not null) **and** a non-null `session_id` even for the
+   nested-thread DataForSEO calls (the `ContextThreadPoolExecutor` fix).
+5. Re-run `/plan-articles` (or `/regate`) on the session and confirm
+   `actual_cost_usd` **increases** (cumulative real spend) and the
+   `article_planning`/`regate` phase in `cost_breakdown` grows — the documented
+   cumulative behavior, not a bug.
+
+**M10 live-validation checklist (deploy the branch first; Storage was unverifiable
+in the sandbox):**
 
 **M10 live-validation checklist (deploy the branch first; Storage was unverifiable
 in the sandbox):**
@@ -101,11 +146,14 @@ round-trip and M8's VA/owner routing on the live stack. For M9: (a) as a **VA**,
 
 - `main.py` — FastAPI app, CORS, correlation-id middleware, routers.
 - `config.py` — `Settings` (pydantic-settings); env aliases; expansion knobs.
-- `api/` — `health.py`, `projects.py`, `sessions.py`, **`exports.py` (M10)**. Session endpoints: silo discovery, `/finalize`, `/deep-mine`, `/expand` (async), `/plan-articles` (async; body `{"direct": true}` skips the orchestrator), `/regate` (async; body overrides threshold/edge/resolution/aliases/peer_entities), `/fanout` (async; RF §7.7 — cost-gated, `{"confirm_cost": true}` to spend, optional resolution/threshold overrides), `/summary` (poll), `/clusters` (read), `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate` (read-only analysis). **`exports.py` (§12):** `POST /sessions/{id}/export?format=flat|topic_grouped|architecture` (sync — generate + snapshot + record + signed URL), `GET /sessions/{id}/exports` (the Exports tab list), `GET /exports/{id}/download` (re-sign a fresh URL). All `require_user`, both roles, RLS-scoped.
+- `api/` — `health.py`, `projects.py`, `sessions.py`, **`exports.py` (M10)**. Session endpoints: silo discovery, `/finalize`, `/deep-mine`, `/expand` (async), `/plan-articles` (async; body `{"direct": true}` skips the orchestrator), `/regate` (async; body overrides threshold/edge/resolution/aliases/peer_entities), `/fanout` (async; RF §7.7 — cost-gated, `{"confirm_cost": true}` to spend, optional resolution/threshold overrides), `/summary` (poll), `/clusters` (read), `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate` (read-only analysis), **`/debug` (M11, owner-only — `statistical_clustering_log` + `orchestrator_log` + cost, §15.3 #8)**. **`exports.py` (§12):** `POST /sessions/{id}/export?format=flat|topic_grouped|architecture` (sync — generate + snapshot + record + signed URL), `GET /sessions/{id}/exports` (the Exports tab list), `GET /exports/{id}/download` (re-sign a fresh URL). All `require_user`, both roles, RLS-scoped.
 - `csv_export.py` (**M10**, PRD §12) — **pure** CSV builders (`build_flat_csv`, `build_topic_grouped_csvs` + `zip_named_csvs`, `build_architecture_csv`) over already-fetched rows + CSV formula-injection hardening (`_safe`). No egress; all of M10's correctness coverage is here (`tests/test_csv_export.py`). The Storage upload + signed-URL layer is `storage/exports.py` (deploy-only).
 - `auth/dependencies.py` — `require_user` (verifies Supabase JWT via service client; logs real reason on failure). **M8:** `get_role(user)` (reads `user_profiles.role`) + `require_owner` dependency (403 for non-owners) for the §11.2 capability gates.
 - `cost.py` (**M9**, PRD §8.1/§8.4) — pure `estimate_cost(...)` (per-component §8.1-derived rates → total + breakdown, recursive ×5) + `requires_approval(...)` (estimate > soft cap OR recursive). No egress; unit-tested in `tests/test_cost.py`. The approval endpoints (`/cost-estimate`, `/submit-for-approval`, `/cancel-approval`, `/approvals`, `/approve`, `/reject`) live in `api/sessions.py`; storage helpers `get_workspace_settings` / `count_gated_topics` / `list_pending_approvals` + the `/summary` `approval` block in `storage/silo.py`.
-- `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword/cluster DB ops incl. `set_topics_gating`, `get_topic_embeddings`, `insert_classified_keywords`, `try_mark_running`, `get_session`, `list_all_keyword_pool` (re-gate pool reconstruction), `persist_article_plan` (staged cluster write), `reset_article_planning`, `get_pipeline_summary`, `list_clusters`, **`list_surviving_keywords` (M10, paged active/excluded/covered pool for export)**. `storage/exports.py` (**M10**) — Supabase **Storage** ops (`upload_snapshot` to the `csv-snapshots` bucket via the service client, `create_signed_url`) + `csv_exports` table ops (`insert_export` [service], `list_exports` / `get_export_visible` [user client, RLS]). **Deploy-only** (sandbox can't reach Storage).
+- `cost_meter.py` (**M11**, PRD §16.4) — the live **actual**-cost machinery (vs. `cost.py`'s estimate). `CostMeter` (thread-safe, per-run, broken down by pipeline phase) + the `_meter`/`_step` contextvars + `record_cost(cost)` (called from the four external-API clients) + the LLM/embedding `$`-per-token rate table (`llm_token_cost` / `embedding_token_cost` — **estimates**, calibrate per §8.1). DataForSEO cost is the **real** per-call charge from its task envelope. No egress; unit-tested in `tests/test_cost_meter.py`.
+- `cost_attribution.py` (**M11**) — bridges the meter to storage: `metered_run(session_id, step)` (background-job context manager: binds the meter on the job thread, periodic + final lock-serialized flush of `actual_cost_usd` + `cost_breakdown`, cumulative onto the existing total) and `metered_sync(session_id, step)` (single final flush, for the synchronous silo-discovery call). `jobs.py` applies a `@_metered("…")` decorator to each job; `api/sessions.py` wraps silo discovery in `metered_sync`.
+- `concurrency.py` (**M11**) — `ContextThreadPoolExecutor`: a `ThreadPoolExecutor` whose `submit` runs each task inside a `copy_context()` snapshot, so the meter + `session_id`/`correlation_id` propagate into the pipeline's nested API-call worker threads. Imported under the `ThreadPoolExecutor` alias by `expansion.py` / `competitor.py` / `serp.py` / `orchestrate_articles.py` / `architecture/generate.py`.
+- `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword/cluster DB ops incl. `set_topics_gating`, `get_topic_embeddings`, `insert_classified_keywords`, `try_mark_running`, `get_session`, `list_all_keyword_pool` (re-gate pool reconstruction), `persist_article_plan` (staged cluster write), `reset_article_planning`, `get_pipeline_summary`, `list_clusters`, **`list_surviving_keywords` (M10, paged active/excluded/covered pool for export)**, **`get_session_cost` / `flush_session_cost` / `get_session_debug` (M11)**. The `/summary` payload now also carries a live `cost` block (`estimated_cost_usd`/`actual_cost_usd`/`breakdown`) in both the cheap-running and full paths. `storage/exports.py` (**M10**) — Supabase **Storage** ops (`upload_snapshot` to the `csv-snapshots` bucket via the service client, `create_signed_url`) + `csv_exports` table ops (`insert_export` [service], `list_exports` / `get_export_visible` [user client, RLS]). **Deploy-only** (sandbox can't reach Storage).
 - `llm/openai_client.py` — GPT-5.4 grounding + silo proposal (Responses API + web_search) + `embed()`.
 - `dataforseo/client.py` — DataForSEO calls (demand sample, SERP structure, expansion endpoints, autocomplete; M4: `serp_top_urls`, `ranked_keywords`, `domain_of`).
 - `pipeline/` — `silo_discovery.py` (M2), `expansion.py` (M3), `competitor.py`/`relevance.py`/`clustering.py` (M4), `orchestrate.py` (M4 `run_refinement_pipeline` + M5 `gate_and_cluster`/`cluster_preview`/`routing_diagnostic`/`simulate_best_silo_clustering`), `models.py`.
@@ -117,16 +165,18 @@ Frontend M9 additions: `owner/ApprovalsPage.tsx` (route `/approvals`, owner-only
 
 Frontend (M7/M8, react-router): `App.tsx` is **role-gated** — `RoleRoutes` reads `me.role` and renders `OwnerRoutes` (`/projects`, `/session/new`, `/session/:id/{table,cluster,architecture,split}`) or `VaRoutes` (`/wizard`, `/session/:id/{table,cluster,architecture}` — no split; everything else redirects to `/wizard`). On a `/me` failure it falls back to the more-restricted VA routes. `va/Wizard.tsx` (M8) is the 9-step VA wizard (reuses `shared/api.ts`; auto-chains expand→plan in the progress step). `SessionWorkspace`'s `SessionCtx` now carries `role`, which the shared views (`TableView`/`ClusterView`/`ArchitectureView`) read to hide owner-only controls for VAs. `owner/SiloDiscovery.tsx` is the creation+pipeline flow (seed → disambiguation → silo review → finalize → **deep-mine** → run → results), reached via `owner/NewSession.tsx`. `owner/ProjectsPage.tsx` = Project+Session Browser (§9.4) with archive/move/delete. `owner/SessionWorkspace.tsx` = per-session shell (segmented control + status gate) that passes a `{sessionId, topics, topicName}` context to `owner/views/{TableView,ClusterView,ArchitectureView,SplitView}.tsx`. `shared/AppShell.tsx` (topbar), `shared/sessionStatus.ts` (status labels + `hasResults`), `shared/api.ts` (all calls incl. M7b mutations), `shared/auth.tsx`, TanStack Query (query keys: `["clusters",id]`, `["keywords-all",id]` paged surviving pool, `["summary",id]`, `["architecture",id]`, `["sessions",projectId,showArchived]`). Views are read-only when the session lacks results; editing mutations invalidate `clusters`+`keywords-all`.
 
-Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `..._topics.sql` (M2), `..._keywords.sql` (M3), `..._keywords_relevance.sql` (M4), `...20260525000000_clusters.sql` (M5: `clusters` + `coverage_gaps` + orchestrator keyword cols + `awaiting_article_planning` status), `..._session_last_error.sql` (M5), `..._peer_entities.sql` (M5: `sessions.aliases` + `peer_entities`), `...20260526000000_site_architecture.sql` (M6: `site_architecture` table + RLS), `...20260527000000_session_archive.sql` (M7b: `sessions.archived`), `...20260528000000_csv_exports.sql` (**M10**: `csv_exports` table + the `csv_export_format` enum + real RLS via a `sessions`-join). All applied to the live DB via Supabase MCP (the M7 column on 2026-05-26; the M10 table on 2026-05-28, verified — 4 RLS policies, RLS enabled). **M9 added no migration** — the approval columns (`estimated_cost_usd`, `actual_cost_usd`, `approval_required`, `approval_decided_by_user_id`, `approval_decision_at`, `approval_note`) and the `pending_approval`/`rejected` statuses were created in the M1 `..._fanout_initial.sql` migration. The **`csv-snapshots` Storage bucket** (private) was also created via MCP for M10 (it's not a SQL migration; `insert into storage.buckets`).
+Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `..._topics.sql` (M2), `..._keywords.sql` (M3), `..._keywords_relevance.sql` (M4), `...20260525000000_clusters.sql` (M5: `clusters` + `coverage_gaps` + orchestrator keyword cols + `awaiting_article_planning` status), `..._session_last_error.sql` (M5), `..._peer_entities.sql` (M5: `sessions.aliases` + `peer_entities`), `...20260526000000_site_architecture.sql` (M6: `site_architecture` table + RLS), `...20260527000000_session_archive.sql` (M7b: `sessions.archived`), `...20260528000000_csv_exports.sql` (**M10**: `csv_exports` table + the `csv_export_format` enum + real RLS via a `sessions`-join), `...20260529000000_session_cost_breakdown.sql` (**M11**: `sessions.cost_breakdown jsonb`; no RLS change). All applied to the live DB via Supabase MCP (the M7 column on 2026-05-26; the M10 table on 2026-05-28; the M11 column on 2026-05-29, verified — column present, RLS still enabled). **M9 added no migration** — the approval columns (`estimated_cost_usd`, `actual_cost_usd`, `approval_required`, `approval_decided_by_user_id`, `approval_decision_at`, `approval_note`) and the `pending_approval`/`rejected` statuses were created in the M1 `..._fanout_initial.sql` migration. The **`csv-snapshots` Storage bucket** (private) was also created via MCP for M10 (it's not a SQL migration; `insert into storage.buckets`).
 
 Frontend M10 additions: `owner/views/ExportsView.tsx` (route `exports`, added to **both** the Owner + VA segmented controls in `SessionWorkspace`) — three format Download buttons (architecture disabled until the summary reports an architecture) + a "Past exports" list with per-row re-download; opens the backend-minted signed URL in a new tab. `shared/api.ts` gained `createExport` / `listExports` / `downloadExport` + the `CsvExport*` types. Query key `["exports", sessionId]` (new, no clash); reuses `["summary", sessionId]` to gate the architecture button. CSS: `.export-actions`.
+
+Frontend M11 additions: `shared/CostBanner.tsx` (live actual-vs-estimate cost banner + progress bar; red when actual > estimate) rendered on the Owner `SessionWorkspace` head and the VA wizard `ProgressStep`; both read the new `cost` block on the `/summary` poll. `owner/DebugView.tsx` (route `/session/:id/debug`, **OwnerRoutes only**) — per-step cost table + raw `orchestrator_log` / `statistical_clustering_log`; reached via an owner-only "Debug" link in the workspace head. `shared/api.ts` gained `SummaryCost` (on `PipelineSummary`) + `SessionDebug` + `getSessionDebug`. Query key `["debug", sessionId]`. CSS: `.cost-banner*`, `.debug-link`, `.debug-table`, `.debug-json`.
 
 ## 6. Useful commands / queries
 
 Backend (from `backend/`, venv at `.venv`):
 ```bash
 . .venv/bin/activate
-python -m pytest -q          # 139 tests, all passing
+python -m pytest -q          # 176 tests, all passing
 ruff check app/ tests/
 python -c "import app.main"   # import smoke test
 ```
