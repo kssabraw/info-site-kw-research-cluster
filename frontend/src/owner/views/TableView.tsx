@@ -33,7 +33,8 @@ function isQuestion(kw: string): boolean {
 // KD / CPC render as "—" because metrics enrichment (§7.8) isn't built (it's
 // optional in v1). Bulk row actions are editing — they arrive in M7b.
 export function TableView() {
-  const { sessionId, topics, topicName } = useSession();
+  const { sessionId, topics, topicName, role } = useSession();
+  const isVA = role === "va";
   const qc = useQueryClient();
   const keywords = useQuery({
     queryKey: ["keywords-all", sessionId],
@@ -168,9 +169,13 @@ export function TableView() {
       {selIds.length > 0 && (
         <div className="bulk-bar">
           <span>{selIds.length} selected</span>
-          <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "excluded"))}>Exclude</button>
+          {!isVA && (
+            <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "excluded"))}>Exclude</button>
+          )}
           <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "covered"))}>Mark covered</button>
-          <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "active"))}>Restore active</button>
+          {!isVA && (
+            <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "active"))}>Restore active</button>
+          )}
           <select
             className="select"
             style={{ width: "auto" }}

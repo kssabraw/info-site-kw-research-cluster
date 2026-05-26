@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useOutletContext, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getSession, getSummary, type Silo } from "../shared/api";
+import { getMe, getSession, getSummary, type Silo } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
 import { hasResults, statusClass, statusLabel } from "../shared/sessionStatus";
 
@@ -8,17 +8,26 @@ export interface SessionCtx {
   sessionId: string;
   topics: Silo[];
   topicName: (id: string) => string;
+  // Drives the restricted VA editing surface in the shared views (PRD §10).
+  role: "owner" | "va";
 }
 
 export function useSession() {
   return useOutletContext<SessionCtx>();
 }
 
-const TABS = [
+// VAs get a simplified two-view results surface + read-only architecture; no
+// split view (PRD §10.2 / §10.3).
+const OWNER_TABS = [
   { to: "table", label: "Table" },
   { to: "cluster", label: "Cluster" },
   { to: "architecture", label: "Architecture" },
   { to: "split", label: "Split" },
+];
+const VA_TABS = [
+  { to: "table", label: "Table" },
+  { to: "cluster", label: "Cluster" },
+  { to: "architecture", label: "Architecture" },
 ];
 
 // Per-session shell (PRD §9): segmented control over the three views, fed by the
@@ -33,10 +42,13 @@ export function SessionWorkspace() {
     queryFn: () => getSummary(sessionId),
     refetchInterval: (q) => (q.state.data?.status === "running" ? 4000 : false),
   });
+  const me = useQuery({ queryKey: ["me"], queryFn: getMe });
+  const role: "owner" | "va" = me.data?.role === "owner" ? "owner" : "va";
 
   const status = summary.data?.status ?? session.data?.status;
   const topics = session.data?.silos ?? [];
   const topicName = (tid: string) => topics.find((t) => t.id === tid)?.name ?? "Unknown topic";
+  const tabs = role === "owner" ? OWNER_TABS : VA_TABS;
 
   return (
     <AppShell>
@@ -50,7 +62,7 @@ export function SessionWorkspace() {
           )}
         </div>
         <nav className="segmented">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <NavLink
               key={t.to}
               to={t.to}
@@ -85,7 +97,7 @@ export function SessionWorkspace() {
         )}
 
         {status && hasResults(status) && session.data && (
-          <Outlet context={{ sessionId, topics, topicName } satisfies SessionCtx} />
+          <Outlet context={{ sessionId, topics, topicName, role } satisfies SessionCtx} />
         )}
       </main>
     </AppShell>
