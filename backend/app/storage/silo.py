@@ -7,6 +7,7 @@ service client after ownership has been verified.
 
 import json
 import uuid
+from datetime import datetime, timezone
 
 from app.pipeline.article_planning.models import PlanResult
 from app.pipeline.models import ProposedSilo
@@ -390,7 +391,12 @@ def get_active_keyword_index(session_id: str) -> dict[tuple[str, str], str]:
 def reset_article_planning(session_id: str) -> None:
     """Clear any prior article-planning output so /plan-articles is idempotent
     (and re-runnable). Resets keyword orchestrator fields, un-drops
-    orchestrator-dropped keywords, and deletes clusters + coverage gaps."""
+    orchestrator-dropped keywords, and deletes clusters + coverage gaps. Also
+    drops any stored site architecture: it's derived from the clusters (M6, §7.11)
+    by cluster id, so once the clusters are deleted + re-created (with fresh ids)
+    the old architecture's article references dangle. A re-plan therefore requires
+    a fresh /architecture run; clearing it here keeps the summary's `architecture`
+    flag honest rather than reporting a stale graph as present."""
     client = get_service_client()
     # Un-drop keywords the orchestrator dropped on a previous run.
     client.table("keywords").update({"status": "active"}).eq(
@@ -405,6 +411,8 @@ def reset_article_planning(session_id: str) -> None:
             "orchestrator_drop_reason": None,
         }
     ).eq("session_id", session_id).execute()
+
+    client.table("site_architecture").delete().eq("session_id", session_id).execute()
 
     topic_ids = [t["id"] for t in list_topics(session_id)]
     if topic_ids:
@@ -569,7 +577,7 @@ def get_pipeline_summary(session_id: str) -> dict:
     last_error = session.get("last_error")
     if status == "running":
         return {"status": status, "last_error": last_error,
-                "expansion": _EMPTY_EXPANSION, "plan": None}
+                "expansion": _EMPTY_EXPANSION, "plan": None, "architecture": None}
 
     topics = list_topics(session_id)
     topic_ids = [t["id"] for t in topics]
@@ -603,6 +611,16 @@ def get_pipeline_summary(session_id: str) -> dict:
             "total": _count("keywords", topic_id=tid),
             "grouping_count": (clog_topics.get(tid) or {}).get("grouping_count", 0),
         })
+
+    arch_row = (
+        client.table("site_architecture")
+        .select("generated_at, is_user_edited")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    architecture = arch_row[0] if arch_row else None
 
     has_plan = bool(clusters) or bool(olog)
     plan = None
@@ -638,6 +656,7 @@ def get_pipeline_summary(session_id: str) -> dict:
             "topics": expansion_topics,
         },
         "plan": plan,
+        "architecture": architecture,
     }
 
 
@@ -655,3 +674,80 @@ def list_coverage_gaps(session_id: str) -> list[dict]:
         .execute()
     )
     return res.data
+
+
+# ---- M6 site architecture (PRD §7.11, §13) --------------------------------
+def get_cluster_centroids(session_id: str) -> dict[str, list[float] | None]:
+    """cluster_id -> centroid embedding (parsed from pgvector's text form), for
+    the architecture step's same-silo lateral linking. Never exposed via the API."""
+    topic_ids = [t["id"] for t in list_topics(session_id)]
+    if not topic_ids:
+        return {}
+    res = (
+        get_service_client()
+        .table("clusters")
+        .select("id, centroid_embedding")
+        .in_("topic_id", topic_ids)
+        .execute()
+    )
+    out: dict[str, list[float] | None] = {}
+    for row in res.data:
+        emb = row.get("centroid_embedding")
+        if isinstance(emb, str):
+            try:
+                emb = json.loads(emb)
+            except (ValueError, TypeError):
+                emb = None
+        out[row["id"]] = emb
+    return out
+
+
+def get_keyword_texts(keyword_ids: list[str]) -> dict[str, str]:
+    """keyword_id -> keyword text, for the cluster primary keywords the
+    architecture step shows the LLM. Paged to stay under PostgREST's row cap."""
+    ids = [kid for kid in dict.fromkeys(keyword_ids) if kid]
+    if not ids:
+        return {}
+    client = get_service_client()
+    out: dict[str, str] = {}
+    for start in range(0, len(ids), 500):
+        res = (
+            client.table("keywords")
+            .select("id, keyword")
+            .in_("id", ids[start : start + 500])
+            .execute()
+        )
+        for r in res.data or []:
+            out[r["id"]] = r["keyword"]
+    return out
+
+
+def persist_architecture(session_id: str, architecture_json: dict) -> dict:
+    """Upsert the session's one architecture row (PRD §13: session_id is the PK,
+    so a re-generate replaces in place). Regeneration resets is_user_edited and
+    refreshes generated_at."""
+    row = {
+        "session_id": session_id,
+        "architecture_json": architecture_json,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "is_user_edited": False,
+    }
+    res = (
+        get_service_client()
+        .table("site_architecture")
+        .upsert(row, on_conflict="session_id")
+        .execute()
+    )
+    return res.data[0] if res.data else row
+
+
+def get_architecture(session_id: str) -> dict | None:
+    res = (
+        get_service_client()
+        .table("site_architecture")
+        .select("session_id, architecture_json, generated_at, is_user_edited")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None

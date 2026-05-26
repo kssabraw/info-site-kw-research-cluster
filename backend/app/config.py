@@ -122,6 +122,15 @@ class Settings(BaseSettings):
     fanout_cost_multiplier_low: float = 5.0
     fanout_cost_multiplier_high: float = 8.0
 
+    # M6 site architecture (PRD §7.11). Reuses the orchestrator's Anthropic client
+    # (§7.11: "share the same LLM client and credentials"); one editorial call per
+    # pillar, run in parallel. The linking matrix is assembled deterministically.
+    architect_max_workers: int = 5
+    # Pillars link laterally only above this topic-embedding cosine (§15.2 #4).
+    architecture_pillar_lateral_cosine: float = 0.55
+    # Lateral peer links per supporting article (§7.11 "2-3 lateral links").
+    architecture_lateral_article_links_max: int = 3
+
     # Observability (PRD §16.3)
     log_level: str = "INFO"
 
