@@ -144,10 +144,58 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**Recursive Fanout (RF) — deepen each silo into sub-topics** (next; spec'd in
-`docs/recursive-fanout-spec.md`). Re-sequenced ahead of the PRD's M6 (site
-architecture) at the owner's direction, because article *volume/depth* is the
-current priority. RF is PRD §7.7, previously unbuilt.
+**M6 — Site architecture (PRD §15.1 / §7.11)** is next, now that RF is done.
+Recursive Fanout was re-sequenced ahead of M6 at the owner's direction
+(article volume/depth was the priority); that work is complete, so the build
+returns to the PRD sequence. Stop for a human go-ahead before building M6
+(milestone discipline). One decision to settle first: the **orchestrator-vs-direct
+planner default** (still orchestrator default, direct via `{"direct": true}`) —
+RF validated with direct mode for volume, so revisit whether direct becomes the
+default.
+
+**Recursive Fanout (RF) — deepen each silo into sub-topics:** **complete**
+(signed off 2026-05-26). PRD §7.7, Phase 1; spec in
+`docs/recursive-fanout-spec.md`. A second stage on an already-expanded session:
+`POST /sessions/{id}/fanout` takes each silo's top cluster representatives (from
+the first pass's `statistical_clustering_log`) as **sub-anchors**, re-expands each
+via the existing `run_expansion` (reused, with a new `include_seed_level=False`
+to skip the bare-seed phrase endpoints that already ran), tags the new keywords
+`recursive`, merges them into the stored pre-gate pool, and re-runs the unchanged
+gate + Lever-3 routing + clustering. Depth hard-capped at 1 by construction.
+Mining stays **off** at this level (M5 finding: mining adds gate-rejected noise).
+Cost-gated: an unconfirmed `/fanout` returns the 5–8× estimate + sub-anchor plan
+(HTTP 200, no spend); `confirm_cost: true` starts the run (202). Time budget
+scales with sub-anchor count (`min(900, max(60, 25×count))`s) since RF does ~N×
+the keyword work of a base expand. New code: `pipeline/recursive_fanout.py`,
+`run_fanout_job` in `jobs.py`, `/fanout` in `api/sessions.py`, `fanout()` in
+`frontend/src/shared/api.ts`. No schema change (Phase 1). Built on
+`claude/pensive-ramanujan-vyJJD`; merged to `main`.
+
+**RF validated live** on `retatrutide` session `4ecefaa1` (deployed stack,
+console+MCP): expand → baseline `/plan-articles {direct}` → `/fanout {confirm_cost,
+resolution 1.2}` → `/plan-articles {direct}`. Results: active pool 2,029 → 2,562,
+of which **1,007 active keywords are recursive-sourced** (~39%); RF surfaced
+18,045 recursive candidates, the gate kept ~6% (14,680 filtered_relevance, 2,358
+junk) — healthy. **Zero off-niche peer leakage** (371 "peer" matches were all
+legit `retatrutide vs <peer>` keywords naming the seed; true no-seed leaks = 0).
+Articles 10 → 315.
+
+**RF decisions / caveats (flagged):**
+- **Article-count A/B is resolution-confounded.** The baseline plan ran on pass-1
+  clustering at resolution **1.0**; the RF run re-clustered at **1.2**. So 10→315
+  entangles "more keywords" with "finer clustering" — the clean RF signal is the
+  keyword-level one (1,007 active recursive, 0 peer leak), not the 31× article
+  number. The baseline's 10 articles (~200 kw/article) was itself an over-coarse
+  anomaly. To isolate RF's article contribution, re-plan a non-RF session at res
+  1.2 (cheap `/regate`, no DataForSEO) and compare to 315. **Not done.**
+- **`recursive` provenance tag is best-effort:** it's per-(silo, keyword), so
+  Lever-3 can route a keyword to a silo whose source list lacks the tag. Cosmetic
+  (gating/clustering/counts unaffected); don't treat the tag count as exact.
+- **Planner default unchanged** in this milestone — RF only touches the expand
+  stage; the orchestrator-vs-direct global default is still open (see above).
+- **Sub-anchors come from first-pass representatives** (owner's choice), so RF
+  requires a prior `/expand`; `/fanout` 400s if there are no multi-keyword
+  groupings to deepen.
 
 M1 — Foundation: **complete** (signed off 2026-05-21). Built on `m1-foundation`.
 
@@ -275,3 +323,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 |---|---|---|
 | 1.0 | 2026-05-20 | Initial CLAUDE.md created as part of M1 kickoff. Locks architectural decisions from PRD v1.7. |
 | 1.1 | 2026-05-25 | M5 signed off (orchestrator + dedup, plus async execution, peer-entity filter, Lever-3 routing, direct mode, calibration tooling). Recursive Fanout (§7.7) re-sequenced as the next milestone ahead of the PRD's M6; spec in `docs/recursive-fanout-spec.md`. |
+| 1.2 | 2026-05-26 | Recursive Fanout (§7.7, Phase 1) signed off — `/fanout` second-stage that re-expands each silo's top cluster representatives as sub-anchors, cost-gated, re-gate/re-cluster on the enlarged pool. Validated live on `retatrutide` (`4ecefaa1`): 1,007 active recursive keywords, 0 peer leak. Build returns to the PRD sequence; **M6 (site architecture) is next.** |

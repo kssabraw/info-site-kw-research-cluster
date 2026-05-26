@@ -2,7 +2,7 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-_Last updated: 2026-05-25. Current `main` HEAD: `d1377e2`._
+_Last updated: 2026-05-26. Current `main` HEAD: post-RF merge (`cd7d3dc` + this docs sign-off)._
 
 ---
 
@@ -13,13 +13,14 @@ _Last updated: 2026-05-25. Current `main` HEAD: `d1377e2`._
 - **M3 — Expansion pipeline:** ✅ complete & signed off (2026-05-24). Per-silo expansion + autocomplete + keyword persistence with source attribution. `keyword_suggestions`/`query_fanouts` run once on the bare seed, fanned to all silos.
 - **M4 — Competitor mining + relevance gate + clustering:** ✅ complete & signed off (2026-05-24). Deep-mine selection (§7.2), SERP competitor mining on gated silos + always-mined seed (§7.4), relevance gate w/ junk filter + cross-silo embedding dedup (§7.6), per-silo Louvain clustering → `statistical_clustering_log` (§7.9). Verified live on `retatrutide` (1 gated silo: 3,953 competitor kw, 1,341 active, 4 groupings @ cohesion 0.784). `autocomplete_max` lowered 1500→500. Built on `m4-competitor-clustering`; merged to `main`.
 - **M5 — Article planning orchestrator + cross-topic dedup:** ✅ complete & signed off (2026-05-25). Core §7.10 (Opus 4.7 chunked orchestrator, deterministic cross-topic dedup, `clusters`+`coverage_gaps` schema, staged persistence) **plus** a lot more, validated live on `retatrutide` session `ea83f985`: async background execution + status polling (pulled forward from M11 — kills the 5-min wall), generic peer-entity filter (LLM-derived `aliases`/`peer_entities`), **Lever 3** single-silo routing at the gate, **direct mode** (groupings→articles, no LLM), and calibration tooling (`/regate`, `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate`). Relevance threshold default 0.62→0.52. See `CLAUDE.md` "Active milestone" for the full breakdown + decisions/divergences. Built on `claude/youthful-bohr-8MovM`; merged to `main`.
-- **Next — Recursive Fanout (§7.7):** spec'd, not built. See `docs/recursive-fanout-spec.md`.
+- **Recursive Fanout (§7.7, Phase 1):** ✅ complete & signed off (2026-05-26). `POST /sessions/{id}/fanout` re-expands each silo's top cluster representatives as sub-anchors (reusing `run_expansion` w/ `include_seed_level=False`), tags them `recursive`, merges into the stored pool, re-gates + re-clusters. Depth-capped at 1; mining off; cost-gated (unconfirmed → 5–8× estimate at HTTP 200, no spend; `confirm_cost:true` → 202). No schema change. Validated live on `retatrutide` (`4ecefaa1`): 1,007 active recursive keywords (~39% of 2,562 active), 0 peer leak, 315 articles @ res 1.2. Built on `claude/pensive-ramanujan-vyJJD`; merged to `main`. Spec: `docs/recursive-fanout-spec.md`.
+- **Next — M6 site architecture (PRD §15.1):** not started. RF was the re-sequenced detour; build returns to the PRD sequence.
 
 ## 2. Immediate next action (resume here)
 
-**M5 is done. Next is Recursive Fanout (RF)** — re-sequenced ahead of the PRD's M6 (site architecture) at the owner's direction, because article *volume/depth* is the priority. Read **`docs/recursive-fanout-spec.md`** (build plan) + PRD §7.7. RF deepens each silo into sub-topics (each silo → new seed → expansion one level deep, depth-capped at 1); it's the lever for genuinely more on-niche articles (M5 proved deep *mining* doesn't help — the gate filters competitor noise). Stop for a human go-ahead before building (milestone discipline).
+**RF is done. Next is M6 — site architecture (PRD §15.1 / §7.11)**, returning to the PRD sequence after the RF detour. Stop for a human go-ahead before building (milestone discipline). Read PRD §7.11 + §15.1 M6 for scope.
 
-**Key M5 carry-overs to resolve in RF:** (a) orchestrator-vs-direct default (currently orchestrator default, direct via `{"direct": true}` flag); (b) RF cost is 5–8× and trips the (unbuilt, M9) approval gate — need an owner-confirm before spend.
+**Decision to settle before/at M6:** the **orchestrator-vs-direct planner default** is still unresolved (orchestrator default, direct via `{"direct": true}`). RF was validated with direct mode for volume — decide whether direct becomes the global default. (RF's cost-confirm pattern — unconfirmed `/fanout` returns the estimate at HTTP 200, `confirm_cost:true` spends — is the interim stand-in until the M9 approval gate exists.)
 
 **Calibration workflow that emerged in M5** (reuse it): tuning is done against the **deployed API via browser-console `fetch`** (sandbox has no egress), and results are inspected via the **Supabase MCP tools**, not the UI (no session resume until M7). `/regate` re-runs gate+cluster on the *stored* pool (no DataForSEO) at an overridden threshold / edge / resolution / aliases / peer_entities — the cheap iteration loop. `/cluster-preview` and `/lever3-simulate` are read-only analysis.
 
@@ -39,6 +40,7 @@ _Last updated: 2026-05-25. Current `main` HEAD: `d1377e2`._
 - **M4 hygiene leftovers (low, not fixed):** dead `insert_keywords` in `storage/silo.py` (replaced by `insert_classified_keywords`); `/expand` has no guard against running before `/finalize` (degrades gracefully — all active, no scoring); two gated silos sharing a domain make duplicate `ranked_keywords` calls (minor cost).
 - **M4 stuck-running edge:** the `/expand` run guard (atomic `try_mark_running`) 409s if status is already `running`. A hard crash / deploy mid-run leaves status stuck `running`, so re-running *that* session 409s forever — recover by starting a new session (no resume until M7).
 - **M5 calibration learnings (carry into RF):** (a) raw rationale-anchor cosine is the best keyword→silo routing signal of the four tested — silo-name routing dumps everything into one silo; common-mode centering was *worse* and reverted. (b) Routing is ~71% accurate; embeddings are weakly discriminative (everything ≈ the seed). (c) Deep competitor mining of more silos adds raw volume but the gate filters most as off-niche, so the *useful* pool barely grows (~900 active) — **mining is not the lever for more articles; recursive fanout is.** (d) Good config found for `retatrutide`: threshold ~0.50, edge 0.55, Louvain `resolution` 1.2 (the `/expand` default resolution is 1.0 = coarser; re-gate to 1.2 after a fresh expand).
+- **RF validation (2026-05-26, session `4ecefaa1`):** confirmed RF generates genuine on-niche keywords — 1,007 active recursive keywords (~39% of the 2,562 active pool), gate kept ~6% of the 18,045 recursive candidates, **0 off-niche peer leakage**. **Caveat — the 10→315 article jump is resolution-confounded:** baseline plan ran at clustering resolution 1.0, the RF run at 1.2, so it entangles "more keywords" with "finer clustering". The clean RF signal is the keyword count, not the article count. **Not yet done:** a clean article-count A/B (re-plan a non-RF session at res 1.2 via cheap `/regate`, compare to 315) to isolate RF's article contribution. Also: the `recursive` source tag is best-effort (per-(silo,keyword); Lever-3 can route a kw to a silo whose source list lacks it) — don't treat the tag count as exact.
 - **`gpt-5.4` + `web_search`** (silo discovery) work in prod but were never verifiable from the sandbox; `OPENAI_SILO_MODEL` / `OPENAI_WEB_SEARCH_TOOL` env vars allow correction without a code change. Grounding now also emits per-seed `aliases` + `peer_entities` for the peer filter — unverifiable from the sandbox, so confirm on a fresh live seed.
 - **Session resume in the UI:** the data persists at every step, but the frontend can't reopen a session — **deferred to M7** (Project + Session Browser, §9.4). Hence calibration is console+MCP driven (see §2).
 - **Test session state:** `ea83f985` (seed typo'd as `retratrutide`; correct spelling supplied via the `aliases` override, now stored). Currently `awaiting_article_planning`, ~893 active, 0 persisted clusters, after a 5-silo deep-mine re-expand at the coarse default resolution 1.0. To resume on it: `/regate` at res 1.2, then `/plan-articles {"direct": true}`.
@@ -47,13 +49,14 @@ _Last updated: 2026-05-25. Current `main` HEAD: `d1377e2`._
 
 - `main.py` — FastAPI app, CORS, correlation-id middleware, routers.
 - `config.py` — `Settings` (pydantic-settings); env aliases; expansion knobs.
-- `api/` — `health.py`, `projects.py`, `sessions.py`. Session endpoints: silo discovery, `/finalize`, `/deep-mine`, `/expand` (async), `/plan-articles` (async; body `{"direct": true}` skips the orchestrator), `/regate` (async; body overrides threshold/edge/resolution/aliases/peer_entities), `/summary` (poll), `/clusters` (read), `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate` (read-only analysis).
+- `api/` — `health.py`, `projects.py`, `sessions.py`. Session endpoints: silo discovery, `/finalize`, `/deep-mine`, `/expand` (async), `/plan-articles` (async; body `{"direct": true}` skips the orchestrator), `/regate` (async; body overrides threshold/edge/resolution/aliases/peer_entities), `/fanout` (async; RF §7.7 — cost-gated, `{"confirm_cost": true}` to spend, optional resolution/threshold overrides), `/summary` (poll), `/clusters` (read), `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate` (read-only analysis).
 - `auth/dependencies.py` — `require_user` (verifies Supabase JWT via service client; logs real reason on failure).
 - `storage/supabase_client.py` — service client (RLS-bypass, admin writes) + user client (anon key + user JWT, RLS-enforced reads). `storage/silo.py` — session/topic/keyword/cluster DB ops incl. `set_topics_gating`, `get_topic_embeddings`, `insert_classified_keywords`, `try_mark_running`, `get_session`, `list_all_keyword_pool` (re-gate pool reconstruction), `persist_article_plan` (staged cluster write), `reset_article_planning`, `get_pipeline_summary`, `list_clusters`.
 - `llm/openai_client.py` — GPT-5.4 grounding + silo proposal (Responses API + web_search) + `embed()`.
 - `dataforseo/client.py` — DataForSEO calls (demand sample, SERP structure, expansion endpoints, autocomplete; M4: `serp_top_urls`, `ranked_keywords`, `domain_of`).
 - `pipeline/` — `silo_discovery.py` (M2), `expansion.py` (M3), `competitor.py`/`relevance.py`/`clustering.py` (M4), `orchestrate.py` (M4 `run_refinement_pipeline` + M5 `gate_and_cluster`/`cluster_preview`/`routing_diagnostic`/`simulate_best_silo_clustering`), `models.py`.
-- `pipeline/article_planning/` (M5) — `orchestrate_articles.py` (chunked orchestrator + `direct` mode), `dedup.py`, `serp.py`, `models.py`. `jobs.py` (M5) — async background worker. `llm/anthropic_client.py` — Opus 4.7 tool-use client. `relevance.py` now also does the peer-entity filter + Lever-3 routing.
+- `pipeline/article_planning/` (M5) — `orchestrate_articles.py` (chunked orchestrator + `direct` mode), `dedup.py`, `serp.py`, `models.py`. `jobs.py` (M5) — async background worker (M6/RF: `run_fanout_job`). `llm/anthropic_client.py` — Opus 4.7 tool-use client. `relevance.py` now also does the peer-entity filter + Lever-3 routing.
+- `pipeline/recursive_fanout.py` (RF §7.7) — `derive_sub_anchors` (top-N cluster reps per silo), `run_recursive_expansion` (reuses `run_expansion`, remaps synthetic sub-anchor topics back to parent silos, tags `recursive`), `merge_into_pool`. Drives `run_fanout_job`.
 
 Frontend: `frontend/src/owner/SiloDiscovery.tsx` is the whole flow (seed → disambiguation → silo review → finalize → **deep-mine selection** → run pipeline → results). `shared/api.ts`, `shared/auth.tsx`, TanStack Query. Progress UI = `WorkingProgress` (discovery ~20–40s; pipeline ~3–6 min estimate).
 
@@ -64,7 +67,7 @@ Schema migrations in `supabase/migrations/`: `..._fanout_initial.sql` (M1), `...
 Backend (from `backend/`, venv at `.venv`):
 ```bash
 . .venv/bin/activate
-python -m pytest -q          # 77 tests, all passing
+python -m pytest -q          # 84 tests, all passing
 ruff check app/ tests/
 python -c "import app.main"   # import smoke test
 ```
