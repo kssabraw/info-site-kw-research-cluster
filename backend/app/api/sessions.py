@@ -8,7 +8,7 @@ pipeline: expansion + competitor mining + relevance gate + statistical clusterin
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from app import jobs
@@ -405,7 +405,10 @@ def regate_session(
 
 @router.post("/sessions/{session_id}/fanout", status_code=status.HTTP_202_ACCEPTED)
 def fanout_session(
-    session_id: str, body: FanoutBody, user: AuthedUser = Depends(require_user)
+    session_id: str,
+    body: FanoutBody,
+    response: Response,
+    user: AuthedUser = Depends(require_user),
 ) -> dict:
     """Recursive Fanout (PRD §7.7, Phase 1). Re-expands each silo's top cluster
     representatives as sub-anchors, then re-gates + re-clusters the enlarged pool.
@@ -442,6 +445,9 @@ def fanout_session(
         "Re-send with confirm_cost=true to start.",
     }
     if not body.confirm_cost:
+        # Nothing was queued — this is a read-only cost preview, not an accepted
+        # run, so override the route's default 202.
+        response.status_code = status.HTTP_200_OK
         return {"status": "estimate", "session_id": session_id, "estimate": estimate}
 
     if not store.try_mark_running(session_id):

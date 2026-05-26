@@ -300,6 +300,12 @@ def run_fanout_job(
             topic_ids=topic_ids,
             per_silo=s.fanout_subanchors_per_silo,
         )
+        total_sub_anchors = sum(len(v) for v in sub_anchors.values())
+        time_budget = min(
+            float(s.fanout_time_budget_cap_s),
+            max(s.fanout_time_budget_floor_s,
+                s.fanout_time_budget_per_anchor_s * total_sub_anchors),
+        )
         recursive_pool, degraded, _timed_out = run_recursive_expansion(
             seed=seed,
             sub_anchors=sub_anchors,
@@ -309,7 +315,7 @@ def run_fanout_job(
             paa_tier2_cap=s.paa_tier2_cap,
             autocomplete_max=s.autocomplete_max,
             max_workers=s.fanout_subanchor_max_workers,
-            time_budget_s=s.fanout_time_budget_s,
+            time_budget_s=time_budget,
         )
 
         pool = store.list_all_keyword_pool(session_id)
@@ -345,7 +351,7 @@ def run_fanout_job(
         logger.info(
             "step_complete",
             extra={"event": "step_complete", "step": "fanout_job",
-                   "sub_anchors": sum(len(v) for v in sub_anchors.values()),
+                   "sub_anchors": total_sub_anchors, "time_budget_s": time_budget,
                    "degraded": bool(degraded), **gc.counts()},
         )
     except Exception as exc:  # noqa: BLE001
