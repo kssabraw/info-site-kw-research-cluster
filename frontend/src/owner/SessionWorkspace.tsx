@@ -1,7 +1,8 @@
-import { NavLink, Outlet, useOutletContext, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useOutletContext, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getMe, getSession, getSummary, type Silo } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
+import { CostBanner } from "../shared/CostBanner";
 import { hasResults, statusClass, statusLabel } from "../shared/sessionStatus";
 
 export interface SessionCtx {
@@ -62,7 +63,13 @@ export function SessionWorkspace() {
           {status && (
             <span className={"status-pill " + statusClass(status)}>{statusLabel(status)}</span>
           )}
+          {role === "owner" && (
+            <Link to={`/session/${sessionId}/debug`} className="debug-link">
+              Debug
+            </Link>
+          )}
         </div>
+        <CostBanner cost={summary.data?.cost} running={status === "running"} />
         <nav className="segmented">
           {tabs.map((t) => (
             <NavLink

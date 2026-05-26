@@ -25,6 +25,7 @@ import {
   type SiloDiscovery as Discovery,
 } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
+import { CostBanner } from "../shared/CostBanner";
 import { RELATIONSHIP_LABELS, RELATIONSHIP_OPTIONS } from "../shared/relationshipTypes";
 
 // VA Mode (PRD §10): a linear, step-gated wizard. It's a restricted reskin of the
@@ -1075,6 +1076,7 @@ function ProgressStep(p: { sessionId: string; onDone: () => void }) {
       </h1>
       <p className="muted">{stage}… · elapsed {elapsed}s</p>
       <p className="field-hint">This usually takes a few minutes. You can leave this open.</p>
+      <CostBanner cost={summaryQ.data?.cost} running />
     </div>
   );
 }
