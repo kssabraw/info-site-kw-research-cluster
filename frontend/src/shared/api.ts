@@ -90,12 +90,15 @@ export interface SessionListItem {
   status: string;
   coverage_mode: string;
   cluster_count: number;
+  archived: boolean;
   created_at: string;
   completed_at: string | null;
 }
 
-export const listSessions = (projectId: string) =>
-  request<SessionListItem[]>(`/projects/${projectId}/sessions`);
+export const listSessions = (projectId: string, includeArchived = false) =>
+  request<SessionListItem[]>(
+    `/projects/${projectId}/sessions${includeArchived ? "?include_archived=true" : ""}`,
+  );
 
 export interface CreateSessionBody {
   seed_keyword: string;
@@ -242,6 +245,82 @@ export const getClusters = (id: string) =>
   request<{ clusters: Cluster[]; coverage_gaps: CoverageGap[] }>(
     `/sessions/${id}/clusters`,
   );
+
+// ---- M7b editing (PRD §9.1 / §9.2 / §9.4) --------------------------------
+export interface ClusterEdit {
+  name?: string;
+  intent?: string;
+  suggested_h2s?: string[];
+}
+
+export const editCluster = (clusterId: string, body: ClusterEdit) =>
+  request<Cluster>(`/clusters/${clusterId}`, { method: "PATCH", body: JSON.stringify(body) });
+
+export const promotePrimary = (clusterId: string, keyword_id: string) =>
+  request<Cluster>(`/clusters/${clusterId}/promote-primary`, {
+    method: "POST",
+    body: JSON.stringify({ keyword_id }),
+  });
+
+export const deleteCluster = (clusterId: string) =>
+  request<void>(`/clusters/${clusterId}`, { method: "DELETE" });
+
+export const mergeClusters = (survivor_id: string, merged_ids: string[], name?: string) =>
+  request<Cluster>(`/clusters/merge`, {
+    method: "POST",
+    body: JSON.stringify({ survivor_id, merged_ids, name }),
+  });
+
+export const splitCluster = (
+  clusterId: string,
+  keyword_ids: string[],
+  name: string,
+  primary_keyword_id?: string,
+) =>
+  request<Cluster>(`/clusters/${clusterId}/split`, {
+    method: "POST",
+    body: JSON.stringify({ keyword_ids, name, primary_keyword_id }),
+  });
+
+export const bulkKeywordStatus = (
+  sessionId: string,
+  keyword_ids: string[],
+  status: "active" | "excluded" | "covered",
+) =>
+  request<{ updated: number }>(`/sessions/${sessionId}/keywords/status`, {
+    method: "POST",
+    body: JSON.stringify({ keyword_ids, status }),
+  });
+
+export const bulkKeywordMove = (
+  sessionId: string,
+  keyword_ids: string[],
+  cluster_id: string | null,
+) =>
+  request<{ updated: number }>(`/sessions/${sessionId}/keywords/move`, {
+    method: "POST",
+    body: JSON.stringify({ keyword_ids, cluster_id }),
+  });
+
+export const acceptGap = (gapId: string) =>
+  request<Cluster>(`/coverage-gaps/${gapId}/accept`, { method: "POST" });
+
+export const dismissGap = (gapId: string) =>
+  request<void>(`/coverage-gaps/${gapId}/dismiss`, { method: "POST" });
+
+export interface SessionPatch {
+  project_id?: string;
+  archived?: boolean;
+}
+
+export const patchSession = (sessionId: string, body: SessionPatch) =>
+  request<{ session_id: string; moved: boolean; archived: boolean | null }>(
+    `/sessions/${sessionId}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
+
+export const deleteSession = (sessionId: string) =>
+  request<void>(`/sessions/${sessionId}`, { method: "DELETE" });
 
 export const setDeepMine = (id: string, topic_ids: string[]) =>
   request<{ gated_topic_ids: string[]; topics: Silo[] }>(`/sessions/${id}/deep-mine`, {

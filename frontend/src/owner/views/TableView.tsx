@@ -1,6 +1,12 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { getAllSurvivingKeywords, getClusters, type Keyword } from "../../shared/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  bulkKeywordMove,
+  bulkKeywordStatus,
+  getAllSurvivingKeywords,
+  getClusters,
+  type Keyword,
+} from "../../shared/api";
 import { useSession } from "../SessionWorkspace";
 
 type LengthBand = "all" | "short" | "mid" | "long";
@@ -28,11 +34,23 @@ function isQuestion(kw: string): boolean {
 // optional in v1). Bulk row actions are editing — they arrive in M7b.
 export function TableView() {
   const { sessionId, topics, topicName } = useSession();
+  const qc = useQueryClient();
   const keywords = useQuery({
     queryKey: ["keywords-all", sessionId],
     queryFn: () => getAllSurvivingKeywords(sessionId),
   });
   const clustersQ = useQuery({ queryKey: ["clusters", sessionId], queryFn: () => getClusters(sessionId) });
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const bulk = useMutation({
+    mutationFn: (fn: () => Promise<unknown>) => fn(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["keywords-all", sessionId] });
+      qc.invalidateQueries({ queryKey: ["clusters", sessionId] });
+      setSelected(new Set());
+    },
+    onError: (e: Error) => alert(e.message),
+  });
 
   const clusterName = useMemo(() => {
     const m = new Map<string, string>();
@@ -93,6 +111,18 @@ export function TableView() {
   }
   const arrow = (col: SortCol) => (sort.col === col ? (sort.dir === 1 ? " ▲" : " ▼") : "");
 
+  function toggleRow(id: string) {
+    const next = new Set(selected);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelected(next);
+  }
+  const shownIds = shown.map((k) => k.id);
+  const allShownSelected = shownIds.length > 0 && shownIds.every((id) => selected.has(id));
+  function toggleAll() {
+    setSelected(allShownSelected ? new Set() : new Set(shownIds));
+  }
+  const selIds = [...selected];
+
   return (
     <div>
       <div className="filter-bar">
@@ -135,10 +165,38 @@ export function TableView() {
         {filtered.length > CAP && ` · showing first ${CAP.toLocaleString()} — refine filters to narrow`}
       </p>
 
+      {selIds.length > 0 && (
+        <div className="bulk-bar">
+          <span>{selIds.length} selected</span>
+          <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "excluded"))}>Exclude</button>
+          <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "covered"))}>Mark covered</button>
+          <button className="btn btn-ghost" style={{ width: "auto" }} disabled={bulk.isPending} onClick={() => bulk.mutate(() => bulkKeywordStatus(sessionId, selIds, "active"))}>Restore active</button>
+          <select
+            className="select"
+            style={{ width: "auto" }}
+            value=""
+            disabled={bulk.isPending}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              bulk.mutate(() => bulkKeywordMove(sessionId, selIds, v === "__unassigned__" ? null : v));
+            }}
+          >
+            <option value="">Move to cluster…</option>
+            {clustersQ.data?.clusters.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+            <option value="__unassigned__">Unassigned</option>
+          </select>
+          <button className="link-btn" onClick={() => setSelected(new Set())}>Clear</button>
+        </div>
+      )}
+
       <div className="table-scroll">
         <table className="kw-table">
           <thead>
             <tr>
+              <th className="col-check"><input type="checkbox" checked={allShownSelected} onChange={toggleAll} /></th>
               <th className="sortable" onClick={() => setSortCol("keyword")}>Keyword{arrow("keyword")}</th>
               <th className="sortable" onClick={() => setSortCol("topic")}>Topic{arrow("topic")}</th>
               <th>Cluster</th>
@@ -152,7 +210,7 @@ export function TableView() {
           </thead>
           <tbody>
             {shown.map((k) => (
-              <Row key={k.id} k={k} topicName={topicName} clusterName={clusterName} />
+              <Row key={k.id} k={k} topicName={topicName} clusterName={clusterName} selected={selected.has(k.id)} onToggle={() => toggleRow(k.id)} />
             ))}
           </tbody>
         </table>
@@ -165,13 +223,18 @@ function Row({
   k,
   topicName,
   clusterName,
+  selected,
+  onToggle,
 }: {
   k: Keyword;
   topicName: (id: string) => string;
   clusterName: (id: string | null) => string;
+  selected: boolean;
+  onToggle: () => void;
 }) {
   return (
-    <tr>
+    <tr className={selected ? "row-selected" : undefined}>
+      <td className="col-check"><input type="checkbox" checked={selected} onChange={onToggle} /></td>
       <td>
         {k.keyword}
         {k.is_primary_for_cluster && <span className="badge badge-rel" style={{ marginLeft: 6 }}>primary</span>}
