@@ -233,6 +233,34 @@ export interface ClusterPreview {
   configs: ClusterPreviewConfig[];
 }
 
+export interface FanoutBody {
+  confirm_cost?: boolean;
+  relevance_threshold?: number;
+  clustering_edge_threshold?: number;
+  clustering_resolution?: number;
+}
+
+export interface FanoutEstimate {
+  sub_anchors_total: number;
+  sub_anchors_per_silo: Record<string, number>;
+  cost_multiplier_range: [number, number];
+  note: string;
+}
+
+export interface FanoutAck {
+  status: string; // "estimate" (not started) | "running"
+  session_id: string;
+  estimate: FanoutEstimate;
+}
+
+// Recursive Fanout (PRD §7.7). Without confirm_cost it returns the cost
+// estimate + sub-anchor plan and does NOT spend; resend with confirm_cost: true.
+export const fanout = (id: string, body: FanoutBody = {}) =>
+  request<FanoutAck>(`/sessions/${id}/fanout`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 export const clusterPreview = (
   id: string,
   body: { relevance_threshold?: number; configs?: [number, number][] } = {},
