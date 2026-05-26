@@ -271,21 +271,25 @@ def list_keywords(
     return res.data
 
 
-def list_sessions(access_token: str, project_id: str) -> list[dict]:
+def list_sessions(
+    access_token: str, project_id: str, include_archived: bool = False
+) -> list[dict]:
     """Sessions under a project for the Session Browser (PRD §9.4), newest first.
     RLS-scoped: only sessions the caller may see are returned. Each row carries a
     derived `coverage_mode` (from settings) and a `cluster_count` (planned-article
-    count) so the browser can show run status at a glance."""
-    rows = (
+    count) so the browser can show run status at a glance. Archived sessions are
+    hidden unless `include_archived` (§9.4 soft-archive)."""
+    q = (
         get_user_client(access_token)
         .table("sessions")
         .select(
-            "id, seed_keyword, status, settings, created_at, completed_at"
+            "id, seed_keyword, status, settings, archived, created_at, completed_at"
         )
         .eq("project_id", project_id)
-        .order("created_at", desc=True)
-        .execute()
-    ).data
+    )
+    if not include_archived:
+        q = q.eq("archived", False)
+    rows = q.order("created_at", desc=True).execute().data
     if not rows:
         return []
 
@@ -301,6 +305,7 @@ def list_sessions(access_token: str, project_id: str) -> list[dict]:
                 "status": r["status"],
                 "coverage_mode": settings.get("coverage_mode", "standard"),
                 "cluster_count": counts.get(r["id"], 0),
+                "archived": r.get("archived", False),
                 "created_at": r["created_at"],
                 "completed_at": r.get("completed_at"),
             }
@@ -819,3 +824,305 @@ def get_architecture(session_id: str) -> dict | None:
         .execute()
     )
     return res.data[0] if res.data else None
+
+
+# ---- M7b cluster + keyword editing (PRD §9.1 / §9.2) ----------------------
+# A manual edit can change cluster membership; the centroid embedding is only
+# consumed by a *subsequent* re-plan's cross-topic dedup (which rebuilds every
+# cluster from scratch), so membership-changing edits invalidate it (set NULL)
+# rather than paying for an embedding call the next dedup will discard anyway.
+_CLUSTER_COLS = (
+    "id, topic_id, name, primary_keyword_id, intent, suggested_h2s, "
+    "peer_article_links, source_statistical_grouping_id, orchestrator_notes, "
+    "is_user_edited, is_gap_placeholder, created_at"
+)
+
+
+def get_cluster(cluster_id: str) -> dict | None:
+    res = (
+        get_service_client()
+        .table("clusters")
+        .select(_CLUSTER_COLS)
+        .eq("id", cluster_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def cluster_session_id(cluster_id: str) -> str | None:
+    """Resolve cluster -> topic -> session, for ownership checks."""
+    cluster = get_cluster(cluster_id)
+    if not cluster:
+        return None
+    topic = get_topic(cluster["topic_id"])
+    return topic["session_id"] if topic else None
+
+
+def update_cluster(cluster_id: str, fields: dict) -> dict:
+    """Edit an article's editorial fields (name / intent / H2s). Always flags the
+    row user-edited so a later re-gen knows it was touched (PRD §13)."""
+    get_service_client().table("clusters").update(
+        {**fields, "is_user_edited": True}
+    ).eq("id", cluster_id).execute()
+    return get_cluster(cluster_id)
+
+
+def promote_primary(cluster_id: str, keyword_id: str) -> dict:
+    """Make keyword_id the cluster's primary; the old primary becomes supporting
+    (§9.2). The keyword_id is constrained to the cluster, so a stray id is a no-op."""
+    client = get_service_client()
+    client.table("keywords").update({"is_primary_for_cluster": False}).eq(
+        "cluster_id", cluster_id
+    ).execute()
+    client.table("keywords").update({"is_primary_for_cluster": True}).eq(
+        "id", keyword_id
+    ).eq("cluster_id", cluster_id).execute()
+    client.table("clusters").update(
+        {"primary_keyword_id": keyword_id, "is_user_edited": True}
+    ).eq("id", cluster_id).execute()
+    return get_cluster(cluster_id)
+
+
+def delete_cluster(cluster_id: str) -> None:
+    """Delete an article. Its keywords drop to the Unassigned bucket (cluster_id
+    NULL) within their topic — keywords are never destroyed (§9.2). Any peer
+    links and accepted-gap pointer to this cluster are cleaned up."""
+    sid = cluster_session_id(cluster_id)
+    client = get_service_client()
+    client.table("keywords").update(
+        {"cluster_id": None, "is_primary_for_cluster": False}
+    ).eq("cluster_id", cluster_id).execute()
+    client.table("coverage_gaps").update({"accepted_cluster_id": None}).eq(
+        "accepted_cluster_id", cluster_id
+    ).execute()
+    client.table("clusters").delete().eq("id", cluster_id).execute()
+    if sid:
+        _remove_cluster_from_peers(sid, [cluster_id])
+
+
+def move_keywords(
+    session_id: str, keyword_ids: list[str], cluster_id: str | None
+) -> int:
+    """Reassign keywords to a cluster, or to Unassigned when cluster_id is None
+    (§9.1 / §9.2). Scoped to the session so a caller can't touch another session's
+    keywords. A moved keyword loses its primary flag, and follows its target
+    cluster's topic so cluster.topic_id and keyword.topic_id stay consistent."""
+    if not keyword_ids:
+        return 0
+    client = get_service_client()
+    fields: dict = {"cluster_id": cluster_id, "is_primary_for_cluster": False}
+    if cluster_id:
+        target = get_cluster(cluster_id)
+        if target:
+            fields["topic_id"] = target["topic_id"]
+    res = (
+        client.table("keywords")
+        .update(fields)
+        .eq("session_id", session_id)
+        .in_("id", keyword_ids)
+        .execute()
+    )
+    # A cluster whose primary was just moved out now points at a foreign keyword.
+    client.table("clusters").update({"primary_keyword_id": None}).in_(
+        "primary_keyword_id", keyword_ids
+    ).execute()
+    if cluster_id:
+        client.table("clusters").update({"is_user_edited": True}).eq(
+            "id", cluster_id
+        ).execute()
+    return len(res.data or [])
+
+
+def set_keywords_status(session_id: str, keyword_ids: list[str], status: str) -> int:
+    """Bulk status change for Table View actions (exclude / mark covered / restore
+    to active), scoped to the session (§9.1)."""
+    if not keyword_ids:
+        return 0
+    res = (
+        get_service_client()
+        .table("keywords")
+        .update({"status": status})
+        .eq("session_id", session_id)
+        .in_("id", keyword_ids)
+        .execute()
+    )
+    return len(res.data or [])
+
+
+def merge_clusters(
+    session_id: str, survivor_id: str, merged_ids: list[str], name: str | None = None
+) -> dict:
+    """Merge articles into the survivor (§9.2): repoint every member keyword,
+    union the H2 outlines, fold peer links onto the survivor, delete the others.
+    Centroid is invalidated (see module note)."""
+    survivor = get_cluster(survivor_id)
+    if not survivor:
+        raise ValueError("survivor cluster not found")
+    others = [cid for cid in merged_ids if cid != survivor_id]
+    if not others:
+        return survivor
+
+    client = get_service_client()
+    combined_h2 = list(survivor.get("suggested_h2s") or [])
+    for cid in others:
+        c = get_cluster(cid)
+        for h2 in (c.get("suggested_h2s") or []) if c else []:
+            if h2 not in combined_h2:
+                combined_h2.append(h2)
+
+    client.table("keywords").update(
+        {"cluster_id": survivor_id, "is_primary_for_cluster": False, "topic_id": survivor["topic_id"]}
+    ).in_("cluster_id", others).execute()
+    # Survivor keeps its own primary flag/keyword.
+    if survivor.get("primary_keyword_id"):
+        client.table("keywords").update({"is_primary_for_cluster": True}).eq(
+            "id", survivor["primary_keyword_id"]
+        ).eq("cluster_id", survivor_id).execute()
+    client.table("clusters").delete().in_("id", others).execute()
+    fields: dict = {
+        "suggested_h2s": combined_h2,
+        "centroid_embedding": None,
+        "is_user_edited": True,
+    }
+    if name:
+        fields["name"] = name
+    client.table("clusters").update(fields).eq("id", survivor_id).execute()
+    _remove_cluster_from_peers(session_id, others, replacement=survivor_id)
+    return get_cluster(survivor_id)
+
+
+def split_cluster(
+    source_id: str,
+    keyword_ids: list[str],
+    new_name: str,
+    new_primary_id: str | None = None,
+) -> dict:
+    """Manual split (§9.2 option a): move the selected keywords into a brand-new
+    article in the same topic. The orchestrator-rerun split (option b) is deferred.
+    Centroid is left NULL (rebuilt on a re-plan)."""
+    source = get_cluster(source_id)
+    if not source:
+        raise ValueError("source cluster not found")
+    client = get_service_client()
+    new_id = str(uuid.uuid4())
+    primary = new_primary_id if new_primary_id in keyword_ids else (
+        keyword_ids[0] if keyword_ids else None
+    )
+    client.table("clusters").insert(
+        {
+            "id": new_id,
+            "topic_id": source["topic_id"],
+            "name": new_name,
+            "primary_keyword_id": primary,
+            "intent": source["intent"],
+            "is_user_edited": True,
+        }
+    ).execute()
+    # Only keywords currently in the source move (guards against stealing peers).
+    client.table("keywords").update(
+        {"cluster_id": new_id, "is_primary_for_cluster": False}
+    ).eq("cluster_id", source_id).in_("id", keyword_ids).execute()
+    if primary:
+        client.table("keywords").update({"is_primary_for_cluster": True}).eq(
+            "id", primary
+        ).eq("cluster_id", new_id).execute()
+    # If the source's primary moved to the new article, the source loses its primary.
+    if source.get("primary_keyword_id") in keyword_ids:
+        client.table("clusters").update({"primary_keyword_id": None}).eq(
+            "id", source_id
+        ).execute()
+    client.table("clusters").update(
+        {"centroid_embedding": None, "is_user_edited": True}
+    ).eq("id", source_id).execute()
+    return get_cluster(new_id)
+
+
+def _remove_cluster_from_peers(
+    session_id: str, removed_ids: list[str], replacement: str | None = None
+) -> None:
+    """Scrub deleted/merged cluster ids out of every other cluster's
+    peer_article_links (uuid[]), optionally substituting the merge survivor.
+    Keeps the Cluster View's "Links to" from showing dangling ids."""
+    topic_ids = [t["id"] for t in list_topics(session_id)]
+    if not topic_ids:
+        return
+    client = get_service_client()
+    rows = (
+        client.table("clusters")
+        .select("id, peer_article_links")
+        .in_("topic_id", topic_ids)
+        .execute()
+    ).data
+    removed = set(removed_ids)
+    for r in rows or []:
+        links = r.get("peer_article_links") or []
+        if not any(lid in removed for lid in links):
+            continue
+        new_links: list[str] = []
+        for lid in links:
+            sub = replacement if lid in removed else lid
+            if sub and sub != r["id"] and sub not in new_links:
+                new_links.append(sub)
+        client.table("clusters").update({"peer_article_links": new_links}).eq(
+            "id", r["id"]
+        ).execute()
+
+
+# ---- M7b coverage-gap decisions (PRD §9.2) --------------------------------
+def get_gap(gap_id: str) -> dict | None:
+    res = (
+        get_service_client()
+        .table("coverage_gaps")
+        .select("id, topic_id, suggested_title, target_keyword, rationale, status, "
+                "accepted_cluster_id, created_at")
+        .eq("id", gap_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def accept_gap(gap_id: str) -> dict:
+    """Accept a coverage gap: create an empty placeholder article in the gap's
+    topic (no keywords yet — the Brief Generator fills it) and mark the gap
+    accepted, pointing at the new cluster (§9.2)."""
+    gap = get_gap(gap_id)
+    if not gap:
+        raise ValueError("gap not found")
+    client = get_service_client()
+    new_id = str(uuid.uuid4())
+    client.table("clusters").insert(
+        {
+            "id": new_id,
+            "topic_id": gap["topic_id"],
+            "name": gap["suggested_title"],
+            "is_gap_placeholder": True,
+            "is_user_edited": True,
+        }
+    ).execute()
+    client.table("coverage_gaps").update(
+        {"status": "accepted", "accepted_cluster_id": new_id}
+    ).eq("id", gap_id).execute()
+    return get_cluster(new_id)
+
+
+def dismiss_gap(gap_id: str) -> None:
+    get_service_client().table("coverage_gaps").update({"status": "dismissed"}).eq(
+        "id", gap_id
+    ).execute()
+
+
+# ---- M7b session-browser mutations (PRD §9.4) -----------------------------
+def move_session(session_id: str, project_id: str) -> dict:
+    return update_session(session_id, {"project_id": project_id})
+
+
+def set_session_archived(session_id: str, archived: bool) -> dict:
+    return update_session(session_id, {"archived": archived})
+
+
+def delete_session(session_id: str) -> None:
+    """Hard-delete a session; topics/keywords/clusters cascade (FK on delete
+    cascade). Irreversible — the API gates this behind explicit user intent."""
+    get_service_client().table("sessions").delete().eq("id", session_id).execute()

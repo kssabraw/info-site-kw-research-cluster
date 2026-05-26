@@ -135,6 +135,30 @@ def _require_session(user: AuthedUser, session_id: str) -> dict:
     return session
 
 
+def _require_cluster(user: AuthedUser, cluster_id: str) -> tuple[dict, str]:
+    """Resolve a cluster and verify the caller may edit it (via its session's RLS).
+    Returns (cluster, session_id)."""
+    cluster = store.get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    sid = store.cluster_session_id(cluster_id)
+    if not sid:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    _require_session(user, sid)
+    return cluster, sid
+
+
+def _require_gap(user: AuthedUser, gap_id: str) -> dict:
+    gap = store.get_gap(gap_id)
+    if not gap:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap not found")
+    topic = store.get_topic(gap["topic_id"])
+    if not topic:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap not found")
+    _require_session(user, topic["session_id"])
+    return gap
+
+
 def _resolve_peer_terms(session: dict, body) -> tuple[list[str], list[str]]:
     """Seed terms (seed + aliases) and peer terms for the peer-entity filter.
     Request-body overrides win (for sessions whose grounding predates the lists),
@@ -583,6 +607,47 @@ class PlanArticlesBody(BaseModel):
     direct: bool = False
 
 
+# ---- M7b editing bodies (PRD §9.1 / §9.2 / §9.4) --------------------------
+_INTENT_RE = "^(informational|commercial|transactional|comparison|navigational)$"
+
+
+class ClusterEditBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+    intent: str | None = Field(default=None, pattern=_INTENT_RE)
+    suggested_h2s: list[str] | None = None
+
+
+class PromotePrimaryBody(BaseModel):
+    keyword_id: str = Field(min_length=1)
+
+
+class MergeClustersBody(BaseModel):
+    survivor_id: str = Field(min_length=1)
+    merged_ids: list[str] = Field(min_length=1)
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class SplitClusterBody(BaseModel):
+    keyword_ids: list[str] = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=300)
+    primary_keyword_id: str | None = None
+
+
+class KeywordStatusBody(BaseModel):
+    keyword_ids: list[str] = Field(min_length=1)
+    status: str = Field(pattern="^(active|excluded|covered)$")
+
+
+class KeywordMoveBody(BaseModel):
+    keyword_ids: list[str] = Field(min_length=1)
+    cluster_id: str | None = None  # None -> Unassigned bucket
+
+
+class SessionPatchBody(BaseModel):
+    project_id: str | None = None
+    archived: bool | None = None
+
+
 @router.post("/sessions/{session_id}/plan-articles", status_code=status.HTTP_202_ACCEPTED)
 def plan_articles(
     session_id: str,
@@ -611,13 +676,122 @@ def plan_articles(
 
 @router.get("/sessions/{session_id}/clusters")
 def get_clusters(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
-    """Read-only article plan + coverage gaps for a session (M5 verification /
-    minimal UI; full editing views are M7)."""
+    """Read-only article plan + coverage gaps for a session."""
     _require_session(user, session_id)
     return {
         "clusters": store.list_clusters(session_id),
         "coverage_gaps": store.list_coverage_gaps(session_id),
     }
+
+
+# ---- M7b cluster editing (PRD §9.2) ---------------------------------------
+@router.patch("/clusters/{cluster_id}")
+def edit_cluster(
+    cluster_id: str, body: ClusterEditBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Rename an article, change its intent, or edit its H2 outline (§9.2)."""
+    _require_cluster(user, cluster_id)
+    fields: dict = {}
+    if body.name is not None:
+        fields["name"] = body.name.strip()
+    if body.intent is not None:
+        fields["intent"] = body.intent
+    if body.suggested_h2s is not None:
+        fields["suggested_h2s"] = [h.strip() for h in body.suggested_h2s if h.strip()]
+    if not fields:
+        return store.get_cluster(cluster_id)
+    return store.update_cluster(cluster_id, fields)
+
+
+@router.post("/clusters/{cluster_id}/promote-primary")
+def promote_primary(
+    cluster_id: str, body: PromotePrimaryBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Make a supporting keyword the article's primary; the old primary demotes
+    to supporting (§9.2)."""
+    _require_cluster(user, cluster_id)
+    return store.promote_primary(cluster_id, body.keyword_id)
+
+
+@router.delete("/clusters/{cluster_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_cluster(cluster_id: str, user: AuthedUser = Depends(require_user)) -> None:
+    """Delete an article; its keywords drop to the topic's Unassigned bucket — they
+    are never destroyed (§9.2)."""
+    _require_cluster(user, cluster_id)
+    store.delete_cluster(cluster_id)
+
+
+@router.post("/clusters/merge")
+def merge_clusters(
+    body: MergeClustersBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Merge two or more articles into one (§9.2). All must belong to one session
+    the caller owns."""
+    _, survivor_sid = _require_cluster(user, body.survivor_id)
+    for cid in body.merged_ids:
+        _, sid = _require_cluster(user, cid)
+        if sid != survivor_sid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="All merged articles must belong to the same session.",
+            )
+    return store.merge_clusters(survivor_sid, body.survivor_id, body.merged_ids, name=body.name)
+
+
+@router.post("/clusters/{cluster_id}/split")
+def split_cluster(
+    cluster_id: str, body: SplitClusterBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Split a subset of an article's keywords into a new article (§9.2, manual
+    selection). Returns the new article."""
+    _require_cluster(user, cluster_id)
+    return store.split_cluster(
+        cluster_id, body.keyword_ids, body.name.strip(), body.primary_keyword_id
+    )
+
+
+# ---- M7b keyword bulk actions (PRD §9.1) ----------------------------------
+@router.post("/sessions/{session_id}/keywords/status")
+def bulk_keyword_status(
+    session_id: str, body: KeywordStatusBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Bulk exclude / mark-covered / restore-to-active for selected keywords (§9.1).
+    Scoped to the session, so only its keywords are affected."""
+    _require_session(user, session_id)
+    updated = store.set_keywords_status(session_id, body.keyword_ids, body.status)
+    return {"updated": updated}
+
+
+@router.post("/sessions/{session_id}/keywords/move")
+def bulk_keyword_move(
+    session_id: str, body: KeywordMoveBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Move selected keywords to another article, or to Unassigned (cluster_id
+    null) (§9.1 / §9.2)."""
+    _require_session(user, session_id)
+    if body.cluster_id is not None:
+        _, sid = _require_cluster(user, body.cluster_id)
+        if sid != session_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target article belongs to a different session.",
+            )
+    updated = store.move_keywords(session_id, body.keyword_ids, body.cluster_id)
+    return {"updated": updated}
+
+
+# ---- M7b coverage-gap decisions (PRD §9.2) --------------------------------
+@router.post("/coverage-gaps/{gap_id}/accept")
+def accept_gap(gap_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Accept a flagged gap -> create an empty placeholder article for it (§9.2)."""
+    _require_gap(user, gap_id)
+    return store.accept_gap(gap_id)
+
+
+@router.post("/coverage-gaps/{gap_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_gap(gap_id: str, user: AuthedUser = Depends(require_user)) -> None:
+    _require_gap(user, gap_id)
+    store.dismiss_gap(gap_id)
 
 
 # ---- M6 site architecture (PRD §7.11) -------------------------------------
@@ -692,16 +866,45 @@ def get_keywords(
 # ---- Session browser (PRD §9.4) -------------------------------------------
 @router.get("/projects/{project_id}/sessions")
 def list_project_sessions(
-    project_id: str, user: AuthedUser = Depends(require_user)
+    project_id: str,
+    user: AuthedUser = Depends(require_user),
+    include_archived: bool = False,
 ) -> list[dict]:
     """Sessions under a project, newest first, for the Session Browser (§9.4).
     Each carries seed, status, coverage mode, cluster count, and timestamps so the
-    UI can resume a session. RLS-scoped to what the caller may see."""
+    UI can resume a session. RLS-scoped to what the caller may see. Archived
+    sessions are hidden unless include_archived=true."""
     if not store.project_visible_to_user(user.access_token, project_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
-    return store.list_sessions(user.access_token, project_id)
+    return store.list_sessions(user.access_token, project_id, include_archived=include_archived)
+
+
+@router.patch("/sessions/{session_id}")
+def patch_session(
+    session_id: str, body: SessionPatchBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Session-browser mutations (§9.4): archive/unarchive, or move to another
+    project the caller owns."""
+    _require_session(user, session_id)
+    if body.project_id is not None:
+        if not store.project_visible_to_user(user.access_token, body.project_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Target project not found"
+            )
+        store.move_session(session_id, body.project_id)
+    if body.archived is not None:
+        store.set_session_archived(session_id, body.archived)
+    return {"session_id": session_id, "moved": body.project_id is not None,
+            "archived": body.archived}
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(session_id: str, user: AuthedUser = Depends(require_user)) -> None:
+    """Permanently delete a session and all its data (§9.4). Irreversible."""
+    _require_session(user, session_id)
+    store.delete_session(session_id)
 
 
 # ---- Topic review actions (PRD §7.1.4) ------------------------------------
