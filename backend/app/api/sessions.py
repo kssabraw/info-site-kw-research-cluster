@@ -23,6 +23,7 @@ from app.pipeline.orchestrate import (
     routing_diagnostic,
     simulate_best_silo_clustering,
 )
+from app.pipeline.recursive_fanout import count_sub_anchors, derive_sub_anchors
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -40,6 +41,7 @@ class CreateSessionBody(BaseModel):
     disambiguation_hint: str | None = None
     topic_count: int = Field(default=5, ge=3, le=10)
     coverage_mode: str = Field(default="standard", pattern="^(standard|comprehensive)$")
+    recursive_fanout: bool = False
 
 
 class DisambiguateBody(BaseModel):
@@ -71,6 +73,21 @@ class RegateBody(BaseModel):
     clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
     # Peer-entity filter overrides (for testing on sessions whose grounding ran
     # before this existed). Omitted -> use the session's stored lists.
+    aliases: list[str] | None = None
+    peer_entities: list[str] | None = None
+
+
+class FanoutBody(BaseModel):
+    # Recursive Fanout (PRD §7.7). RF is a 5x-8x cost step, so it will not spend
+    # unless `confirm_cost` is true — an unconfirmed call returns the cost
+    # estimate and the sub-anchor plan instead of starting. (The VA approval
+    # workflow is M9; until then owner-direct runs gate on this explicit flag.)
+    confirm_cost: bool = False
+    # Same per-call gate/clustering overrides as /regate (the enlarged pool is
+    # gated + clustered after the recursive expansion).
+    relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
     aliases: list[str] | None = None
     peer_entities: list[str] | None = None
 
@@ -201,7 +218,7 @@ def create_session(
         settings={
             "topic_count": body.topic_count,
             "coverage_mode": body.coverage_mode,
-            "recursive_fanout": False,
+            "recursive_fanout": body.recursive_fanout,
             "enrich_with_metrics": False,
         },
     )
@@ -384,6 +401,72 @@ def regate_session(
         "clustering_resolution": resolution,
         "peer_entities": peer_terms,
     }
+
+
+@router.post("/sessions/{session_id}/fanout", status_code=status.HTTP_202_ACCEPTED)
+def fanout_session(
+    session_id: str, body: FanoutBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Recursive Fanout (PRD §7.7, Phase 1). Re-expands each silo's top cluster
+    representatives as sub-anchors, then re-gates + re-clusters the enlarged pool.
+    Requires a prior /expand (it reads the first pass's clustering log for the
+    sub-anchors). Because RF costs 5x-8x a base run, an unconfirmed call returns
+    the cost estimate + sub-anchor plan and does NOT spend; set
+    `confirm_cost: true` to start. Runs in the background — poll GET /summary."""
+    session = _require_session(user, session_id)
+    bind_session_id(session_id)
+    clustering_log = session.get("statistical_clustering_log") or {}
+    topics = store.list_topics(session_id)
+    topic_ids = [t["id"] for t in topics]
+    sub_anchors = derive_sub_anchors(
+        clustering_log=clustering_log,
+        topic_ids=topic_ids,
+        per_silo=get_settings().fanout_subanchors_per_silo,
+    )
+    total = count_sub_anchors(sub_anchors)
+    if total == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No sub-anchors to fan out. Run /expand first so the silos have "
+            "statistical groupings to deepen.",
+        )
+
+    s = get_settings()
+    estimate = {
+        "sub_anchors_total": total,
+        "sub_anchors_per_silo": {
+            t["name"]: len(sub_anchors.get(t["id"], [])) for t in topics
+        },
+        "cost_multiplier_range": [s.fanout_cost_multiplier_low, s.fanout_cost_multiplier_high],
+        "note": "Recursive Fanout costs roughly 5x-8x a base run (PRD §7.7). "
+        "Re-send with confirm_cost=true to start.",
+    }
+    if not body.confirm_cost:
+        return {"status": "estimate", "session_id": session_id, "estimate": estimate}
+
+    if not store.try_mark_running(session_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this session.",
+        )
+    seed_terms, peer_terms = _resolve_peer_terms(session, body)
+    threshold = (
+        body.relevance_threshold
+        if body.relevance_threshold is not None
+        else s.relevance_threshold
+    )
+    edge = (
+        body.clustering_edge_threshold
+        if body.clustering_edge_threshold is not None
+        else s.clustering_edge_threshold
+    )
+    resolution = (
+        body.clustering_resolution
+        if body.clustering_resolution is not None
+        else s.clustering_resolution
+    )
+    jobs.submit_fanout(session_id, threshold, edge, resolution, seed_terms, peer_terms)
+    return {"status": "running", "session_id": session_id, "estimate": estimate}
 
 
 @router.post("/sessions/{session_id}/routing-diagnostic")

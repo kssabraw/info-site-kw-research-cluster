@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     # clustered, the long-tail remainder stays active but unclustered.
     clustering_max_nodes: int = 2500
 
+    # Recursive Fanout (PRD §7.7, Phase 1). RF deepens each silo by re-expanding
+    # its top cluster representatives as sub-anchors. Mining at this level is off
+    # (M5 finding: mining adds noise the gate rejects).
+    fanout_subanchors_per_silo: int = 6      # top-N cluster reps re-expanded per silo
+    fanout_subanchor_max_workers: int = 8
+    fanout_time_budget_s: int = 240
+    # Cost surfaced to the owner before an RF run (§7.7: 5x-8x the base run).
+    fanout_cost_multiplier_low: float = 5.0
+    fanout_cost_multiplier_high: float = 8.0
+
     # Observability (PRD §16.3)
     log_level: str = "INFO"
 

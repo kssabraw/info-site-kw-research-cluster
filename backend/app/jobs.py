@@ -32,6 +32,11 @@ from app.pipeline.orchestrate import (
     gate_and_cluster,
     run_refinement_pipeline,
 )
+from app.pipeline.recursive_fanout import (
+    derive_sub_anchors,
+    merge_into_pool,
+    run_recursive_expansion,
+)
 from app.storage import silo as store
 
 logger = logging.getLogger(__name__)
@@ -60,6 +65,18 @@ def submit_regate(
     peer_terms: list[str],
 ) -> None:
     _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold,
+                     resolution, seed_terms, peer_terms)
+
+
+def submit_fanout(
+    session_id: str,
+    threshold: float,
+    edge_threshold: float,
+    resolution: float,
+    seed_terms: list[str],
+    peer_terms: list[str],
+) -> None:
+    _EXECUTOR.submit(run_fanout_job, session_id, threshold, edge_threshold,
                      resolution, seed_terms, peer_terms)
 
 
@@ -257,5 +274,83 @@ def run_regate_job(
         logger.error(
             "step_failed",
             extra={"event": "step_failed", "step": "regate_job", "reason": repr(exc)},
+        )
+        store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
+
+
+def run_fanout_job(
+    session_id: str, threshold: float, edge_threshold: float, resolution: float,
+    seed_terms: list[str], peer_terms: list[str],
+) -> None:
+    """§7.7 Recursive Fanout (Phase 1): re-expand each silo's top cluster
+    representatives as sub-anchors, merge the new keywords into the stored pool,
+    then re-run the gate + clustering on the enlarged pool. Mining stays off at
+    this level. Depth is capped at 1 — this never recurses on its own output."""
+    bind_session_id(session_id)
+    try:
+        session = store.get_session(session_id)
+        topics = store.list_topics(session_id)
+        topic_names = {t["id"]: t["name"] for t in topics}
+        topic_ids = [t["id"] for t in topics]
+        s = get_settings()
+        seed = session["seed_keyword"]
+
+        sub_anchors = derive_sub_anchors(
+            clustering_log=session.get("statistical_clustering_log") or {},
+            topic_ids=topic_ids,
+            per_silo=s.fanout_subanchors_per_silo,
+        )
+        recursive_pool, degraded, _timed_out = run_recursive_expansion(
+            seed=seed,
+            sub_anchors=sub_anchors,
+            dfs=get_dataforseo(),
+            keyword_ideas_limit=s.keyword_ideas_limit,
+            paa_tier1_seeds=s.paa_tier1_seeds,
+            paa_tier2_cap=s.paa_tier2_cap,
+            autocomplete_max=s.autocomplete_max,
+            max_workers=s.fanout_subanchor_max_workers,
+            time_budget_s=s.fanout_time_budget_s,
+        )
+
+        pool = store.list_all_keyword_pool(session_id)
+        merged = merge_into_pool(pool, recursive_pool)
+        topic_embeddings = store.get_topic_embeddings(session_id)
+        gc = gate_and_cluster(
+            per_topic_lists=merged,
+            topic_names=topic_names,
+            topic_embeddings=topic_embeddings,
+            embed_fn=get_llm().embed,
+            relevance_threshold=threshold,
+            relevance_embed_batch=s.relevance_embed_batch,
+            clustering_edge_threshold=edge_threshold,
+            clustering_resolution=resolution,
+            clustering_max_nodes=s.clustering_max_nodes,
+            seed_terms=seed_terms,
+            peer_terms=peer_terms,
+            assign_best_silo=s.relevance_assign_best_silo,
+        )
+        store.reset_article_planning(session_id)
+        store.delete_keywords_for_session(session_id)
+        store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        new_settings = {**(session.get("settings") or {}), "recursive_fanout": True}
+        store.update_session(
+            session_id,
+            {
+                "settings": new_settings,
+                "statistical_clustering_log": gc.clustering_log,
+                "orchestrator_log": None,
+                "status": "awaiting_article_planning",
+            },
+        )
+        logger.info(
+            "step_complete",
+            extra={"event": "step_complete", "step": "fanout_job",
+                   "sub_anchors": sum(len(v) for v in sub_anchors.values()),
+                   "degraded": bool(degraded), **gc.counts()},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "fanout_job", "reason": repr(exc)},
         )
         store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
