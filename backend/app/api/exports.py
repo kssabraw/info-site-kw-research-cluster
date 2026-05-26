@@ -50,14 +50,18 @@ def _require_session(user: AuthedUser, session_id: str) -> dict:
     return session
 
 
+def _download_filename(fmt: str) -> str:
+    """Friendly attachment name handed to Storage at signing time so the browser
+    downloads (rather than displays) the file, cross-origin-reliably."""
+    return f"fanout-{fmt}.{_EXT_BY_FORMAT.get(fmt, 'csv')}"
+
+
 def _build_payload(session_id: str, fmt: str) -> bytes:
     """Build the CSV/zip bytes for a session in the requested format from current
     Postgres state. Raises HTTP 400 if the format's prerequisite data is absent
     (e.g. an architecture export with no generated architecture)."""
-    topics = store.list_topics(session_id)
-    topic_name = {t["id"]: t["name"] for t in topics}
-
     if fmt in ("flat", "topic_grouped"):
+        topic_name = {t["id"]: t["name"] for t in store.list_topics(session_id)}
         keywords = store.list_surviving_keywords(session_id)
         clusters = store.list_clusters(session_id)
         cluster_name = {c["id"]: c["name"] for c in clusters}
@@ -124,9 +128,15 @@ def create_export(
     object_path = f"{user.id}/{session_id}/{snapshot_timestamp()}-{uuid.uuid4().hex[:8]}.{ext}"
 
     export_store.upload_snapshot(object_path, data, content_type)
-    row = export_store.insert_export(session_id, user.id, format, object_path)
+    # Record the snapshot; if that fails, remove the just-uploaded object so we
+    # don't leave an orphan in Storage with no tracking row.
+    try:
+        row = export_store.insert_export(session_id, user.id, format, object_path)
+    except Exception:
+        export_store.remove_object(object_path)
+        raise
     download_url = export_store.create_signed_url(
-        object_path, get_settings().csv_signed_url_ttl_s
+        object_path, get_settings().csv_signed_url_ttl_s, _download_filename(format)
     )
     logger.info(
         "csv_export_created",
@@ -163,7 +173,9 @@ def download_export(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export not found")
     download_url = export_store.create_signed_url(
-        row["storage_path"], get_settings().csv_signed_url_ttl_s
+        row["storage_path"],
+        get_settings().csv_signed_url_ttl_s,
+        _download_filename(row["format"]),
     )
     return {
         "export_id": row["id"],

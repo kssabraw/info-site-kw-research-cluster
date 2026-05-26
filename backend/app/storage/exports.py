@@ -38,14 +38,21 @@ def upload_snapshot(object_path: str, data: bytes, content_type: str) -> None:
     )
 
 
-def create_signed_url(object_path: str, expires_in: int) -> str:
+def create_signed_url(
+    object_path: str, expires_in: int, download_name: str | None = None
+) -> str:
     """Mint a time-limited signed download URL for a snapshot (PRD §12: "served
     from Storage"). Re-issued fresh on every download (an old URL may have
-    expired). Normalizes the storage3 response shape across versions and resolves
-    a relative path against the project URL. Deploy-only path."""
-    res = get_service_client().storage.from_(BUCKET).create_signed_url(
-        object_path, expires_in
-    )
+    expired). When `download_name` is given, Storage stamps the response with a
+    `Content-Disposition: attachment; filename=…` so the browser downloads rather
+    than displays — set server-side at signing time so it holds cross-origin.
+    Normalizes the storage3 response shape across versions and resolves a relative
+    path against the project URL. Deploy-only path."""
+    bucket = get_service_client().storage.from_(BUCKET)
+    if download_name:
+        res = bucket.create_signed_url(object_path, expires_in, {"download": download_name})
+    else:
+        res = bucket.create_signed_url(object_path, expires_in)
     url = None
     if isinstance(res, dict):
         url = res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
@@ -54,6 +61,19 @@ def create_signed_url(object_path: str, expires_in: int) -> str:
     if url.startswith("/"):
         url = get_settings().supabase_url.rstrip("/") + url
     return url
+
+
+def remove_object(object_path: str) -> None:
+    """Best-effort delete of a snapshot object (used to clean up after a failed
+    export so Storage doesn't accumulate orphans). Swallows errors — the caller is
+    already handling a failure and a leftover object is harmless. Deploy-only."""
+    try:
+        get_service_client().storage.from_(BUCKET).remove([object_path])
+    except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
+        logger.warning(
+            "csv_snapshot_cleanup_failed",
+            extra={"event": "csv_snapshot_cleanup_failed", "reason": repr(exc)},
+        )
 
 
 def insert_export(

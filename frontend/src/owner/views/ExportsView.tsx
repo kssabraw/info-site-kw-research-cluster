@@ -19,18 +19,10 @@ const FORMAT_LABELS: Record<CsvExportFormat, string> = {
   architecture: "Site architecture",
 };
 
-const EXT: Record<CsvExportFormat, string> = {
-  flat: "csv",
-  topic_grouped: "zip",
-  architecture: "csv",
-};
-
-function openDownload(url: string, format: CsvExportFormat) {
-  // Hint Storage to serve as an attachment with a friendly name (a non-signed
-  // query param Supabase honors; harmless if ignored).
-  const filename = `fanout-${format}.${EXT[format]}`;
-  const sep = url.includes("?") ? "&" : "?";
-  window.open(`${url}${sep}download=${encodeURIComponent(filename)}`, "_blank", "noopener");
+function openDownload(url: string) {
+  // The signed URL already carries a Content-Disposition: attachment (set
+  // server-side at signing time), so opening it triggers a download.
+  window.open(url, "_blank", "noopener");
 }
 
 export function ExportsView() {
@@ -45,7 +37,7 @@ export function ExportsView() {
   const gen = useMutation({
     mutationFn: (format: CsvExportFormat) => createExport(sessionId, format),
     onSuccess: (res) => {
-      openDownload(res.download_url, res.format);
+      openDownload(res.download_url);
       qc.invalidateQueries({ queryKey: ["exports", sessionId] });
     },
     onError: (e: Error) => alert(e.message),
@@ -53,7 +45,7 @@ export function ExportsView() {
 
   const redownload = useMutation({
     mutationFn: (exportId: string) => downloadExport(exportId),
-    onSuccess: (res) => openDownload(res.download_url, res.format),
+    onSuccess: (res) => openDownload(res.download_url),
     onError: (e: Error) => alert(e.message),
   });
 

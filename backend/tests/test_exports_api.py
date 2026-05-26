@@ -45,7 +45,8 @@ def _capture_storage(monkeypatch):
                         lambda sid, uid, fmt, path: calls["insert"].append((sid, uid, fmt, path))
                         or {"id": "e1", "generated_at": "2026-05-28T00:00:00Z"})
     monkeypatch.setattr(exports_api.export_store, "create_signed_url",
-                        lambda path, ttl: calls["sign"].append((path, ttl)) or "https://signed/url")
+                        lambda path, ttl, download_name=None:
+                        calls["sign"].append((path, ttl, download_name)) or "https://signed/url")
     return calls
 
 
@@ -65,6 +66,24 @@ def test_create_flat_export_uploads_records_and_signs(client, monkeypatch):
     assert calls["upload"][0][0].startswith("u-1/s1/")  # {user}/{session}/...
     assert calls["insert"][0] == ("s1", "u-1", "flat", body["storage_path"])
     assert len(calls["sign"]) == 1
+    # The signed URL is stamped with a friendly attachment filename (server-side).
+    assert calls["sign"][0][2] == "fanout-flat.csv"
+
+
+def test_create_cleans_up_object_when_insert_fails(client, monkeypatch):
+    # If recording the export row fails after the upload, the orphan object is
+    # removed from Storage and the error propagates (no silent partial state).
+    _visible(monkeypatch)
+    _stub_flat_data(monkeypatch)
+    calls = _capture_storage(monkeypatch)
+    removed = {}
+    monkeypatch.setattr(exports_api.export_store, "insert_export",
+                        lambda *a: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(exports_api.export_store, "remove_object",
+                        lambda path: removed.update(path=path))
+    with pytest.raises(RuntimeError):
+        client.post("/sessions/s1/export?format=flat")
+    assert removed["path"] == calls["upload"][0][0]  # the uploaded object was cleaned up
 
 
 def test_create_topic_grouped_is_zip(client, monkeypatch):
@@ -145,7 +164,8 @@ def test_download_reissues_fresh_signed_url(client, monkeypatch):
                                             "storage_path": "u-1/s1/x.csv", "generated_at": "t"})
     signed = {}
     monkeypatch.setattr(exports_api.export_store, "create_signed_url",
-                        lambda path, ttl: signed.update(path=path) or "https://fresh/url")
+                        lambda path, ttl, download_name=None:
+                        signed.update(path=path, name=download_name) or "https://fresh/url")
     r = client.get("/exports/e1/download")
     assert r.status_code == 200
     assert r.json()["download_url"] == "https://fresh/url"
