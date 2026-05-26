@@ -179,6 +179,7 @@ export interface PipelineSummary {
     collisions: number;
     topics: SummaryPlanTopic[];
   } | null;
+  architecture: { generated_at: string; is_user_edited: boolean } | null;
 }
 
 export interface Keyword {
@@ -275,3 +276,48 @@ export const getKeywords = (id: string, topicId: string, limit = 200, status = "
     `/sessions/${id}/keywords?topic_id=${encodeURIComponent(topicId)}` +
       `&status=${encodeURIComponent(status)}&limit=${limit}`,
   );
+
+// M6 site architecture (PRD §7.11). One pillar per article-bearing silo + the
+// internal linking matrix. The full two-panel Architecture View is M7.
+export interface ArchitecturePillar {
+  topic_id: string;
+  silo_name: string;
+  title: string;
+  target_keyword: string;
+  summary: string;
+  h2_outline: string[];
+  supporting_article_ids: string[];
+  lateral_pillar_links: string[];
+  degraded: boolean;
+}
+
+export interface ArchitectureSupportingArticle {
+  article_id: string;
+  name: string;
+  intent: string;
+  parent_pillar_topic_id: string;
+  lateral_article_links: string[];
+}
+
+export interface ArchitectureJson {
+  seed_keyword: string;
+  detected_audience: string;
+  pillars: ArchitecturePillar[];
+  supporting_articles: ArchitectureSupportingArticle[];
+  skipped_silos: string[];
+}
+
+export interface SiteArchitecture {
+  session_id: string;
+  architecture_json: ArchitectureJson;
+  generated_at: string;
+  is_user_edited: boolean;
+}
+
+// Kicks off generation in the background; poll getSummary until
+// summary.architecture is non-null, then call getArchitecture.
+export const generateArchitecture = (id: string) =>
+  request<AsyncAck>(`/sessions/${id}/architecture`, { method: "POST" });
+
+export const getArchitecture = (id: string) =>
+  request<SiteArchitecture>(`/sessions/${id}/architecture`);
