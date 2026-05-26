@@ -1,12 +1,21 @@
 import type { SummaryCost } from "./api";
 
+// Postgres `numeric` can arrive as a string through the API, so coerce before
+// any arithmetic / .toFixed (a string .toFixed would throw and white-screen the
+// whole view). Returns null for null/undefined/non-finite.
+function toNum(v: number | string | null | undefined): number | null {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Live cost banner (PRD §8.4 / §15.1): real cost accumulated so far vs. the
 // pre-run estimate. The summary poll refreshes `actual_cost_usd` as the
 // background job flushes it (~10s cadence), so this climbs during a run.
 export function CostBanner({ cost, running }: { cost: SummaryCost | undefined; running: boolean }) {
   if (!cost) return null;
-  const actual = cost.actual_cost_usd;
-  const estimate = cost.estimated_cost_usd;
+  const actual = toNum(cost.actual_cost_usd);
+  const estimate = toNum(cost.estimated_cost_usd);
   // Nothing to show before any spend and with no estimate (e.g. a fresh session).
   if (actual == null && estimate == null) return null;
 

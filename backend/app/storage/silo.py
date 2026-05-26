@@ -23,6 +23,18 @@ def _norm(kw: str) -> str:
     return " ".join((kw or "").strip().lower().split())
 
 
+def _to_float(v) -> float | None:
+    """Coerce a Postgres `numeric` (which the client may hand back as a Decimal or
+    string) to a plain float for the JSON API, so the frontend never gets a string
+    where it expects a number. None stays None."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _vector_literal(vector: list[float]) -> str:
     # pgvector accepts its text form "[a,b,c]".
     return "[" + ",".join(repr(float(x)) for x in vector) + "]"
@@ -142,9 +154,11 @@ def get_session_debug(session_id: str) -> dict:
     return {
         "status": session.get("status"),
         "seed_keyword": session.get("seed_keyword"),
-        "estimated_cost_usd": session.get("estimated_cost_usd"),
-        "actual_cost_usd": session.get("actual_cost_usd"),
-        "cost_breakdown": session.get("cost_breakdown") or {},
+        "estimated_cost_usd": _to_float(session.get("estimated_cost_usd")),
+        "actual_cost_usd": _to_float(session.get("actual_cost_usd")),
+        "cost_breakdown": {
+            k: _to_float(v) for k, v in (session.get("cost_breakdown") or {}).items()
+        },
         "statistical_clustering_log": session.get("statistical_clustering_log"),
         "orchestrator_log": session.get("orchestrator_log"),
     }
@@ -740,16 +754,18 @@ def get_pipeline_summary(session_id: str) -> dict:
     # show the estimate, and the Owner's note on a reject decision.
     approval = {
         "required": bool(session.get("approval_required")),
-        "estimated_cost_usd": session.get("estimated_cost_usd"),
+        "estimated_cost_usd": _to_float(session.get("estimated_cost_usd")),
         "note": session.get("approval_note"),
         "decided_at": session.get("approval_decision_at"),
     }
     # Live cost (PRD §8.4 / §16.4) — surfaced in every payload (incl. the cheap
     # running one) so the cost banner updates as the background job flushes.
     cost = {
-        "estimated_cost_usd": session.get("estimated_cost_usd"),
-        "actual_cost_usd": session.get("actual_cost_usd"),
-        "breakdown": session.get("cost_breakdown") or {},
+        "estimated_cost_usd": _to_float(session.get("estimated_cost_usd")),
+        "actual_cost_usd": _to_float(session.get("actual_cost_usd")),
+        "breakdown": {
+            k: _to_float(v) for k, v in (session.get("cost_breakdown") or {}).items()
+        },
     }
     # A run-in-progress, or a session parked at the approval gate, has no
     # meaningful expansion/plan counts yet — return the cheap status-only payload
