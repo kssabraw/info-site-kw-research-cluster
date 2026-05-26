@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     # + this many additional silos; the seed is always mined and never counts.
     va_deep_mine_max_silos: int = 2
 
+    # M10 CSV export (PRD §12). Downloads are served via a time-limited signed URL
+    # the backend mints from the private csv-snapshots bucket; this is its TTL.
+    # Re-issued fresh on every download, so a short window is fine.
+    csv_signed_url_ttl_s: int = 3600
+
     # Observability (PRD §16.3)
     log_level: str = "INFO"
 

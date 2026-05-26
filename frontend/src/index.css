@@ -1269,3 +1269,11 @@ body {
   margin: 0;
   font-weight: 600;
 }
+
+/* ---------- M10: CSV export view (§12) ---------- */
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

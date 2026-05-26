@@ -144,12 +144,112 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M10 — CSV export (PRD §15.1 / §12): next.** Three formats (flat keyword list,
-topic-grouped, site-architecture); Postgres-live generation; snapshots written to
-Supabase Storage under `csv-snapshots/{user_id}/{session_id}/{ts}.csv`; a
-`csv_exports` table tracking who exported what when; per-session Exports tab + re-
-download. Export is in the §11.2 capability matrix for both roles. Stop for a human
-go-ahead before building (milestone discipline).
+**M11 — Cost confirmation + observability (PRD §15.1 / §16): next.** Live cost
+banner during pipeline execution; per-step cost attribution logged
+(`actual_cost_usd` tracked live); structured logs (§16.3) flowing; an Owner debug
+view exposing `statistical_clustering_log` + `orchestrator_log` for any session
+(§15.3 #8). Note much async/structured-logging groundwork was pulled forward in
+M5. Stop for a human go-ahead before building (milestone discipline).
+
+---
+
+**M10 — CSV export (PRD §15.1 / §12): complete & merged to `main`
+(2026-05-28, per owner instruction).** Built on `claude/wonderful-allen-oTKaO`
+(this session's pinned branch — *not* an `m10-…` branch, per the session task
+instruction), merged `--no-ff` (remote `main` was at the M9 merge `1e0db30`; the
+merge added the M10 commits cleanly, no conflicts). Backend **165 tests pass**
+(139 prior + 14 csv-builder + 12 export-API), ruff clean, import smoke OK; frontend
+builds strict-clean (tsc + vite). **Storage upload, signed URLs, and the live
+download round-trip are NOT validated** (sandbox egress blocked, standing
+constraint) — validate on the deployed stack (checklist in `handoff.md §2`).
+
+**Three formats, generated live from current Postgres state** (so user edits /
+exclusions are reflected), all built by **pure functions** in
+`backend/app/csv_export.py` (fully unit-tested, no egress):
+- **flat** — one row per keyword, the §9.1 Table View columns (keyword, topic,
+  cluster, source(s), volume, kd, cpc, relevance, status). **Volume/KD/CPC stay
+  blank** (metrics enrichment §7.8 unbuilt; those columns don't even exist on the
+  `keywords` table yet).
+- **topic_grouped** — "one CSV per topic" (§12) delivered as a **single `.zip`** of
+  per-topic CSVs (one zip = one `storage_path`). *Decision flagged.*
+- **architecture** — one row per page (pillar or supporting article):
+  `page_type, title, target_keyword, parent_pillar, outline_h2s,
+  internal_links_out`. Link/title cols are **name-resolved** (article names, pillar
+  titles) not raw ids. Requires a generated `site_architecture` — **400** if none.
+
+**Storage + signed URLs (deploy-only path, `backend/app/storage/exports.py`):** the
+**backend** uploads the snapshot to the private **`csv-snapshots`** bucket under
+`{user_id}/{session_id}/{ts}-{rand8}.{ext}` (the random suffix prevents two
+concurrent same-microsecond exports overwriting each other) via the **service
+client**, then serves the download via a **time-limited signed URL** it mints
+(`csv_signed_url_ttl_s`, default 3600s). The frontend never touches Storage
+directly (CLAUDE.md "no browser storage APIs"). Re-download **re-issues a fresh
+signed URL** (an old one may have expired). Confirmed the supabase-py service
+client's `.storage.from_(...).upload(...)` / `.create_signed_url(...)` are
+reachable (the `ClientOptions(schema="fanout")` only scopes PostgREST, not
+Storage) — **but this is unverified in the sandbox; deploy-only.**
+
+**Endpoints (`backend/app/api/exports.py`, new router):** `POST
+/sessions/{id}/export?format=flat|topic_grouped|architecture` (generate +
+snapshot + record + return signed URL — **synchronous**, a few-thousand-row CSV
+renders in <1s; `require_user`, both roles, scoped to a visible session); `GET
+/sessions/{id}/exports` (the Exports tab list, RLS-scoped); `GET
+/exports/{id}/download` (re-sign a fresh URL for a past snapshot, RLS-scoped).
+Storage helper `list_surviving_keywords` (paged active/excluded/covered pool) added
+to `storage/silo.py`; `csv_signed_url_ttl_s` added to config.
+
+**Schema (`supabase/migrations/20260528000000_csv_exports.sql`, applied live via
+MCP):** `fanout.csv_exports` (`id, session_id, user_id, format` enum
+`flat`/`topic_grouped`/`architecture`, `storage_path`, `generated_at`) under the
+`fanout` schema with **real RLS** (owner all; else session-owner via a
+`sessions`-join — mirrors the keywords / site_architecture policies; never
+`using (true)`). The private `csv-snapshots` **bucket was created via MCP**
+(`insert into storage.buckets … public=false`) — the service role bypasses storage
+RLS, so no `storage.objects` policies are needed (frontend only ever sees signed
+URLs). Live migration tracking recorded it under an apply-time timestamp (differs
+from the repo file prefix, as for every prior migration).
+
+**Frontend:** new **Exports tab** (`frontend/src/owner/views/ExportsView.tsx`,
+route `exports`) added to **both** the Owner and VA segmented controls in
+`SessionWorkspace` (Export is ✓ for both, §11.2). It offers the three formats as
+**Download** buttons (architecture disabled until the summary reports an
+architecture) and lists past snapshots with per-row re-download; a generate /
+re-download opens the backend-minted signed URL in a new tab (with a `&download=`
+filename hint). `shared/api.ts` gained `createExport` / `listExports` /
+`downloadExport` + the `CsvExport*` types. Query key `["exports", sessionId]`
+(new, no clash); the summary read shares the existing `["summary", sessionId]`.
+
+**M10 decisions / divergences (flagged for review):**
+- **"Postgres generates the CSV live" (§12) is implemented as the backend reading
+  current Postgres state and building the CSV in Python.** CSV *generation* is a
+  pure, side-effect-free function over already-fetched rows (carries all the test
+  coverage); the Storage upload + signed-URL step is a thin, separately-mockable
+  layer (`storage/exports.py`) — **deploy-only validated.**
+- **Synchronous generation** (no background job, unlike the pipeline) — a
+  few-thousand-row CSV is fast. Flagged.
+- **flat/topic_grouped include the *surviving* pool (active + excluded + covered)**,
+  matching `getAllSurvivingKeywords` / the Table View fetch (§12 "matching the data
+  shown in the UI"). Gate/orchestrator-discarded rows
+  (filtered_relevance/junk/dropped) are excluded. *Note:* the Table View hides
+  `excluded` by default (a carried M7 LOW), so the flat CSV is slightly broader than
+  the default on-screen view — it's the full surviving pool. Flagged.
+- **topic_grouped = a single `.zip`** (one per-topic CSV per entry) so it maps to
+  one `storage_path` / one `csv_exports` row, rather than N rows. Flagged.
+- **`csv_exports` RLS scopes a VA through `sessions.user_id`** (owner sees all),
+  not via `csv_exports.user_id` — consistent with the keywords/architecture
+  policies and the §13 "parent project's user_id" intent (a VA only ever exports
+  their own sessions anyway).
+- **"Export selected to CSV" (§9.1 bulk action) is deferred** — the snapshot model
+  is session+format, and an arbitrary keyword subset would need a different
+  (non-snapshot) path. The three session-level formats ship; selected-export is
+  flagged, not built.
+- **Signed-URL TTL = 1h, endpoint returns the URL** (frontend opens it), matching
+  §12 "served from Storage" rather than streaming bytes through the API.
+- **CSV formula-injection hardening** on every exported text cell (a leading
+  `= + - @ \t \r` → prefixed with `'`); numeric columns are formatted by us and
+  never trip the guard. Unit-tested.
+- **Not browser-validated** — Storage upload / signed URL / live round-trip pending
+  on the deployed stack (sandbox egress blocked).
 
 ---
 
@@ -681,3 +781,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.6 | 2026-05-26 | M7 **merged to `main`** (`--no-ff`, per owner instruction) after an adversarial review pass + fixes: structural cluster edits now invalidate the stored `site_architecture` (was left dangling); `promote_primary`/`split_cluster` guard against a primary pointing at a non-member keyword (→ 400); `accept_gap` is idempotent. Remote `main` was at the M6 sign-off (`03c3e54`); the merge added only the M7 commits (`03c3e54..84f96b9`, no conflicts). Live validation on the deployed stack still recommended. **M8 (VA wizard, §10) is next.** |
 | 1.7 | 2026-05-26 | M8 (VA wizard, §10) **complete & merged to `main`** (per owner instruction; still pending live validation). Role-gated app (`App.tsx`): owner → §9 Owner UI (unchanged); VA → new `frontend/src/va/Wizard.tsx` 9-step linear wizard (step-gated: disambiguation only when ambiguous; settings locked to topic_count + coverage_mode; deep-mine capped at seed + 2; cost confirmation stubbed to "Run now") + a restricted results surface (Table/Cluster/read-only Architecture via a new `role` on `SessionCtx`; no Split/merge/delete/promote/gap/exclude; "Request restructure" stub). Server-side enforcement (defense in depth, §10.3/§11.2): new `require_owner` dep + `get_role()` gate cluster delete/merge/split/promote-primary, gap accept/dismiss, `/architecture`, session delete, `/regate`, `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate`, `/fanout`; in-handler checks for the deep-mine cap (`va_deep_mine_max_silos=2`), VA rename-only `PATCH /clusters`, and VA no-exclude bulk status. Built on `claude/exciting-cannon-jTTVb`, merged `--no-ff` to `main`; 116 backend tests (18 new in `tests/test_roles.py`) + ruff clean, frontend builds; not browser-validated. Flagged: architecture stays owner-only (so a VA run ends at the article plan; Architecture tab is owner-pending), metrics toggle is decorative (§7.8 unbuilt), no "+ New project" (no endpoint), static cost band. **M9 (approval workflow, §11.3) is next.** |
 | 1.8 | 2026-05-26 | M9 (approval workflow, §11.3) **complete & merged to `main`** (per owner instruction; merged `--no-ff`, remote `main` was at `27f5731`, conflict-free; still pending live validation). No schema/migration (all approval columns + the `pending_approval`/`rejected` statuses exist from M1). New pure cost model `backend/app/cost.py` (§8.1-derived; standard/comprehensive+metrics stay under the $5 VA cap, oversized + recursive runs exceed it). Gate placed at the cost-bearing `/expand` (the conservative read of §11.3's whole-run framing, since silo discovery already runs at `POST /sessions`). New endpoints: `GET /workspace-settings`, `GET /sessions/{id}/cost-estimate`, `POST /sessions/{id}/submit-for-approval` + `/cancel-approval` (VA), `GET /approvals` + `POST /sessions/{id}/approve` + `/reject` (owner-only); `/summary` gained an `approval` block. Frontend: wizard CostStep fetches the real estimate + branches Run-now vs Submit-for-approval → new WaitingStep (30s poll, cancel, adjust-&-resubmit on reject); Owner Approvals page (`/approvals`) + decision modal; AppShell owner-only Approvals nav badge. Built on `claude/jolly-heisenberg-Z06PH`; 139 backend tests (9 cost + 14 approvals new) + ruff clean, frontend builds; not browser-validated. Flagged: gate at `/expand`; reject reuses the same session (no clone); queue "submitted at" = `created_at`; estimate reads actual (false) metrics flag; owner-offline approval keeps M8's client-driven expand→plan chain; `recursive_fanout` still not a VA wizard control. **M10 (CSV export, §12) is next.** |
+| 1.9 | 2026-05-28 | M10 (CSV export, §12) **complete & merged to `main`** (per owner instruction; merged `--no-ff`, remote `main` was at the M9 merge `1e0db30`, conflict-free; still pending live validation; built on `claude/wonderful-allen-oTKaO`). Three formats from current Postgres state via **pure, unit-tested** builders (`backend/app/csv_export.py`): flat (one row/keyword, §9.1 columns, Volume/KD/CPC blank), topic_grouped (one CSV/topic delivered as a single `.zip`), architecture (one row/page — pillar or supporting article — name-resolved links; 400 if no architecture). Backend uploads snapshots to the new private **`csv-snapshots`** Storage bucket under `{user_id}/{session_id}/{ts}-{rand8}.{ext}` via the service client and serves a **time-limited signed URL** (`csv_signed_url_ttl_s`=3600); re-download re-signs fresh. New router `backend/app/api/exports.py`: `POST /sessions/{id}/export?format=…` (sync, both roles, RLS-scoped), `GET /sessions/{id}/exports`, `GET /exports/{id}/download`. Migration `20260528000000_csv_exports.sql` (`fanout.csv_exports` + real RLS via a sessions-join) **applied live via MCP**; the private bucket **created via MCP**. Frontend: new **Exports tab** (`owner/views/ExportsView.tsx`) on both Owner + VA workspaces; `shared/api.ts` `createExport`/`listExports`/`downloadExport`. 165 backend tests (14 csv-builder + 12 export-API new) + ruff clean; frontend builds strict-clean. **CSV formula-injection hardening** on every text cell; signed URLs carry a server-side `Content-Disposition` attachment name; a failed export removes its orphan Storage object. **Storage upload / signed URLs / live download round-trip NOT sandbox-validated — deploy-only.** Flagged: sync generation; flat/topic_grouped use the surviving pool (active/excluded/covered); topic_grouped = one zip; "export selected" (§9.1) deferred. **M11 (cost + observability) is next.** |

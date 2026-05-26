@@ -23,11 +23,13 @@ const OWNER_TABS = [
   { to: "cluster", label: "Cluster" },
   { to: "architecture", label: "Architecture" },
   { to: "split", label: "Split" },
+  { to: "exports", label: "Exports" },
 ];
 const VA_TABS = [
   { to: "table", label: "Table" },
   { to: "cluster", label: "Cluster" },
   { to: "architecture", label: "Architecture" },
+  { to: "exports", label: "Exports" },
 ];
 
 // Per-session shell (PRD §9): segmented control over the three views, fed by the
