@@ -144,10 +144,27 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M6 — Site architecture (PRD §15.1 / §7.11): merged to `main`; live validation
-pending.** Built on `claude/gifted-clarke-pONCI`, merged `--no-ff`. After article
-planning, each article-bearing silo becomes a **pillar** (a high-level overview
-page that links down to its supporting articles). New endpoints: `POST /sessions/{id}/
+**M7 — Owner UI (PRD §15.1 / §9): next.** The three views (table / cluster /
+architecture) + editing. The two-panel Architecture View (§9.3) consumes M6's
+read-only API. Stop for a human go-ahead before building (milestone discipline).
+Open decision still unresolved (carried from RF): the **orchestrator-vs-direct
+planner default**.
+
+---
+
+**M6 — Site architecture (PRD §15.1 / §7.11): complete & signed off (2026-05-26).**
+Built on `claude/gifted-clarke-pONCI`, merged `--no-ff`. **Validated live on
+`retatrutide` `4ecefaa1`** (315 clusters, 5 silos): 5 pillars, 0 skipped, 315
+supporting articles with **0 orphans / 0 bad parent refs**, 945 lateral article
+links (3/article, **0 dangling**), all 10 pillar pairs cosine [0.77, 0.85] so the
+>0.55 lateral rule holds — **all four §15.2 acceptance criteria pass**. First run
+degraded 3/5 pillars to stubs (transient Anthropic rate-limit/overload under 5
+parallel calls, *not* size-correlated); fixed by lowering `architect_max_workers`
+5→2 + exponential backoff before the reprompt — re-run gave **0/5 degraded** with
+strong titles (e.g. "How to Get Retatrutide: The Complete Guide to Access, Cost…"
+/ `how to get retatrutide`). After article planning, each article-bearing silo
+becomes a **pillar** (a high-level overview page that links down to its supporting
+articles). New endpoints: `POST /sessions/{id}/
 architecture` (async, 202 — poll `GET /summary`, whose payload now carries an
 `architecture` block) and `GET /sessions/{id}/architecture` (read; 404 until
 generated). One `site_architecture` row per session (`session_id` PK → a
@@ -187,10 +204,14 @@ down), mirroring the orchestrator.
   this, a re-plan left the stored architecture pointing at dead cluster ids (and
   `/summary` reported a stale graph as present). Architecture is downstream of the
   plan, so a re-plan now requires a fresh `/architecture` run.
-- **No live validation** (sandbox has no egress; the `gpt-5.4`/Anthropic calls and
-  the deployed stack). Migration `20260526000000_site_architecture.sql` is
-  **applied to the live DB** (via Supabase MCP, 2026-05-26; table present, RLS on).
-  Backend: 93 tests pass, ruff clean, import smoke OK; frontend builds.
+- **Concurrency caveat (resolved):** ~5 simultaneous pillar calls burst Anthropic
+  rate limits → most pillars degraded to stubs. `architect_max_workers` is now 2
+  with exponential backoff + jitter before the reprompt (transport errors only;
+  shape failures still reprompt immediately). Pillars are few, so throughput isn't
+  the constraint. If a future seed has many more silos, revisit.
+- Migration `20260526000000_site_architecture.sql` **applied to the live DB** (via
+  Supabase MCP, 2026-05-26; table present, RLS on). Backend: 94 tests pass, ruff
+  clean, import smoke OK; frontend builds.
 - **Planner default still unresolved** (orchestrator default, direct via
   `{"direct": true}`) — carried in from RF, not touched by M6.
 
@@ -370,3 +391,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.1 | 2026-05-25 | M5 signed off (orchestrator + dedup, plus async execution, peer-entity filter, Lever-3 routing, direct mode, calibration tooling). Recursive Fanout (§7.7) re-sequenced as the next milestone ahead of the PRD's M6; spec in `docs/recursive-fanout-spec.md`. |
 | 1.2 | 2026-05-26 | Recursive Fanout (§7.7, Phase 1) signed off — `/fanout` second-stage that re-expands each silo's top cluster representatives as sub-anchors, cost-gated, re-gate/re-cluster on the enlarged pool. Validated live on `retatrutide` (`4ecefaa1`): 1,007 active recursive keywords, 0 peer leak. Build returns to the PRD sequence; **M6 (site architecture) is next.** |
 | 1.3 | 2026-05-26 | M6 (§7.11 site architecture) **implemented, pending review** — `POST/GET /sessions/{id}/architecture`, `site_architecture` table (one row/session, upsert on regenerate), pillar editorial content via Opus (per-pillar, parallel) + deterministic linking matrix guaranteeing the §15.2 acceptance rules. Migration applied to the live DB (via MCP); no live validation yet (sandbox egress). Built on `claude/gifted-clarke-pONCI`. |
+| 1.4 | 2026-05-26 | M6 **signed off** — validated live on `retatrutide` `4ecefaa1` (315 clusters): 5 pillars, 0 orphans, 0 dangling links, all four §15.2 criteria pass. Fixed transient rate-limit degradation (`architect_max_workers` 5→2 + backoff). Merged to `main`. **M7 (Owner UI) is next.** |
