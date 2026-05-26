@@ -144,12 +144,99 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M8 — VA wizard (PRD §15.1 / §10): next.** The 9-step linear wizard (a restricted
-subset of the Owner UI), with step gating (disambiguation only on ambiguous seeds,
-etc.) and the restricted cluster-editing surface. Stop for a human go-ahead before
-building (milestone discipline). Carried decision still open: whether to fold a
-minimal **metrics enrichment (§7.8)** in so Table View shows Volume/KD/CPC (still
-unbuilt — columns render "—").
+**M9 — Approval workflow (PRD §15.1 / §11.3): next.** Real cost estimate before
+submission; soft-cap + `recursive_fanout` trigger the approval flow for VA
+sessions; Owner approval queue UI with approve/reject + note; VA notified on
+decision; 30-second polling. M8 stubbed the cost-confirmation step (VAs proceed
+without approval) and left `/fanout` owner-only — M9 wires the real gate. Stop for
+a human go-ahead before building (milestone discipline).
+
+---
+
+**M8 — VA wizard (PRD §15.1 / §10): implemented, pending review + live validation
+(2026-05-26).** Built on `claude/exciting-cannon-jTTVb` (this session's pinned
+branch — *not* an `m8-…` branch, per the session task instruction). **Not merged
+to `main`** — left for owner review. Backend 116 tests pass (98 prior + 18 new role
+tests), ruff clean, import smoke OK; frontend builds strict-clean (tsc + vite).
+**Not browser-validated** (sandbox egress blocked, standing constraint).
+
+VA mode is a *configuration of the existing Owner UI*, not a parallel build (PRD
+§15.1 rationale). The app is now **role-gated** in `App.tsx`: `me.role == "owner"`
+→ the existing §9 Owner UI (unchanged); `va` → the §10 linear wizard + a restricted
+results surface. A transient `/me` failure falls back to the *more-restricted* VA
+routes (never exposes Owner views).
+
+**Frontend (new `frontend/src/va/Wizard.tsx`):** the 9-step linear wizard (§10.1),
+reusing the same `shared/api.ts` calls as the Owner creation flow. Steps: (1)
+project pick (defaults to Scratch), (2) seed + collapsible audience/disambiguation
+hints + soft English-only check, (3) run settings — **only** `topic_count` slider +
+`coverage_mode` toggle, with metrics + relevance-threshold shown locked (folded into
+the seed screen), (4) disambiguation **gated on `needs_disambiguation`** (skipped
+otherwise), (5) silo review (remove/add/edit/audience-override; Continue disabled
+< 3 silos), (6) deep-mine **capped at seed + 2** (extra checkboxes disable at the
+cap), (7) cost confirmation **stubbed to "Run now"** (approval is M9), (8) progress
+(polls `/summary`, **auto-chains** expand → plan-articles to keep the flow linear),
+(9) results → routes to `/session/:id`. The **restricted results surface** reuses
+the Owner views via a new `role` field on `SessionWorkspace`'s `SessionCtx`: VA
+tabs = Table + Cluster + read-only Architecture (no Split). Cluster View for a VA =
+rename + move-keyword only (no split/merge/delete/promote/edit-intent/H2/gap
+accept-dismiss), plus a **stubbed "Request restructure from Owner"** per article.
+Table bulk for a VA = Mark-covered + Move-to-cluster only (no Exclude/Restore).
+Architecture View for a VA = read-only (no Generate/Regenerate; empty state says
+the owner generates it).
+
+**Backend (defense in depth, §10.3 / §11.2):** the service-role client bypasses
+RLS, so VA capability limits can't lean on RLS — they're enforced in the API layer.
+Added `get_role()` + a `require_owner` dependency (`app/auth/dependencies.py`).
+Owner-only endpoints (403 for VA at the dependency layer, before any DB work):
+cluster `delete` / `merge` / `split` / `promote-primary`, `coverage-gaps`
+accept/dismiss, `POST /architecture`, `DELETE /sessions/{id}`, `/regate`,
+`/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate`, `/fanout`.
+In-handler role checks: `/deep-mine` caps a VA at seed + `va_deep_mine_max_silos`
+(=2) silos; `PATCH /clusters/{id}` lets a VA set only `name` (intent/H2s → 403);
+bulk keyword `status` refuses `excluded` for a VA. New config knob
+`va_deep_mine_max_silos: int = 2`. New tests: `tests/test_roles.py` (18) drive the
+guards with an injected VA/owner + mocked storage.
+
+**M8 decisions / divergences (flagged for review):**
+- **Architecture stays owner-only** (`POST /architecture` → `require_owner`).
+  §11.2 says VA architecture-regeneration is ✗ and the view is read-only, but the
+  initial generation and a regenerate are the *same* endpoint, so I couldn't allow
+  one without the other. Consequence: **a VA run ends at the article plan; the
+  Architecture tab is owner-pending** (read-only empty state) until an owner
+  generates it (the owner sees all sessions via RLS). The progress screen therefore
+  shows expansion + planning stages only, not an Architecture stage. Conservative
+  reading of §10.3; flagged.
+- **`enrich_with_metrics` is shown "On · locked" in step 3 but does nothing** —
+  metrics enrichment (§7.8) is still unbuilt (optional in v1), so Volume/KD/CPC stay
+  "—". The session is still created with `enrich_with_metrics: false` (the wizard
+  doesn't send a new field); the locked toggle is informational. Flagged — decide
+  with §7.8.
+- **"+ New project" (step 1) omitted** — there is no create-project endpoint
+  anywhere in the build (the Owner browser can't create projects either; only the
+  auto-Scratch exists). The wizard's project step is a picker over existing projects
+  (Scratch by default). Flagged; needs a `POST /projects` if project creation is
+  wanted (out of M8 scope).
+- **Live cost estimate is a static band, not a real figure** (§7.2 #2 / §10.2 want
+  a live cost). No cost-estimate endpoint exists (that's M9/M11); the wizard shows a
+  rough `~$low–$high` band that updates with the silo count. Flagged.
+- **English-only check (§10.2) is a soft, permissive warning** (flags non-Latin
+  scripts via a Unicode-range regex; allows accents/punctuation; never hard-blocks).
+- **"Request restructure from Owner" is a local stub** (an alert + "flagged"
+  state) — the real owner notification / request record needs the M9 approval queue.
+- **VA cost confirmation is the M9 stub** (always "Run now", no approval) — PRD
+  §15.1 explicitly permits this during M8. `/fanout` is owner-only until M9 wires
+  the approval-gated path for VAs.
+- **No schema/migration in M8** — roles + `workspace_settings` already exist from
+  M1; M8 is enforcement + UI only.
+- **`plan-articles` `direct` mode is still reachable by a VA** (it's a planning-mode
+  choice, not a capability-matrix restriction); the wizard never sends it, so VAs
+  get orchestrator-planned articles (the settled default). Not gated — flagged as a
+  judgement call.
+- **Not browser-validated** — views compile strict-clean and the role guards have
+  unit tests, but the live VA login → wizard → results round-trip (and that an owner
+  vs. VA JWT actually resolves the right `role`) still needs checking on the
+  deployed stack.
 
 ---
 
@@ -473,3 +560,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.4 | 2026-05-26 | M6 **signed off** — validated live on `retatrutide` `4ecefaa1` (315 clusters): 5 pillars, 0 orphans, 0 dangling links, all four §15.2 criteria pass. Fixed transient rate-limit degradation (`architect_max_workers` 5→2 + backoff). Merged to `main`. **M7 (Owner UI) is next.** |
 | 1.5 | 2026-05-26 | M7 (Owner UI, §9) **implemented, pending review + live validation.** M7a: react-router + read-only Table/Cluster/Architecture/Split views + Project+Session Browser (UI session-resume); new reads `GET /projects/{id}/sessions`, `statuses` keyword filter, `seed_keyword` on `GET /sessions/{id}`. M7b: full cluster editing (rename/intent/H2/promote/move/delete/merge/split), gap accept/dismiss, whole-session orchestrator re-run, Table bulk actions, browser archive/move/delete; migration `20260527000000_session_archive.sql` applied live via MCP. Orchestrator-vs-direct default **settled: orchestrator stays default** (no code flip). Built on `claude/sweet-ramanujan-PXvK0`; 98 backend tests pass, frontend builds; not browser-validated (sandbox egress). Deferred/flagged: per-topic re-run, split option (b), session duplicate, metrics enrichment (§7.8). |
 | 1.6 | 2026-05-26 | M7 **merged to `main`** (`--no-ff`, per owner instruction) after an adversarial review pass + fixes: structural cluster edits now invalidate the stored `site_architecture` (was left dangling); `promote_primary`/`split_cluster` guard against a primary pointing at a non-member keyword (→ 400); `accept_gap` is idempotent. Remote `main` was at the M6 sign-off (`03c3e54`); the merge added only the M7 commits (`03c3e54..84f96b9`, no conflicts). Live validation on the deployed stack still recommended. **M8 (VA wizard, §10) is next.** |
+| 1.7 | 2026-05-26 | M8 (VA wizard, §10) **implemented, pending review + live validation.** Role-gated app (`App.tsx`): owner → §9 Owner UI (unchanged); VA → new `frontend/src/va/Wizard.tsx` 9-step linear wizard (step-gated: disambiguation only when ambiguous; settings locked to topic_count + coverage_mode; deep-mine capped at seed + 2; cost confirmation stubbed to "Run now") + a restricted results surface (Table/Cluster/read-only Architecture via a new `role` on `SessionCtx`; no Split/merge/delete/promote/gap/exclude; "Request restructure" stub). Server-side enforcement (defense in depth, §10.3/§11.2): new `require_owner` dep + `get_role()` gate cluster delete/merge/split/promote-primary, gap accept/dismiss, `/architecture`, session delete, `/regate`, `/cluster-preview`, `/routing-diagnostic`, `/lever3-simulate`, `/fanout`; in-handler checks for the deep-mine cap (`va_deep_mine_max_silos=2`), VA rename-only `PATCH /clusters`, and VA no-exclude bulk status. Built on `claude/exciting-cannon-jTTVb` (**not merged**); 116 backend tests (18 new in `tests/test_roles.py`) + ruff clean, frontend builds; not browser-validated. Flagged: architecture stays owner-only (so a VA run ends at the article plan; Architecture tab is owner-pending), metrics toggle is decorative (§7.8 unbuilt), no "+ New project" (no endpoint), static cost band. **M9 (approval workflow, §11.3) is next.** |
