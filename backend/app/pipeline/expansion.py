@@ -78,6 +78,7 @@ def run_expansion(
     autocomplete_max: int = 1500,
     max_workers: int = 8,
     time_budget_s: float = 240.0,
+    include_seed_level: bool = True,
 ) -> ExpansionResult:
     result = ExpansionResult()
     deadline = time.monotonic() + time_budget_s
@@ -110,10 +111,15 @@ def run_expansion(
         futures[pool_exec.submit(dfs.keyword_ideas, t.anchor, keyword_ideas_limit)] = (
             t, "keyword_ideas")
         futures[pool_exec.submit(paa_two_tier, t.anchor)] = (t, "paa")
-    futures[pool_exec.submit(dfs.keyword_suggestions, seed, keyword_suggestions_limit)] = (
-        None, "keyword_suggestions")
-    futures[pool_exec.submit(dfs.query_fanouts, seed, query_fanouts_limit)] = (
-        None, "query_fanouts")
+    # keyword_suggestions / query_fanouts are bare-seed phrase-match endpoints.
+    # Recursive fanout already ran them on the seed in the first pass, so it skips
+    # them here (include_seed_level=False) — re-running the same seed only
+    # re-pays for identical results.
+    if include_seed_level:
+        futures[pool_exec.submit(dfs.keyword_suggestions, seed, keyword_suggestions_limit)] = (
+            None, "keyword_suggestions")
+        futures[pool_exec.submit(dfs.query_fanouts, seed, query_fanouts_limit)] = (
+            None, "query_fanouts")
 
     try:
         for fut in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
