@@ -88,6 +88,27 @@ class Settings(BaseSettings):
     # their own primary (no minimum — the peer-name signal is deterministic).
     peer_entity_grouping: bool = True
 
+    # Enriched silo anchor (routing-calibration follow-up). At finalize, the LLM
+    # generates ~N example keywords per accepted silo; their embeddings are
+    # centroided with the rationale embedding to form a more discriminative anchor
+    # (the rationale embedding alone is seed-dominated -> all silo anchors cluster,
+    # M5 noted ~71% routing accuracy). Owner-requested. One-off LLM cost at
+    # finalize (~$0.05 per session); routing at gate time stays pure-embedding.
+    enriched_silo_anchor: bool = True
+    silo_anchor_example_count: int = 30
+    silo_anchor_max_workers: int = 5
+
+    # LLM routing for ambiguous keywords (second-pass calibration). After the
+    # gate's cosine Lever-3 picks a best silo, keywords whose top-1 vs top-2
+    # silo-anchor cosine margin is below `llm_routing_margin_threshold` are
+    # re-routed in batches by an LLM call. Catches the genuinely ambiguous
+    # cases (where embeddings can't decide) without per-keyword LLM cost on the
+    # easy ones. ~$0.40-1 per run when ~half the pool is ambiguous.
+    llm_routing_enabled: bool = True
+    llm_routing_margin_threshold: float = 0.04
+    llm_routing_batch_size: int = 50
+    llm_routing_max_workers: int = 4
+
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""
     dataforseo_password: str = ""

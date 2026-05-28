@@ -169,6 +169,111 @@ class OpenAILLM:
             last_error = "No valid, on-taxonomy silos were returned."
         return []
 
+    def silo_anchor_examples(
+        self,
+        *,
+        seed: str,
+        silo_name: str,
+        rationale: str,
+        relationship_type: str,
+        peer_terms: list[str],
+        n: int = 30,
+    ) -> list[str]:
+        """LLM-generate ~N example keywords that exemplify a silo's coverage,
+        for the enriched silo anchor (routing calibration). The centroid of
+        these examples' embeddings is more discriminative than the rationale
+        embedding alone (which is seed-dominated). Strict peer-entity exclusion
+        so the anchor doesn't pull in keywords the §7.6 filter will then drop."""
+        peer_clause = (
+            "NEVER include any of these peer entities (they belong to other "
+            f"subjects, not this silo): {', '.join(peer_terms)}.\n"
+            if peer_terms else ""
+        )
+        prompt = (
+            f"You are populating the keyword anchor for ONE silo on a niche "
+            f"authority site about \"{seed}\".\n\n"
+            f"SILO: {silo_name}\n"
+            f"What this silo covers: {rationale}\n"
+            f"Relationship type: {relationship_type}\n\n"
+            f"Generate {n} example keywords a researcher might search that would "
+            f"belong in THIS silo. They should illustrate the breadth of what "
+            f"this silo covers — not paraphrase each other.\n\n"
+            "RULES:\n"
+            f"1. Every example must be relevant to someone researching {seed}.\n"
+            f"2. {peer_clause}"
+            f"3. Mix of informational, transactional, and question-style queries.\n"
+            "4. 2-8 words each. No URLs, no proper nouns of peer entities.\n"
+            "5. Do not repeat the silo name verbatim.\n\n"
+            f"Return ONLY a strict JSON array of {n} strings."
+        )
+        # The grounding-style models are fine for this; no browsing needed.
+        text = self._respond(prompt, "silo_anchor_examples", browsing=False)
+        try:
+            raw = _extract_json(text)
+        except LLMError:
+            return []
+        if not isinstance(raw, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            kw = item.strip().lower()
+            if 2 <= len(kw.split()) <= 12 and kw not in seen:
+                seen.add(kw)
+                out.append(kw)
+        return out
+
+    def route_ambiguous_keywords(
+        self,
+        *,
+        seed: str,
+        silos: list[dict],
+        keywords: list[str],
+    ) -> dict[str, str]:
+        """Pick the best-fitting silo id for each keyword (batched). Returns
+        only mappings the model produced — caller decides what to do with
+        keywords the model didn't route. Returns {} on parse failure."""
+        if not keywords or not silos:
+            return {}
+        silos_block = "\n".join(
+            f"- [id={s['id']}] {s.get('name') or ''}: {s.get('rationale') or ''}"
+            for s in silos
+        )
+        kw_block = "\n".join(f"{i+1}. {kw}" for i, kw in enumerate(keywords))
+        prompt = (
+            f"You are routing keywords to silos on a niche authority site "
+            f"about \"{seed}\".\n\n"
+            f"AVAILABLE SILOS:\n{silos_block}\n\n"
+            "For each keyword, decide which silo it best belongs to. Pick by the "
+            "keyword's PRIMARY INTENT, not just shared tokens. A keyword that "
+            "names a peer entity (a different drug / product / brand from the "
+            "seed) usually belongs in a mechanism / comparison silo, not in a "
+            "results / dosage one.\n\n"
+            f"KEYWORDS:\n{kw_block}\n\n"
+            'Return ONLY a strict JSON array of {"keyword": "<exact text>", '
+            '"silo_id": "<the id>"} objects. Length must equal the number of '
+            "keywords. Do not paraphrase the keyword text."
+        )
+        text = self._respond(prompt, "route_ambiguous_keywords", browsing=False)
+        try:
+            raw = _extract_json(text)
+        except LLMError:
+            return {}
+        if not isinstance(raw, list):
+            return {}
+        valid_silo_ids = {s["id"] for s in silos}
+        out: dict[str, str] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            kw = item.get("keyword")
+            sid = item.get("silo_id")
+            if isinstance(kw, str) and isinstance(sid, str) and sid in valid_silo_ids:
+                out[kw] = sid
+        return out
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []

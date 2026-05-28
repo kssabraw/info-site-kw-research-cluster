@@ -24,6 +24,7 @@ from app.cost_attribution import metered_run
 from app.dataforseo import get_dataforseo
 from app.llm import get_llm, get_orchestrator
 from app.logging import bind_session_id
+from app.pipeline.llm_router import build_llm_router
 from app.pipeline.architecture import (
     ArticleInput,
     PillarInput,
@@ -53,6 +54,21 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
 
 def _short(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
+
+
+def _maybe_llm_router(seed: str, topics: list[dict]):
+    """Build the LLM router for ambiguous keywords if enabled; None otherwise."""
+    s = get_settings()
+    if not s.llm_routing_enabled:
+        return None
+    return build_llm_router(
+        seed=seed,
+        silos=[{"id": t["id"], "name": t.get("name"),
+                "rationale": t.get("rationale")} for t in topics],
+        llm=get_llm(),
+        batch_size=s.llm_routing_batch_size,
+        max_workers=s.llm_routing_max_workers,
+    )
 
 
 def _metered(step: str):
@@ -158,6 +174,8 @@ def run_expand_job(session_id: str) -> None:
             clustering_edge_threshold=s.clustering_edge_threshold,
             clustering_resolution=s.clustering_resolution,
             clustering_max_nodes=s.clustering_max_nodes,
+            llm_router=_maybe_llm_router(seed, topics),
+            llm_router_margin=s.llm_routing_margin_threshold,
         )
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, result.per_topic_gated)
@@ -274,6 +292,7 @@ def run_regate_job(
     clustering granularity, skipping DataForSEO. Clears any prior article plan."""
     bind_session_id(session_id)
     try:
+        session = store.get_session(session_id)
         pool = store.list_all_keyword_pool(session_id)
         topics = store.list_topics(session_id)
         topic_names = {t["id"]: t["name"] for t in topics}
@@ -292,6 +311,8 @@ def run_regate_job(
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,
+            llm_router=_maybe_llm_router(session["seed_keyword"], topics),
+            llm_router_margin=s.llm_routing_margin_threshold,
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
@@ -374,6 +395,8 @@ def run_fanout_job(
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,
+            llm_router=_maybe_llm_router(session["seed_keyword"], topics),
+            llm_router_margin=s.llm_routing_margin_threshold,
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)

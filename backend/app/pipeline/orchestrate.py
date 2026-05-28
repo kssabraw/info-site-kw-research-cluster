@@ -255,6 +255,8 @@ def gate_and_cluster(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    llm_router=None,
+    llm_router_margin: float = 0.04,
 ) -> PipelineResult:
     """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
     per-topic candidate pool. Shared by the full pipeline and the re-gate path
@@ -271,6 +273,8 @@ def gate_and_cluster(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         assign_best_silo=assign_best_silo,
+        llm_router=llm_router,
+        llm_router_margin=llm_router_margin,
     )
     result.degraded_notes.extend(gate.degraded_notes)
     result.per_topic_gated = gate.per_topic
@@ -404,6 +408,8 @@ def run_refinement_pipeline(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    llm_router=None,
+    llm_router_margin: float = 0.04,
 ) -> PipelineResult:
     result = PipelineResult()
     topic_names = {t.id: t.name for t in topics}
@@ -484,6 +490,8 @@ def run_refinement_pipeline(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         assign_best_silo=assign_best_silo,
+        llm_router=llm_router,
+        llm_router_margin=llm_router_margin,
     )
     result.degraded_notes.extend(gc.degraded_notes)
     result.per_topic_gated = gc.per_topic_gated

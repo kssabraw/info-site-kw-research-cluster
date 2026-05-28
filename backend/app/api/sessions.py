@@ -27,6 +27,7 @@ from app.pipeline.orchestrate import (
     simulate_best_silo_clustering,
 )
 from app.pipeline.recursive_fanout import count_sub_anchors, derive_sub_anchors
+from app.pipeline.silo_anchor import build_enriched_anchors
 from app.pipeline.silo_discovery import run_silo_discovery
 from app.storage import silo as store
 
@@ -361,25 +362,49 @@ def finalize_silos(session_id: str, user: AuthedUser = Depends(require_user)) ->
 
     seed = session["seed_keyword"]
     audience = session.get("detected_audience") or ""
-    # Anchor string per PRD §7.1.4: seed + rationale + audience.
-    texts = [
+    # Rationale-anchor string per PRD §7.1.4: seed + rationale + audience.
+    rationale_texts = [
         " ".join(part for part in (seed, t.get("rationale") or "", audience) if part).strip()
         for t in topics
     ]
+    s = get_settings()
+    llm = get_llm()
     try:
-        vectors = get_llm().embed(texts)
+        rationale_vectors = llm.embed(rationale_texts)
     except LLMError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Embedding the silos failed. Try finalizing again.",
         ) from exc
+    rationale_by_id = {t["id"]: v for t, v in zip(topics, rationale_vectors)}
 
-    for topic, vector in zip(topics, vectors):
-        store.set_topic_embedding(topic["id"], vector)
+    # Enriched silo anchors (routing calibration): LLM-generate ~N example
+    # keywords per silo and centroid their embeddings with the rationale. Strictly
+    # additive — a silo for which generation fails keeps its rationale anchor.
+    example_counts: dict[str, int] = dict.fromkeys((t["id"] for t in topics), 0)
+    if s.enriched_silo_anchor:
+        anchors_by_id, example_counts = build_enriched_anchors(
+            seed=seed,
+            silos=topics,
+            rationale_embeddings=rationale_by_id,
+            peer_terms=session.get("peer_entities") or [],
+            llm=llm,
+            embed_fn=llm.embed,
+            n=s.silo_anchor_example_count,
+            max_workers=s.silo_anchor_max_workers,
+        )
+    else:
+        anchors_by_id = rationale_by_id
+
+    for topic in topics:
+        store.set_topic_embedding(topic["id"], anchors_by_id[topic["id"]])
 
     logger.info(
         "step_complete",
-        extra={"event": "step_complete", "step": "silo_finalize", "topic_count": len(topics)},
+        extra={"event": "step_complete", "step": "silo_finalize",
+               "topic_count": len(topics),
+               "examples_total": sum(example_counts.values()),
+               "enriched": s.enriched_silo_anchor},
     )
     return {"finalized": True, "topic_count": len(topics)}
 

@@ -164,6 +164,8 @@ def run_relevance_gate(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    llm_router=None,
+    llm_router_margin: float = 0.04,
 ) -> RelevanceResult:
     """Classify every keyword in `per_topic` as active / filtered_relevance /
     filtered_junk. `embed_fn(list[str]) -> list[list[float]]` embeds keywords.
@@ -214,22 +216,57 @@ def run_relevance_gate(
     #     Scored against its assigned silo; elsewhere it's filtered_relevance.
     best_topic_for_kw: dict[str, str] = {}
     if assign_best_silo and emb_by_kw:
-        anchor_vecs = {
-            tid: np.asarray(a, dtype=np.float64)
-            for tid, a in topic_embeddings.items() if a
-        }
+        # Pre-normalize anchors once so per-keyword cosine is a single dot product.
+        anchor_vecs = {}
+        for tid, a in topic_embeddings.items():
+            if a:
+                v = np.asarray(a, dtype=np.float64)
+                n = np.linalg.norm(v) or 1.0
+                anchor_vecs[tid] = v / n
         cand_topics: dict[str, list[str]] = {}
         for tid, cands in cands_by_topic.items():
             if tid in anchor_vecs:
                 for kw, _ in cands:
                     if kw in emb_by_kw:
                         cand_topics.setdefault(kw, []).append(tid)
+        # Retain per-keyword per-silo cosines so we can identify ambiguous routing
+        # (top-1 vs top-2 margin) for the optional LLM second-pass.
+        kw_scores: dict[str, dict[str, float]] = {}
         for kw, tids in cand_topics.items():
             e = emb_by_kw[kw]
-            best_topic_for_kw[kw] = max(
-                tids, key=lambda tid: float(np.dot(e, anchor_vecs[tid])
-                                            / ((np.linalg.norm(e) * np.linalg.norm(anchor_vecs[tid])) or 1.0))
-            )
+            e_n = np.linalg.norm(e) or 1.0
+            scores = {tid: float(np.dot(e, anchor_vecs[tid]) / e_n) for tid in tids}
+            kw_scores[kw] = scores
+            best_topic_for_kw[kw] = max(scores, key=scores.get)
+
+        # LLM second-pass: re-route keywords where the top-2 cosine margin is
+        # below the threshold (genuinely ambiguous — embeddings can't decide).
+        # The router enforces "LLM may pick only from this keyword's candidate
+        # silos"; anything else is ignored and the cosine pick stands.
+        if llm_router and kw_scores:
+            ambiguous: list[tuple[str, list[str]]] = []
+            for kw, scores in kw_scores.items():
+                if len(scores) < 2:
+                    continue
+                sorted_vals = sorted(scores.values(), reverse=True)
+                margin = sorted_vals[0] - sorted_vals[1]
+                if margin < llm_router_margin:
+                    cands_by_score = [
+                        tid for tid, _ in sorted(scores.items(), key=lambda x: -x[1])
+                    ]
+                    ambiguous.append((kw, cands_by_score))
+            if ambiguous:
+                try:
+                    reroutes = llm_router(ambiguous)
+                except Exception as exc:  # noqa: BLE001 — fall back to cosine
+                    logger.warning(
+                        "llm_router_failed",
+                        extra={"event": "llm_router_failed", "reason": repr(exc)},
+                    )
+                    reroutes = {}
+                for kw, new_tid in reroutes.items():
+                    if new_tid in kw_scores.get(kw, {}):
+                        best_topic_for_kw[kw] = new_tid
 
     # 3. Score per topic against that topic's own anchor.
     for tid, cands in cands_by_topic.items():
