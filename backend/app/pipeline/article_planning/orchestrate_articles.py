@@ -36,6 +36,7 @@ from .models import (
     TopicInput,
     TopicPlan,
 )
+from .orphan_promotion import promote_orphans
 from .peer_grouping import group_by_peer_entity
 from .serp import fetch_candidate_serps
 from .split import split_oversized_articles
@@ -385,6 +386,7 @@ def run_article_planning(
     peer_grouping: bool = True,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
+    promote_orphan_keywords: bool = True,
 ) -> PlanResult:
     """Full §7.10 pass: SERP for each candidate primary -> per-silo orchestrator
     (chunked + parallel) -> cross-topic dedup. Returns the assembled plan;
@@ -420,6 +422,8 @@ def run_article_planning(
             primary_cosine_threshold=dedup_primary_cosine_threshold,
             serp_overlap_min=dedup_serp_overlap_min,
         )
+        if promote_orphan_keywords:
+            promote_orphans(result, topics)
         logger.info(
             "step_complete",
             extra={"event": "step_complete", "step": "article_planning_direct",
@@ -483,6 +487,8 @@ def run_article_planning(
         primary_cosine_threshold=dedup_primary_cosine_threshold,
         serp_overlap_min=dedup_serp_overlap_min,
     )
+    if promote_orphan_keywords:
+        promote_orphans(result, topics)
 
     logger.info(
         "step_complete",

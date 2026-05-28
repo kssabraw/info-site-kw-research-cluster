@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     # their own primary (no minimum — the peer-name signal is deterministic).
     peer_entity_grouping: bool = True
 
+    # Orphan promotion: after all planning passes finish, every active keyword
+    # that the orchestrator silently omitted (singletons, redundant long-tail,
+    # cross-topic-dedup loser-side losses) becomes its own singleton article.
+    # Owner-requested after seeing "what is retatrutide" land in the active pool
+    # but in no cluster. Zero LLM / embedding cost.
+    promote_orphan_keywords: bool = True
+
     # Enriched silo anchor (routing-calibration follow-up). At finalize, the LLM
     # generates ~N example keywords per accepted silo; their embeddings are
     # centroided with the rationale embedding to form a more discriminative anchor

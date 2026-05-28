@@ -263,7 +263,11 @@ def test_run_article_planning_end_to_end_with_fakes():
         orchestrator=FakeOrchestrator(payload),
         embed_fn=lambda kws: [[1.0, 0.0] for _ in kws],
     )
-    assert result.counts()["articles"] == 1
+    # 1 from the fake orchestrator + 1 orphan-promoted ("how much weight on
+    # retatrutide" was in the topic's grouping but neither covered by the
+    # article nor formally dropped — the default promote_orphan_keywords path
+    # turns it into its own singleton article).
+    assert result.counts()["articles"] == 2
     assert all_degraded(result) is False
 
 

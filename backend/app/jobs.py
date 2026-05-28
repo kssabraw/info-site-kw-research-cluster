@@ -250,6 +250,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
             peer_grouping=s.peer_entity_grouping,
             seed_terms=[session["seed_keyword"], *(session.get("aliases") or [])],
             peer_terms=session.get("peer_entities") or [],
+            promote_orphan_keywords=s.promote_orphan_keywords,
         )
         if all_degraded(result):
             # Clear any stale prior plan so an errored run doesn't leave clusters
