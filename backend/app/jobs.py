@@ -208,6 +208,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
         log_topics = (session.get("statistical_clustering_log") or {}).get("topics") or {}
         topics_meta = {t["id"]: t for t in store.list_topics(session_id)}
         embeddings = store.get_topic_embeddings(session_id)
+        relevance_by_topic = store.get_active_keyword_relevance(session_id)
         topic_inputs = [
             TopicInput(
                 id=tid,
@@ -225,6 +226,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
                     )
                     for i, g in enumerate((log_topics.get(tid) or {}).get("groupings") or [])
                 ],
+                keyword_relevance=relevance_by_topic.get(tid, {}),
             )
             for tid, meta in topics_meta.items()
         ]
@@ -251,6 +253,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
             seed_terms=[session["seed_keyword"], *(session.get("aliases") or [])],
             peer_terms=session.get("peer_entities") or [],
             promote_orphan_keywords=s.promote_orphan_keywords,
+            orphan_promotion_min_score=s.orphan_promotion_min_score,
         )
         if all_degraded(result):
             # Clear any stale prior plan so an errored run doesn't leave clusters

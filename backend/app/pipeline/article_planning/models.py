@@ -33,6 +33,12 @@ class TopicInput:
     relationship_type: str
     embedding: list[float] | None
     groupings: list[GroupingInput]
+    # keyword -> relevance_score (cosine to silo anchor) for the active
+    # keywords routed to this topic. Used by orphan promotion to enforce a
+    # quality floor; the orchestrator itself doesn't consume scores. Empty
+    # dict if the caller didn't supply them (orphan promotion then falls back
+    # to its old gate-floor behavior).
+    keyword_relevance: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

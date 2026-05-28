@@ -15,6 +15,12 @@ supporting = []). Zero LLM / embedding cost — pure-compute set arithmetic.
 Coverage is checked GLOBALLY (across all topics' articles), not per-topic, so
 keywords pulled across silos by cross-topic peer-grouping are correctly
 accounted for and don't get double-promoted.
+
+Quality floor: by default, only orphans whose silo-anchor relevance score is
+>= `orphan_promotion_min_score` are promoted (cf. `Settings`). Active keywords
+below the bar stay as orphans (status='active', cluster_id=NULL) — they're
+still in the table for Owner inspection / re-routing, just not turned into
+editorial-thin singleton articles.
 """
 
 import logging
@@ -24,11 +30,23 @@ from .models import DEFAULT_INTENT, ArticleRecord, PlanResult, TopicInput
 logger = logging.getLogger(__name__)
 
 
-def promote_orphans(result: PlanResult, topics: list[TopicInput]) -> None:
+def promote_orphans(
+    result: PlanResult,
+    topics: list[TopicInput],
+    *,
+    min_score: float = 0.0,
+) -> None:
     """Mutate `result` in place: every active keyword that isn't covered by an
-    article (anywhere in the plan) and wasn't formally dropped becomes its own
-    singleton article in its routed topic. Idempotent — re-running with the
-    same input yields the same articles."""
+    article (anywhere in the plan), wasn't formally dropped, AND meets
+    `min_score` becomes its own singleton article in its routed topic.
+
+    `min_score` is checked against each topic's `keyword_relevance` map (the
+    relevance score the gate recorded for the keyword in that topic). A keyword
+    with no score recorded (defensive — shouldn't happen if the caller populates
+    `keyword_relevance` from active rows) is NOT promoted, on the conservative
+    side. With `min_score=0` the check is a no-op (promote-everything).
+
+    Idempotent — re-running with the same input yields the same articles."""
     # Coverage is checked GLOBALLY so a keyword peer-grouped to a different
     # silo is still considered covered (not promoted again).
     covered: set[str] = set()
@@ -42,6 +60,7 @@ def promote_orphans(result: PlanResult, topics: list[TopicInput]) -> None:
 
     topic_inputs_by_id = {t.id: t for t in topics}
     total_added = 0
+    total_below_floor = 0
     for plan in result.per_topic:
         topic_input = topic_inputs_by_id.get(plan.topic_id)
         if topic_input is None:
@@ -51,10 +70,23 @@ def promote_orphans(result: PlanResult, topics: list[TopicInput]) -> None:
         all_active: set[str] = set()
         for g in topic_input.groupings:
             all_active.update(g.keywords)
-        orphans = sorted(all_active - covered - dropped)
-        if not orphans:
+        candidates = sorted(all_active - covered - dropped)
+        if not candidates:
             continue
-        for orphan in orphans:
+
+        scores = topic_input.keyword_relevance
+        promoted: list[str] = []
+        below_floor = 0
+        for kw in candidates:
+            # min_score=0 disables the floor entirely (legacy behavior).
+            if min_score > 0.0:
+                score = scores.get(kw)
+                if score is None or score < min_score:
+                    below_floor += 1
+                    continue
+            promoted.append(kw)
+
+        for orphan in promoted:
             plan.articles.append(ArticleRecord(
                 topic_id=plan.topic_id,
                 primary_keyword=orphan,
@@ -64,15 +96,21 @@ def promote_orphans(result: PlanResult, topics: list[TopicInput]) -> None:
                 source_statistical_grouping_id=None,
                 orchestrator_notes="Promoted orphan: not assigned by the orchestrator.",
             ))
-        plan.log["orphans_promoted"] = len(orphans)
-        total_added += len(orphans)
+        if promoted:
+            plan.log["orphans_promoted"] = len(promoted)
+        if below_floor:
+            plan.log["orphans_below_floor"] = below_floor
+        total_added += len(promoted)
+        total_below_floor += below_floor
         # Update the global covered set so a later topic-loop iteration doesn't
         # treat this topic's orphans as still-uncovered.
-        covered.update(orphans)
+        covered.update(promoted)
 
-    if total_added:
+    if total_added or total_below_floor:
         logger.info(
             "step_complete",
             extra={"event": "step_complete", "step": "orphan_promotion",
-                   "orphans_promoted": total_added},
+                   "orphans_promoted": total_added,
+                   "orphans_below_floor": total_below_floor,
+                   "min_score": min_score},
         )

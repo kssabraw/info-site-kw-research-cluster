@@ -387,6 +387,7 @@ def run_article_planning(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     promote_orphan_keywords: bool = True,
+    orphan_promotion_min_score: float = 0.0,
 ) -> PlanResult:
     """Full §7.10 pass: SERP for each candidate primary -> per-silo orchestrator
     (chunked + parallel) -> cross-topic dedup. Returns the assembled plan;
@@ -423,7 +424,7 @@ def run_article_planning(
             serp_overlap_min=dedup_serp_overlap_min,
         )
         if promote_orphan_keywords:
-            promote_orphans(result, topics)
+            promote_orphans(result, topics, min_score=orphan_promotion_min_score)
         logger.info(
             "step_complete",
             extra={"event": "step_complete", "step": "article_planning_direct",
@@ -488,7 +489,7 @@ def run_article_planning(
         serp_overlap_min=dedup_serp_overlap_min,
     )
     if promote_orphan_keywords:
-        promote_orphans(result, topics)
+        promote_orphans(result, topics, min_score=orphan_promotion_min_score)
 
     logger.info(
         "step_complete",

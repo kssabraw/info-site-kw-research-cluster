@@ -473,6 +473,39 @@ def get_topic_embeddings(session_id: str) -> dict[str, list[float] | None]:
     return out
 
 
+def get_active_keyword_relevance(
+    session_id: str, page_size: int = 1000,
+) -> dict[str, dict[str, float]]:
+    """topic_id -> {keyword: relevance_score} for every active keyword in the
+    session. Drives the article planner's orphan-promotion quality floor;
+    ungated/filtered keywords are excluded. Paged so large pools are safe."""
+    client = get_service_client()
+    out: dict[str, dict[str, float]] = {}
+    offset = 0
+    while True:
+        res = (
+            client.table("keywords")
+            .select("topic_id, keyword, relevance_score")
+            .eq("session_id", session_id)
+            .eq("status", "active")
+            .order("id")
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        rows = res.data or []
+        for r in rows:
+            tid = r.get("topic_id")
+            kw = r.get("keyword")
+            score = r.get("relevance_score")
+            if not tid or not kw or score is None:
+                continue
+            out.setdefault(tid, {})[kw] = float(score)
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return out
+
+
 def list_all_keyword_pool(session_id: str) -> dict[str, dict[str, list[str]]]:
     """Reconstruct the pre-gate candidate pool (topic_id -> {keyword: sources})
     from every stored keyword row, regardless of current status. Used by the

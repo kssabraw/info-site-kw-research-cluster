@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     # Owner-requested after seeing "what is retatrutide" land in the active pool
     # but in no cluster. Zero LLM / embedding cost.
     promote_orphan_keywords: bool = True
+    # Quality floor for orphan promotion: cosine score (vs. silo anchor) below
+    # which silently-omitted keywords stay as orphans rather than becoming their
+    # own thin article. Tightens the editorial bar without touching the gate's
+    # `relevance_threshold` (which gates the pool used for clustering).
+    # Empirically: 0.65 keeps the strong + foundational orphans, drops the
+    # marginal long-tail (cf. retatrutide validation, 2026-05-28).
+    orphan_promotion_min_score: float = 0.65
 
     # Enriched silo anchor (routing-calibration follow-up). At finalize, the LLM
     # generates ~N example keywords per accepted silo; their embeddings are

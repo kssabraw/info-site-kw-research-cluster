@@ -17,8 +17,13 @@ from app.pipeline.article_planning.models import (
 from app.pipeline.article_planning.orphan_promotion import promote_orphans
 
 
-def _topic(topic_id: str, keyword_groups: list[list[str]]) -> TopicInput:
-    """Build a TopicInput whose groupings cover the given keyword lists."""
+def _topic(
+    topic_id: str,
+    keyword_groups: list[list[str]],
+    relevance: dict[str, float] | None = None,
+) -> TopicInput:
+    """Build a TopicInput whose groupings cover the given keyword lists. Pass
+    `relevance` to populate `keyword_relevance` for the min-score tests."""
     return TopicInput(
         id=topic_id, name=topic_id, rationale="", relationship_type="",
         embedding=None,
@@ -30,6 +35,7 @@ def _topic(topic_id: str, keyword_groups: list[list[str]]) -> TopicInput:
             )
             for i, kws in enumerate(keyword_groups)
         ],
+        keyword_relevance=relevance or {},
     )
 
 
@@ -120,3 +126,52 @@ def test_topic_with_no_orphans_records_no_delta():
     promote_orphans(result, [topic])
     assert len(result.per_topic[0].articles) == 1
     assert "orphans_promoted" not in result.per_topic[0].log
+
+
+def test_min_score_keeps_strong_orphans_drops_marginal_ones():
+    """At min_score=0.65, only orphans whose stored relevance >= 0.65 are
+    promoted. The retatrutide distribution: 'what is retatrutide' (0.72)
+    promoted; 'random marginal kw' (0.55) stays as a bare-active orphan."""
+    topic = _topic(
+        "t1",
+        [["retatrutide", "what is retatrutide", "marginal kw", "edge kw"]],
+        relevance={"retatrutide": 0.85, "what is retatrutide": 0.72,
+                   "marginal kw": 0.55, "edge kw": 0.649},
+    )
+    result = PlanResult(per_topic=[TopicPlan(
+        topic_id="t1",
+        articles=[_article("retatrutide", [])],
+    )])
+
+    promote_orphans(result, [topic], min_score=0.65)
+    primaries = {a.primary_keyword for a in result.per_topic[0].articles}
+    # 0.72 promoted; 0.55 and 0.649 (just below the floor) stay orphaned.
+    assert primaries == {"retatrutide", "what is retatrutide"}
+    assert result.per_topic[0].log["orphans_promoted"] == 1
+    assert result.per_topic[0].log["orphans_below_floor"] == 2
+
+
+def test_min_score_keyword_with_missing_score_is_not_promoted():
+    """Defensive: an orphan without a recorded score (shouldn't happen if
+    the caller populates `keyword_relevance` correctly) is treated as below
+    the floor — better to leave it orphaned than promote a possibly-junk kw."""
+    topic = _topic("t1", [["a", "b", "c"]], relevance={"a": 0.9, "b": 0.9})
+    # 'c' has no score recorded.
+    result = PlanResult(per_topic=[TopicPlan(
+        topic_id="t1", articles=[_article("a", [])],
+    )])
+    promote_orphans(result, [topic], min_score=0.65)
+    primaries = {a.primary_keyword for a in result.per_topic[0].articles}
+    assert primaries == {"a", "b"}     # 'c' (no score) is not promoted
+
+
+def test_min_score_zero_promotes_everything_legacy_behavior():
+    """The default min_score=0 path is a no-op floor (used by tests that
+    don't care about the quality bar)."""
+    topic = _topic("t1", [["a", "b"]])   # no relevance map needed
+    result = PlanResult(per_topic=[TopicPlan(
+        topic_id="t1", articles=[_article("a", [])],
+    )])
+    promote_orphans(result, [topic])   # default min_score=0
+    primaries = {a.primary_keyword for a in result.per_topic[0].articles}
+    assert primaries == {"a", "b"}
