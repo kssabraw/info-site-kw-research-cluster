@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     # the same peer end up in one article; single-keyword peer matches still spawn
     # their own primary (no minimum — the peer-name signal is deterministic).
     peer_entity_grouping: bool = True
+    # Below this many keywords, a peer-comparison bucket folds into one
+    # "retatrutide vs competitors" roundup instead of shipping as a thin
+    # single-keyword stub (a lone `cagrisema vs retatrutide`). 1 disables the
+    # fold (every competitor its own article). 2 folds only 1-keyword stubs.
+    peer_min_keywords: int = 2
 
     # Orphan promotion: after all planning passes finish, every active keyword
     # that the orchestrator silently omitted (singletons, redundant long-tail,

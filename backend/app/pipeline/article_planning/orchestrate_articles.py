@@ -384,6 +384,7 @@ def run_article_planning(
     split_edge_threshold: float = 0.55,
     split_min_subarticle_size: int = 5,
     peer_grouping: bool = True,
+    peer_min_keywords: int = 1,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     promote_orphan_keywords: bool = True,
@@ -409,7 +410,8 @@ def run_article_planning(
             result.per_topic.append(direct_plan_topic(topic))
         if peer_grouping:
             group_by_peer_entity(result, seed_terms=seed_terms or [],
-                                 peer_terms=peer_terms or [])
+                                 peer_terms=peer_terms or [],
+                                 min_keywords=peer_min_keywords)
         if split_oversized:
             split_oversized_articles(
                 result, embed_fn=embed_fn, min_keywords=split_min_keywords,
@@ -474,7 +476,8 @@ def run_article_planning(
 
     if peer_grouping:
         group_by_peer_entity(result, seed_terms=seed_terms or [],
-                             peer_terms=peer_terms or [])
+                             peer_terms=peer_terms or [],
+                             min_keywords=peer_min_keywords)
     if split_oversized:
         split_oversized_articles(
             result, embed_fn=embed_fn, min_keywords=split_min_keywords,

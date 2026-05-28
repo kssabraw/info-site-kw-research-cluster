@@ -250,6 +250,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
             split_edge_threshold=s.split_edge_threshold,
             split_min_subarticle_size=s.split_min_subarticle_size,
             peer_grouping=s.peer_entity_grouping,
+            peer_min_keywords=s.peer_min_keywords,
             seed_terms=[session["seed_keyword"], *(session.get("aliases") or [])],
             peer_terms=session.get("peer_entities") or [],
             promote_orphan_keywords=s.promote_orphan_keywords,

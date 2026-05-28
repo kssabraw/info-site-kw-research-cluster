@@ -23,8 +23,13 @@ keywords (`X vs Y vs Z`) form their own multi-peer bucket.
 Design choices:
 - **Cross-topic, single home topic per peer.** No duplicate peer articles -> no
   dedup elimination cascade. The smaller silos keep their non-peer articles.
-- **No minimum size.** A peer mention is a deterministic signal — even one
-  keyword naming a unique peer becomes its own primary (zero supporting kw OK).
+- **Configurable minimum size (`min_keywords`).** A peer mention is a
+  deterministic signal, but a bucket with too few keywords (e.g. a lone
+  `cagrisema vs retatrutide`) makes a thin single-keyword stub. Buckets below
+  the threshold fold into ONE "retatrutide vs competitors" comparison roundup
+  instead of littering the plan with per-competitor stubs; substantial buckets
+  (e.g. `retatrutide vs ozempic`) still get their own article. `min_keywords=1`
+  disables folding (every bucket stands alone — the original behavior).
 - **Whole-word peer match** (substring-safe), case-insensitive.
 - **Runs BEFORE the salience split**, so peer-entity (stronger signal) gets
   first dibs; salience split then handles any oversized leftover non-peer articles.
@@ -77,11 +82,27 @@ def _unique_preserving_order(items: list[str]) -> list[str]:
     return out
 
 
+def _home_topic(sources: list[tuple[str, str]]) -> str:
+    """The topic that contributed the most keywords to a bucket; ties broken by
+    first occurrence (deterministic)."""
+    topic_counts: dict[str, int] = {}
+    first_seen: dict[str, int] = {}
+    for tid, _kw in sources:
+        topic_counts[tid] = topic_counts.get(tid, 0) + 1
+        first_seen.setdefault(tid, len(first_seen))
+    return max(topic_counts, key=lambda t: (topic_counts[t], -first_seen[t]))
+
+
+def _bucket_label(peer_key: frozenset) -> str:
+    return next(iter(peer_key)) if len(peer_key) == 1 else ", ".join(sorted(peer_key))
+
+
 def group_by_peer_entity(
     result: PlanResult,
     *,
     seed_terms: list[str],
     peer_terms: list[str],
+    min_keywords: int = 1,
 ) -> None:
     """Mutate `result` in place: cross-topic peer-entity partition (PRD §7.10).
 
@@ -150,24 +171,24 @@ def group_by_peer_entity(
                 peer_primary_keywords=art.peer_primary_keywords,
             ))
 
-    # Materialize ONE article per peer bucket — cross-topic, single home topic.
+    # Materialize peer articles — cross-topic, single home topic each. A bucket
+    # with >= min_keywords becomes its own per-competitor article; smaller ones
+    # are set aside and folded into a single comparison roundup below, so a lone
+    # `cagrisema vs retatrutide` doesn't ship as its own single-keyword stub.
+    folded_sources: list[tuple[str, str]] = []
+    folded_labels: list[str] = []
     for peer_key, sources in peer_buckets.items():
-        topic_counts: dict[str, int] = {}
-        first_seen: dict[str, int] = {}
-        for tid, _kw in sources:
-            topic_counts[tid] = topic_counts.get(tid, 0) + 1
-            first_seen.setdefault(tid, len(first_seen))
-        # Most keywords wins; ties broken by first occurrence (deterministic).
-        home_topic = max(topic_counts, key=lambda t: (topic_counts[t], -first_seen[t]))
-
         unique_kws = _unique_preserving_order([kw for _, kw in sources])
+        if len(unique_kws) < min_keywords:
+            folded_sources.extend(sources)
+            folded_labels.append(_bucket_label(peer_key))
+            continue
+        home_topic = _home_topic(sources)
         if len(peer_key) == 1:
             (peer,) = peer_key
             primary = _pick_peer_primary(unique_kws, seed_lower, peer)
-            label = peer
         else:
             primary = min(unique_kws, key=lambda k: (len(k), k))
-            label = ", ".join(sorted(peer_key))
 
         topic_articles.setdefault(home_topic, []).append(ArticleRecord(
             topic_id=home_topic,
@@ -176,7 +197,28 @@ def group_by_peer_entity(
             intent="comparison",
             suggested_h2s=[],
             source_statistical_grouping_id=None,
-            orchestrator_notes=f"Grouped by peer entity: {label}",
+            orchestrator_notes=f"Grouped by peer entity: {_bucket_label(peer_key)}",
+        ))
+
+    # Fold the sub-threshold buckets into ONE "retatrutide vs competitors"
+    # roundup (one home topic, one article). If only a single small bucket
+    # existed this is just that one article — no worse than before; the win is
+    # when several stubs consolidate.
+    if folded_sources:
+        home_topic = _home_topic(folded_sources)
+        unique_kws = _unique_preserving_order([kw for _, kw in folded_sources])
+        primary = min(unique_kws, key=lambda k: (len(k), k))
+        topic_articles.setdefault(home_topic, []).append(ArticleRecord(
+            topic_id=home_topic,
+            primary_keyword=primary,
+            supporting_keywords=[k for k in unique_kws if k != primary],
+            intent="comparison",
+            suggested_h2s=[],
+            source_statistical_grouping_id=None,
+            orchestrator_notes=(
+                f"Comparison roundup: folded {len(folded_labels)} small peer "
+                f"bucket(s) ({', '.join(sorted(folded_labels))})"
+            ),
         ))
 
     # Write back to per-topic plans. Delta can be negative for a topic that lost

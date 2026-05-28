@@ -243,3 +243,71 @@ def test_promotes_non_peer_kw_to_primary_when_original_primary_was_peer_named():
     parent = next(a for a in arts.values() if a.intent != "comparison")
     assert parent.primary_keyword in ("retatrutide overview", "retatrutide background")
     assert "promoted" in (parent.orchestrator_notes or "")
+
+
+# ---- min_keywords fold (Thread 3 — kill single-keyword comparison stubs) -----
+def test_min_keywords_folds_singleton_buckets_into_one_roundup():
+    """With min_keywords=2, single-keyword peer buckets don't ship as their own
+    stubs — they collapse into ONE 'retatrutide vs competitors' roundup. The
+    substantial bucket (2 kw) keeps its own article."""
+    result = _plan(_art(
+        primary="retatrutide overview",
+        supporting=[
+            "retatrutide vs cagrisema",      # lone cagrisema -> stub
+            "retatrutide vs orforglipron",   # lone orforglipron -> stub
+            "retatrutide vs ozempic",        # ozempic bucket: 2 kw -> kept
+            "ozempic vs retatrutide",
+        ],
+    ))
+    group_by_peer_entity(
+        result, seed_terms=["retatrutide"],
+        peer_terms=["cagrisema", "orforglipron", "ozempic"], min_keywords=2,
+    )
+    comp = [a for a in result.per_topic[0].articles if a.intent == "comparison"]
+    notes = [a.orchestrator_notes for a in comp]
+    # ozempic (2 kw) survives as its own per-competitor article.
+    assert any(n == "Grouped by peer entity: ozempic" for n in notes)
+    # cagrisema + orforglipron (1 kw each) folded into one roundup.
+    roundup = [a for a in comp if a.orchestrator_notes.startswith("Comparison roundup")]
+    assert len(roundup) == 1
+    folded = roundup[0]
+    assert "cagrisema" in folded.orchestrator_notes
+    assert "orforglipron" in folded.orchestrator_notes
+    # Both folded keywords live in the one roundup article.
+    folded_kws = {folded.primary_keyword, *folded.supporting_keywords}
+    assert {"retatrutide vs cagrisema", "retatrutide vs orforglipron"} <= folded_kws
+    # 2 comparison articles total (ozempic + the roundup), not 3 stubs.
+    assert len(comp) == 2
+
+
+def test_min_keywords_default_1_disables_folding():
+    """Default min_keywords=1 keeps the original behavior: every bucket stands
+    alone, no roundup (back-compat for callers that don't opt in)."""
+    result = _plan(_art(
+        primary="retatrutide overview",
+        supporting=["retatrutide vs cagrisema", "retatrutide vs orforglipron"],
+    ))
+    group_by_peer_entity(
+        result, seed_terms=["retatrutide"],
+        peer_terms=["cagrisema", "orforglipron"],  # min_keywords defaults to 1
+    )
+    comp = [a for a in result.per_topic[0].articles if a.intent == "comparison"]
+    assert len(comp) == 2  # two separate per-competitor articles
+    assert not any(a.orchestrator_notes.startswith("Comparison roundup") for a in comp)
+
+
+def test_min_keywords_single_small_bucket_is_not_a_pointless_roundup():
+    """If only ONE small bucket exists, the 'roundup' is just that one article —
+    its keyword is preserved (no worse than before, no data lost)."""
+    result = _plan(_art(
+        primary="retatrutide overview",
+        supporting=["retatrutide vs cagrisema"],
+    ))
+    group_by_peer_entity(
+        result, seed_terms=["retatrutide"],
+        peer_terms=["cagrisema"], min_keywords=2,
+    )
+    comp = [a for a in result.per_topic[0].articles if a.intent == "comparison"]
+    assert len(comp) == 1
+    kws = {comp[0].primary_keyword, *comp[0].supporting_keywords}
+    assert "retatrutide vs cagrisema" in kws
