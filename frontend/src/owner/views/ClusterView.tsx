@@ -227,8 +227,6 @@ function ArticleRow(p: {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(c.name);
-  const [editingH2, setEditingH2] = useState(false);
-  const [h2Draft, setH2Draft] = useState((c.suggested_h2s ?? []).join("\n"));
   const [splitMode, setSplitMode] = useState(false);
   const [splitSel, setSplitSel] = useState<Set<string>>(new Set());
 
@@ -239,11 +237,6 @@ function ArticleRow(p: {
   function saveName() {
     setRenaming(false);
     if (nameDraft.trim() && nameDraft !== c.name) run(() => editCluster(c.id, { name: nameDraft.trim() }));
-  }
-  function saveH2() {
-    setEditingH2(false);
-    const arr = h2Draft.split("\n").map((s) => s.trim()).filter(Boolean);
-    run(() => editCluster(c.id, { suggested_h2s: arr }));
   }
   function doSplit() {
     const ids = [...splitSel];
@@ -347,25 +340,6 @@ function ArticleRow(p: {
                 </div>
               ))}
             </div>
-          </DetailLine>
-
-          <DetailLine label="H2 outline">
-            {editingH2 ? (
-              <span>
-                <textarea className="textarea" value={h2Draft} onChange={(e) => setH2Draft(e.target.value)} rows={5} />
-                <div className="inline-actions">
-                  <button className="btn btn-primary" style={{ width: "auto" }} onClick={saveH2}>Save</button>
-                  <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setEditingH2(false)}>Cancel</button>
-                </div>
-              </span>
-            ) : (
-              <span>
-                {(c.suggested_h2s ?? []).join(" · ") || <span className="cell-muted">none</span>}{" "}
-                {!isVA && (
-                  <button className="link-btn" onClick={() => { setH2Draft((c.suggested_h2s ?? []).join("\n")); setEditingH2(true); }}>edit</button>
-                )}
-              </span>
-            )}
           </DetailLine>
 
           {links.length > 0 && <DetailLine label="Links to">{links.map(p.clusterName).join(", ")}</DetailLine>}
