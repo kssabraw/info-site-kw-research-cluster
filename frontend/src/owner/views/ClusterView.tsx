@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   acceptGap,
   bulkKeywordMove,
+  createExport,
   deleteCluster,
   dismissGap,
   editCluster,
@@ -102,6 +103,7 @@ export function ClusterView() {
     <div>
       {isVA ? (
         <div className="edit-toolbar">
+          <DownloadCsvButton sessionId={sessionId} />
           <span className="muted">
             You can rename articles and move keywords between them. Restructuring
             (split, merge, delete) is handled by your workspace owner.
@@ -109,6 +111,7 @@ export function ClusterView() {
         </div>
       ) : (
       <div className="edit-toolbar">
+        <DownloadCsvButton sessionId={sessionId} />
         {mergeMode ? (
           <>
             <span className="muted">{mergeSel.size} selected (first = survivor)</span>
@@ -280,6 +283,11 @@ function ArticleRow(p: {
               {c.name}
             </span>
           )}
+          {primary?.keyword && (
+            <span className="cell-muted" title="Primary (target) keyword">
+              → {primary.keyword}
+            </span>
+          )}
           {c.intent && <span className="badge badge-rel">{c.intent}</span>}
           {c.is_gap_placeholder && <span className="badge badge-warn">gap placeholder</span>}
           <span className="topic-group-count">{keywords.length} kw</span>
@@ -410,6 +418,42 @@ function RequestRestructure({ articleName }: { articleName: string }) {
       }}
     >
       Request restructure from Owner
+    </button>
+  );
+}
+
+// Quick CSV download from the Cluster tab (PRD §12). Reuses the export pipeline:
+// generates a "flat" snapshot (one row per keyword, with its article/topic) live
+// from current Postgres state, then opens the backend-signed download URL. The
+// Exports tab still offers the topic-grouped (.zip) format; this is the
+// one-sheet, read-while-you-work shortcut. Available to both roles (Export is ✓
+// for VA and Owner in §11.2).
+function DownloadCsvButton({ sessionId }: { sessionId: string }) {
+  const dl = useMutation({
+    mutationFn: () => createExport(sessionId, "flat"),
+    onSuccess: (res) => {
+      // The signed URL carries Content-Disposition: attachment, so opening it
+      // triggers a download rather than a navigation.
+      window.open(res.download_url, "_blank", "noopener");
+    },
+    onError: (e: Error) => alert(e.message),
+  });
+  return (
+    <button
+      className="btn btn-ghost"
+      style={{ width: "auto" }}
+      disabled={dl.isPending}
+      title="Download every keyword and its article as a CSV"
+      onClick={() => dl.mutate()}
+    >
+      {dl.isPending ? (
+        <>
+          <span className="spinner-sm" />
+          Generating…
+        </>
+      ) : (
+        "Download CSV"
+      )}
     </button>
   );
 }
