@@ -6,26 +6,28 @@ vs. `switching from zepbound to retatrutide`) embed nearly identically — only 
 peer-name token differs, and the model sees those tokens as semantically close —
 so Louvain bundles them as one community and the orchestrator inherits one
 combined article. But editorially they are DIFFERENT articles: each names a
-different peer and must contain peer-specific guidance.
+different peer.
 
 This pass uses the deterministic peer-entity list (already produced by grounding
-at session creation, used by the §7.6 off-niche filter) to partition each
-topic's planned articles by the peer entity each keyword names — and aggregates
-across the topic's articles, so all `tirzepatide`-naming keywords in the topic
-end up in ONE tirzepatide article regardless of which planner-article they
-landed in. Multi-peer keywords (e.g. `retatrutide vs tirzepatide vs semaglutide`)
-form their own multi-peer bucket.
+at session creation, used by the §7.6 off-niche filter) to partition the
+planner's articles by the peer entity each keyword names. **Cross-topic**:
+keywords naming the same peer collapse into exactly one article across the
+ENTIRE plan (not one per topic), so there's nothing duplicate for cross-topic
+dedup to chew on — which is what hollowed out the smaller silos in the
+per-topic implementation.
+
+Each peer article's home topic is the one that contributed the most keywords to
+its bucket (ties broken deterministically by first occurrence). Multi-peer
+keywords (`X vs Y vs Z`) form their own multi-peer bucket.
 
 Design choices:
+- **Cross-topic, single home topic per peer.** No duplicate peer articles -> no
+  dedup elimination cascade. The smaller silos keep their non-peer articles.
 - **No minimum size.** A peer mention is a deterministic signal — even one
-  keyword naming a unique peer becomes its own primary (zero supporting kw is OK).
-- **Whole-word peer match** (so brand-name substrings inside other tokens are
-  safe), case-insensitive.
-- **Runs BEFORE the salience split**, because peer-entity is a stronger semantic
-  signal than embedding similarity; split then handles any oversized leftovers.
-- **Per-topic** (not cross-silo). Cross-topic dedup runs after and merges any
-  peer articles that appear in multiple silos (e.g. a tirzepatide article in
-  both Mechanism and Obesity dedups to one).
+  keyword naming a unique peer becomes its own primary (zero supporting kw OK).
+- **Whole-word peer match** (substring-safe), case-insensitive.
+- **Runs BEFORE the salience split**, so peer-entity (stronger signal) gets
+  first dibs; salience split then handles any oversized leftover non-peer articles.
 """
 
 import logging
@@ -51,16 +53,14 @@ def _detect_peers(keyword: str, peer_lower: list[str]) -> frozenset[str]:
     )
 
 
-def _pick_peer_primary(
-    keywords: list[str], seed_lower: list[str], peer: str
-) -> str:
+def _pick_peer_primary(keywords: list[str], seed_lower: list[str], peer: str) -> str:
     """Prefer the cleanest `seed vs peer` / `peer vs seed` form; else shortest."""
     versus_candidates: list[str] = []
     for kw in keywords:
         kw_lower = kw.lower()
         for seed in seed_lower:
-            if re.search(rf"\b{re.escape(seed)}\s+vs\.?\s+{re.escape(peer)}\b", kw_lower) \
-               or re.search(rf"\b{re.escape(peer)}\s+vs\.?\s+{re.escape(seed)}\b", kw_lower):
+            if (re.search(rf"\b{re.escape(seed)}\s+vs\.?\s+{re.escape(peer)}\b", kw_lower)
+                or re.search(rf"\b{re.escape(peer)}\s+vs\.?\s+{re.escape(seed)}\b", kw_lower)):
                 versus_candidates.append(kw)
                 break
     pool = versus_candidates or keywords
@@ -83,16 +83,14 @@ def group_by_peer_entity(
     seed_terms: list[str],
     peer_terms: list[str],
 ) -> None:
-    """Mutate `result` in place: partition each topic's articles by peer entity.
+    """Mutate `result` in place: cross-topic peer-entity partition (PRD §7.10).
 
-    For each topic, every keyword that names ≥1 peer is pulled into a per-peer
-    bucket (single-peer keywords) or a multi-peer bucket (frozenset). Buckets
-    aggregate across the topic's planner-articles, so all keywords naming the
-    same peer collapse into one article (the owner intent: one article per
-    peer relationship with the seed). A planner-article keeps its non-peer
-    keywords; if its primary was peer-named, a non-peer keyword is promoted.
-    Articles whose every keyword was peer-named are consumed (dissolved into
-    peer buckets)."""
+    Every keyword that names a peer entity across the *entire* plan is pulled
+    into a per-peer bucket; each bucket becomes exactly ONE article, assigned to
+    the silo that contributed the most keywords (the bucket's home topic). All
+    other articles keep their non-peer keywords; if an article's primary was
+    peer-named, a non-peer keyword is promoted. Articles whose every keyword
+    was peer-named dissolve into the cross-topic peer buckets."""
     if not peer_terms:
         return
     regex = _peer_regex(peer_terms)
@@ -101,12 +99,13 @@ def group_by_peer_entity(
     peer_lower = [p.strip().lower() for p in peer_terms if p and p.strip()]
     seed_lower = [s.strip().lower() for s in (seed_terms or []) if s and s.strip()]
 
-    total_added = 0
-    for plan in result.per_topic:
-        # peer_key -> list of keywords (across all planner-articles in the topic)
-        peer_buckets: dict[frozenset, list[str]] = {}
-        rebuilt: list[ArticleRecord] = []
+    # Cross-topic peer buckets: peer_key -> ordered list of (source_topic, kw).
+    peer_buckets: dict[frozenset, list[tuple[str, str]]] = {}
+    # Each topic's surviving NON-peer parent articles.
+    topic_articles: dict[str, list[ArticleRecord]] = {p.topic_id: [] for p in result.per_topic}
+    original_counts: dict[str, int] = {p.topic_id: len(p.articles) for p in result.per_topic}
 
+    for plan in result.per_topic:
         for art in plan.articles:
             all_kws = _unique_preserving_order(
                 [art.primary_keyword, *art.supporting_keywords]
@@ -115,58 +114,78 @@ def group_by_peer_entity(
             for kw in all_kws:
                 peers = _detect_peers(kw, peer_lower)
                 if peers:
-                    peer_buckets.setdefault(peers, []).append(kw)
+                    peer_buckets.setdefault(peers, []).append((plan.topic_id, kw))
                 else:
                     non_peer.append(kw)
 
-            # Decide what survives of the original article.
             if not non_peer:
                 continue  # every keyword was peer-named — parent dissolves
+
             if art.primary_keyword in non_peer:
                 primary = art.primary_keyword
                 notes = art.orchestrator_notes
+                suggested_h2s = art.suggested_h2s
+                serp = art.serp_top_urls
             else:
-                # Primary was peer-named (went to a peer bucket); promote a
-                # non-peer keyword to be the parent's new primary.
+                # Original primary was peer-named (gone to a peer bucket); promote
+                # a non-peer keyword as the parent's new primary. The original
+                # H2 outline / SERP referred to the old primary, so blank them.
                 primary = min(non_peer, key=lambda k: (len(k), k))
                 notes = (
                     (art.orchestrator_notes or "")
                     + " | primary promoted after peer-entity grouping"
                 ).strip(" |")
-            rebuilt.append(ArticleRecord(
-                topic_id=art.topic_id,
+                suggested_h2s = []
+                serp = []
+
+            topic_articles[plan.topic_id].append(ArticleRecord(
+                topic_id=plan.topic_id,
                 primary_keyword=primary,
                 supporting_keywords=[k for k in non_peer if k != primary],
                 intent=art.intent,
-                suggested_h2s=art.suggested_h2s if primary == art.primary_keyword else [],
+                suggested_h2s=suggested_h2s,
                 source_statistical_grouping_id=art.source_statistical_grouping_id,
                 orchestrator_notes=notes,
-                serp_top_urls=art.serp_top_urls if primary == art.primary_keyword else [],
+                serp_top_urls=serp,
                 peer_primary_keywords=art.peer_primary_keywords,
             ))
 
-        # Materialize one article per peer bucket (deterministic — no minimum).
-        for peer_key, kws in peer_buckets.items():
-            unique = _unique_preserving_order(kws)
-            if len(peer_key) == 1:
-                (peer,) = peer_key
-                primary = _pick_peer_primary(unique, seed_lower, peer)
-                label = peer
-            else:
-                primary = min(unique, key=lambda k: (len(k), k))
-                label = ", ".join(sorted(peer_key))
-            rebuilt.append(ArticleRecord(
-                topic_id=plan.topic_id,
-                primary_keyword=primary,
-                supporting_keywords=[k for k in unique if k != primary],
-                intent="comparison",
-                suggested_h2s=[],
-                source_statistical_grouping_id=None,
-                orchestrator_notes=f"Grouped by peer entity: {label}",
-            ))
+    # Materialize ONE article per peer bucket — cross-topic, single home topic.
+    for peer_key, sources in peer_buckets.items():
+        topic_counts: dict[str, int] = {}
+        first_seen: dict[str, int] = {}
+        for tid, _kw in sources:
+            topic_counts[tid] = topic_counts.get(tid, 0) + 1
+            first_seen.setdefault(tid, len(first_seen))
+        # Most keywords wins; ties broken by first occurrence (deterministic).
+        home_topic = max(topic_counts, key=lambda t: (topic_counts[t], -first_seen[t]))
 
-        delta = len(rebuilt) - len(plan.articles)
-        plan.articles = rebuilt
+        unique_kws = _unique_preserving_order([kw for _, kw in sources])
+        if len(peer_key) == 1:
+            (peer,) = peer_key
+            primary = _pick_peer_primary(unique_kws, seed_lower, peer)
+            label = peer
+        else:
+            primary = min(unique_kws, key=lambda k: (len(k), k))
+            label = ", ".join(sorted(peer_key))
+
+        topic_articles.setdefault(home_topic, []).append(ArticleRecord(
+            topic_id=home_topic,
+            primary_keyword=primary,
+            supporting_keywords=[k for k in unique_kws if k != primary],
+            intent="comparison",
+            suggested_h2s=[],
+            source_statistical_grouping_id=None,
+            orchestrator_notes=f"Grouped by peer entity: {label}",
+        ))
+
+    # Write back to per-topic plans. Delta can be negative for a topic that lost
+    # articles to a peer bucket whose home was elsewhere — that's expected.
+    total_added = 0
+    for plan in result.per_topic:
+        new_articles = topic_articles.get(plan.topic_id, [])
+        delta = len(new_articles) - original_counts[plan.topic_id]
+        plan.articles = new_articles
         if delta:
             plan.log["peer_entity_grouped_delta"] = delta
             total_added += max(delta, 0)

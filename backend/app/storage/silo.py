@@ -531,11 +531,16 @@ def set_topic_embedding(topic_id: str, vector: list[float]) -> None:
 
 # ---- M5 article planning persistence (PRD §7.10, §13) ---------------------
 def get_active_keyword_index(session_id: str) -> dict[tuple[str, str], str]:
-    """(topic_id, normalized keyword) -> keyword row id, for the session's active
-    keywords (the only pool the orchestrator saw). Paged: a broad silo can hold
-    well over PostgREST's 1000-row default."""
+    """Session-wide `normalized keyword -> keyword row id` for the session's
+    active keywords (the only pool the orchestrator saw). Session-wide (not
+    topic-keyed) so a cluster in topic A can carry keywords whose row-level
+    topic_id is B — needed for the cross-topic peer-entity-grouping pass, which
+    assigns each peer article to a single home topic regardless of where
+    Lever-3 routed each keyword. With Lever-3 on (default), each normalized
+    text has exactly one active row, so the lookup is unambiguous. Paged: a
+    broad silo can hold well over PostgREST's 1000-row default."""
     client = get_service_client()
-    index: dict[tuple[str, str], str] = {}
+    index: dict[str, str] = {}
     offset = 0
     page = 1000
     while True:
@@ -550,7 +555,7 @@ def get_active_keyword_index(session_id: str) -> dict[tuple[str, str], str]:
         )
         rows = res.data or []
         for r in rows:
-            index[(r["topic_id"], _norm(r["keyword"]))] = r["id"]
+            index.setdefault(_norm(r["keyword"]), r["id"])
         if len(rows) < page:
             break
         offset += page
@@ -627,11 +632,13 @@ def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
     primary_kw_ids: list[str | None] = []
     support_ids_per: list[list[str]] = []
     for idx, (cid, (topic_id, art)) in enumerate(zip(cluster_ids, articles)):
-        pkid = kw_index.get((topic_id, _norm(art.primary_keyword)))
+        # Session-wide lookup — a cluster (e.g. a cross-topic peer article)
+        # may carry keywords whose row-level topic_id differs from the cluster's.
+        pkid = kw_index.get(_norm(art.primary_keyword))
         primary_kw_ids.append(pkid)
         support_ids_per.append(
             [kid for sk in art.supporting_keywords
-             if (kid := kw_index.get((topic_id, _norm(sk)))) is not None]
+             if (kid := kw_index.get(_norm(sk))) is not None]
         )
         peer_ids = list(dict.fromkeys(
             primary_to_cluster[_norm(pk)]
@@ -658,7 +665,7 @@ def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
     drops_by_reason: dict[str, list[str]] = {}
     for plan in result.per_topic:
         for d in plan.dropped:
-            kid = kw_index.get((plan.topic_id, _norm(d.keyword)))
+            kid = kw_index.get(_norm(d.keyword))
             if kid:
                 drops_by_reason.setdefault(d.reason or "", []).append(kid)
 

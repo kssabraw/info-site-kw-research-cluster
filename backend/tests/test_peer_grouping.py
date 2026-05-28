@@ -103,6 +103,42 @@ def test_aggregates_across_articles_in_same_topic():
     }
 
 
+def test_cross_topic_aggregation_avoids_duplicate_peer_articles():
+    """The Mechanism-disappears bug: peer-grouping was per-topic, so every silo
+    that had a tirzepatide-naming keyword spawned its own tirzepatide article;
+    cross-topic dedup then wiped the smaller silo. The cross-topic version puts
+    EXACTLY ONE tirzepatide article into the plan, in the silo that contributed
+    the most tirzepatide-keywords."""
+    result = PlanResult(per_topic=[
+        TopicPlan(topic_id="big_silo", articles=[
+            _art("kw a", ["retatrutide vs tirzepatide", "retatrutide vs tirzepatide dosage"], topic="big_silo"),
+        ]),
+        TopicPlan(topic_id="small_silo", articles=[
+            _art("kw b", ["switching from tirzepatide to retatrutide"], topic="small_silo"),
+        ]),
+    ])
+    group_by_peer_entity(result, seed_terms=SEED, peer_terms=PEERS)
+
+    tirz_in_big = [a for a in result.per_topic[0].articles
+                   if a.intent == "comparison"
+                   and "tirzepatide" in (a.orchestrator_notes or "")]
+    tirz_in_small = [a for a in result.per_topic[1].articles
+                     if a.intent == "comparison"
+                     and "tirzepatide" in (a.orchestrator_notes or "")]
+    # Exactly one tirzepatide article in the whole plan, in the bigger silo
+    # (more contributing keywords), and it carries keywords from BOTH silos.
+    assert len(tirz_in_big) == 1
+    assert len(tirz_in_small) == 0
+    tirz = tirz_in_big[0]
+    assert set([tirz.primary_keyword, *tirz.supporting_keywords]) == {
+        "retatrutide vs tirzepatide",
+        "retatrutide vs tirzepatide dosage",
+        "switching from tirzepatide to retatrutide",
+    }
+    # The small silo keeps its non-peer parent article — the wipe-out is gone.
+    assert any(a.primary_keyword == "kw b" for a in result.per_topic[1].articles)
+
+
 def test_prefers_clean_vs_form_for_primary():
     """The peer article's primary should prefer the clean '{seed} vs {peer}' form
     if any keyword has it, otherwise the shortest."""
