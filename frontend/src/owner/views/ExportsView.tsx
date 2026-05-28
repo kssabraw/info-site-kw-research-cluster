@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createExport,
   downloadExport,
-  getSummary,
   listExports,
   type CsvExportFormat,
   type CsvExportListItem,
@@ -29,10 +28,7 @@ export function ExportsView() {
   const { sessionId } = useSession();
   const qc = useQueryClient();
 
-  const summary = useQuery({ queryKey: ["summary", sessionId], queryFn: () => getSummary(sessionId) });
   const exportsQ = useQuery({ queryKey: ["exports", sessionId], queryFn: () => listExports(sessionId) });
-
-  const architectureReady = Boolean(summary.data?.architecture);
 
   const gen = useMutation({
     mutationFn: (format: CsvExportFormat) => createExport(sessionId, format),
@@ -49,7 +45,7 @@ export function ExportsView() {
     onError: (e: Error) => alert(e.message),
   });
 
-  const formats: CsvExportFormat[] = ["flat", "topic_grouped", "architecture"];
+  const formats: CsvExportFormat[] = ["flat", "topic_grouped"];
 
   return (
     <div>
@@ -61,19 +57,13 @@ export function ExportsView() {
         </p>
         <div className="export-actions">
           {formats.map((f) => {
-            const disabled =
-              gen.isPending || (f === "architecture" && !architectureReady);
+            const disabled = gen.isPending;
             return (
               <button
                 key={f}
                 className="btn btn-ghost"
                 style={{ width: "auto" }}
                 disabled={disabled}
-                title={
-                  f === "architecture" && !architectureReady
-                    ? "Generate the site architecture first"
-                    : undefined
-                }
                 onClick={() => gen.mutate(f)}
               >
                 {gen.isPending && gen.variables === f ? (

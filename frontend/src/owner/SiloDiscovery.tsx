@@ -433,7 +433,7 @@ function PlanResults(p: { plan: NonNullable<PipelineSummary["plan"]>; onExit: ()
 
       <div className="toolbar">
         <span className="muted">
-          Editable table, cluster, and architecture views arrive in a later milestone.
+          Open the session to review and edit the table and cluster views.
         </span>
         <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
           Done
