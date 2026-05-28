@@ -75,7 +75,18 @@ class Settings(BaseSettings):
     split_min_keywords: int = 40              # only articles larger than this split
     split_resolution: float = 1.2             # > base -> finer sub-communities
     split_edge_threshold: float = 0.55        # cosine edge for the sub-graph
-    split_min_subarticle_size: int = 10       # smaller sub-clusters fold into largest
+    # No floor on sub-article size: every sub-community becomes its own article,
+    # even a 1-keyword stub. Owner-accepted maximal granularity (stub explosion is
+    # acceptable; raise this knob if a future seed needs stub-suppression).
+    split_min_subarticle_size: int = 1
+
+    # Peer-entity-aware article grouping (owner-requested). After planning, any
+    # keyword that names a known peer entity (from grounding's `peer_entities`) is
+    # pulled into an article dedicated to that peer's relationship with the seed.
+    # All "X vs Y" / "switching from X to Y" / "X alternative to Y" variants for
+    # the same peer end up in one article; single-keyword peer matches still spawn
+    # their own primary (no minimum — the peer-name signal is deterministic).
+    peer_entity_grouping: bool = True
 
     # DataForSEO — demand sample + SERP structure during silo discovery.
     dataforseo_login: str = ""
