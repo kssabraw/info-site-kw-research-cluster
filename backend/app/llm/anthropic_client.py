@@ -9,9 +9,17 @@ Every model call emits an `llm_call` structured log (PRD §16.3).
 """
 
 import logging
+import random
 import time
 
-from anthropic import Anthropic
+from anthropic import (
+    Anthropic,
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from app.cost_meter import llm_token_cost, record_cost
 
@@ -22,6 +30,24 @@ class AnthropicError(Exception):
     pass
 
 
+# Transport errors worth retrying in-process: a 429 rate-limit or 529 overload
+# clears on its own, so backing off and re-issuing the call beats degrading the
+# chunk to passthrough (the M5 gap that left e.g. a competitor article as a raw
+# Louvain grouping). The SDK's own 2 default retries proved insufficient under
+# the orchestrator's parallel fan-out, so we add an outer backoff — mirroring the
+# M6 architect fix — and pair it with a lower worker count (config).
+_RETRYABLE_EXC = (RateLimitError, APITimeoutError, APIConnectionError, InternalServerError)
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, _RETRYABLE_EXC):
+        return True
+    if isinstance(exc, APIStatusError):
+        return getattr(exc, "status_code", None) in _RETRYABLE_STATUS
+    return False
+
+
 class AnthropicLLM:
     def __init__(
         self,
@@ -30,10 +56,12 @@ class AnthropicLLM:
         *,
         max_tokens: int = 8000,
         timeout_s: float = 120.0,
+        max_transport_attempts: int = 4,
     ):
         self._client = Anthropic(api_key=api_key, timeout=timeout_s)
         self._model = model
         self._max_tokens = max_tokens
+        self._max_transport_attempts = max(1, max_transport_attempts)
 
     def call_tool(
         self,
@@ -49,23 +77,35 @@ class AnthropicLLM:
         output). Raises AnthropicError on transport failure or a missing tool
         block; the caller owns reprompt/degrade policy (PRD §16.2)."""
         started = time.perf_counter()
-        try:
-            resp = self._client.messages.create(
-                model=self._model,
-                max_tokens=self._max_tokens,
-                system=system,
-                tools=[
-                    {
-                        "name": tool_name,
-                        "description": tool_description,
-                        "input_schema": input_schema,
-                    }
-                ],
-                tool_choice={"type": "tool", "name": tool_name},
-                messages=[{"role": "user", "content": user}],
-            )
-        except Exception as exc:  # noqa: BLE001 — surfaced as AnthropicError
-            raise AnthropicError(f"Anthropic call failed ({purpose}): {exc}") from exc
+        resp = None
+        for attempt in range(self._max_transport_attempts):
+            try:
+                resp = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=self._max_tokens,
+                    system=system,
+                    tools=[
+                        {
+                            "name": tool_name,
+                            "description": tool_description,
+                            "input_schema": input_schema,
+                        }
+                    ],
+                    tool_choice={"type": "tool", "name": tool_name},
+                    messages=[{"role": "user", "content": user}],
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 — surfaced as AnthropicError
+                # Retry only transient transport errors (rate-limit / overload /
+                # timeout); anything else (auth, bad-request, …) fails fast. A
+                # shape failure can't happen here — it's raised below, after a
+                # successful call, and the caller owns that reprompt/degrade.
+                if _is_retryable(exc) and attempt < self._max_transport_attempts - 1:
+                    # Exponential backoff with jitter to step out of the shared
+                    # rate-limit window (1.5s, 3s, 6s, capped at 8s).
+                    time.sleep(min(8.0, 1.5 * (2 ** attempt)) + random.uniform(0, 0.5))
+                    continue
+                raise AnthropicError(f"Anthropic call failed ({purpose}): {exc}") from exc
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
         usage = getattr(resp, "usage", None)

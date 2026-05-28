@@ -55,7 +55,9 @@ class Settings(BaseSettings):
     # single call (huge prompt + output -> timeout/truncation). Plan in chunks of
     # this many groupings, run in parallel, so each call stays small and fast.
     orchestrator_groupings_per_call: int = 12
-    orchestrator_max_workers: int = 5         # parallel orchestrator calls
+    orchestrator_max_workers: int = 2         # parallel orchestrator calls (M6
+    # architect lesson: 5 burst Anthropic's concurrent-connection 429s and the
+    # chunks degraded to passthrough; 2 + the client's transport backoff holds)
 
     # M5 article planning (PRD §7.10).
     candidate_serp_top_n: int = 10            # top organic URLs per candidate primary
