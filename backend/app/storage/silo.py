@@ -702,16 +702,38 @@ def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
             if kid:
                 drops_by_reason.setdefault(d.reason or "", []).append(kid)
 
-    gap_rows = [
-        {
-            "topic_id": plan.topic_id,
-            "suggested_title": g.suggested_title,
-            "target_keyword": g.target_keyword,
-            "rationale": g.rationale,
-        }
-        for plan in result.per_topic
-        for g in plan.gaps
-    ]
+    # Coverage gaps are auto-accepted (owner decision): each becomes an empty
+    # placeholder article named by its target keyword — no article title or
+    # rationale is surfaced — so the plan needs no manual gap triage. The gap row
+    # is recorded as 'accepted' pointing at its placeholder cluster. A gap with
+    # neither a keyword nor a title is skipped.
+    gap_cluster_rows: list[dict] = []
+    gap_rows: list[dict] = []
+    for plan in result.per_topic:
+        for g in plan.gaps:
+            gap_name = (g.target_keyword or g.suggested_title or "").strip()
+            if not gap_name:
+                continue
+            gap_cluster_id = str(uuid.uuid4())
+            gap_cluster_rows.append(
+                {
+                    "id": gap_cluster_id,
+                    "topic_id": plan.topic_id,
+                    "name": gap_name,
+                    "is_gap_placeholder": True,
+                    "is_user_edited": True,
+                }
+            )
+            gap_rows.append(
+                {
+                    "topic_id": plan.topic_id,
+                    "suggested_title": g.suggested_title,
+                    "target_keyword": g.target_keyword,
+                    "rationale": g.rationale,
+                    "status": "accepted",
+                    "accepted_cluster_id": gap_cluster_id,
+                }
+            )
 
     # ---- write phase -----------------------------------------------------
     for start in range(0, len(cluster_rows), 200):
@@ -743,10 +765,17 @@ def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
             ).in_("id", ids[start : start + 500]).execute()
         dropped += len(ids)
 
+    # Placeholder clusters first — coverage_gaps.accepted_cluster_id FKs them.
+    for start in range(0, len(gap_cluster_rows), 200):
+        client.table("clusters").insert(gap_cluster_rows[start : start + 200]).execute()
     for start in range(0, len(gap_rows), 500):
         client.table("coverage_gaps").insert(gap_rows[start : start + 500]).execute()
 
-    return {"clusters": len(cluster_rows), "dropped": dropped, "gaps": len(gap_rows)}
+    return {
+        "clusters": len(cluster_rows) + len(gap_cluster_rows),
+        "dropped": dropped,
+        "gaps": len(gap_rows),
+    }
 
 
 def list_clusters(session_id: str) -> list[dict]:
@@ -1298,7 +1327,7 @@ def accept_gap(gap_id: str) -> dict:
         {
             "id": new_id,
             "topic_id": gap["topic_id"],
-            "name": gap["suggested_title"],
+            "name": gap.get("target_keyword") or gap["suggested_title"],
             "is_gap_placeholder": True,
             "is_user_edited": True,
         }

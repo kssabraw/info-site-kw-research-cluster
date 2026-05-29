@@ -97,7 +97,7 @@ _INPUT_SCHEMA = {
                     "target_keyword": {"type": "string"},
                     "rationale": {"type": "string"},
                 },
-                "required": ["suggested_title", "rationale"],
+                "required": ["suggested_title", "target_keyword", "rationale"],
             },
         },
     },

@@ -204,7 +204,9 @@ function TopicGroup(p: {
               toggleMerge={p.toggleMerge}
             />
           ))}
-          {p.gaps.filter((g) => g.status !== "dismissed").map((g) => (
+          {/* Gaps are auto-accepted into keyword-named placeholder articles, so
+              only legacy pending gaps still render a triage row. */}
+          {p.gaps.filter((g) => g.status === "pending").map((g) => (
             <GapRow key={g.id} gap={g} run={p.run} />
           ))}
         </div>
