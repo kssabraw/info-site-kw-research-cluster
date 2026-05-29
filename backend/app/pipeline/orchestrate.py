@@ -252,6 +252,7 @@ def gate_and_cluster(
     clustering_edge_threshold: float = 0.55,
     clustering_resolution: float = 1.0,
     clustering_max_nodes: int = 2500,
+    active_per_silo_cap: int = 0,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
@@ -260,7 +261,12 @@ def gate_and_cluster(
 ) -> PipelineResult:
     """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
     per-topic candidate pool. Shared by the full pipeline and the re-gate path
-    (which reuses a session's stored keyword pool, skipping DataForSEO)."""
+    (which reuses a session's stored keyword pool, skipping DataForSEO).
+
+    `active_per_silo_cap` (0 = no cap) demotes active keywords beyond the top-N
+    by relevance to `filtered_relevance`, applied BEFORE clustering so the cap
+    shapes the active pool the user sees, not just what reaches the similarity
+    graph."""
     result = PipelineResult()
 
     gate = run_relevance_gate(
@@ -277,6 +283,7 @@ def gate_and_cluster(
         llm_router_margin=llm_router_margin,
     )
     result.degraded_notes.extend(gate.degraded_notes)
+    cap_log = _cap_active_per_silo(gate.per_topic, active_per_silo_cap)
     result.per_topic_gated = gate.per_topic
 
     active_keywords, active_embeddings = _active_for_clustering(
@@ -289,7 +296,45 @@ def gate_and_cluster(
         resolution=clustering_resolution,
     )
     result.clustering_log = cluster.to_log()
+    if cap_log:
+        # Per-topic capped counts surface in the Owner debug view + structured
+        # logs so a tightening of the cap is auditable run-over-run.
+        result.clustering_log["active_per_silo_cap"] = {
+            "cap": active_per_silo_cap,
+            "capped_per_topic": cap_log,
+            "total_capped": sum(cap_log.values()),
+        }
     return result
+
+
+def _cap_active_per_silo(
+    per_topic_gated: dict[str, list[GatedKeyword]], cap: int
+) -> dict[str, int]:
+    """Keep the top-`cap` active keywords per silo (by relevance_score, descending)
+    and demote the rest to `filtered_relevance` in place. Returns the per-topic
+    demoted count for the clustering log. cap <= 0 disables (no-op)."""
+    if cap <= 0:
+        return {}
+    capped_counts: dict[str, int] = {}
+    for tid, gated in per_topic_gated.items():
+        active_idx = [
+            (i, g.relevance_score if g.relevance_score is not None else 0.0)
+            for i, g in enumerate(gated)
+            if g.status == "active"
+        ]
+        if len(active_idx) <= cap:
+            continue
+        active_idx.sort(key=lambda x: x[1], reverse=True)
+        keep = {i for i, _ in active_idx[:cap]}
+        demoted = 0
+        for i, g in enumerate(gated):
+            if g.status == "active" and i not in keep:
+                g.status = "filtered_relevance"
+                g.embedding = None  # match how the gate emits filtered_relevance
+                demoted += 1
+        if demoted:
+            capped_counts[tid] = demoted
+    return capped_counts
 
 
 def _active_for_clustering(per_topic_gated, clustering_max_nodes):
@@ -405,6 +450,7 @@ def run_refinement_pipeline(
     clustering_edge_threshold: float = 0.55,
     clustering_resolution: float = 1.0,
     clustering_max_nodes: int = 2500,
+    active_per_silo_cap: int = 0,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
@@ -487,6 +533,7 @@ def run_refinement_pipeline(
         clustering_edge_threshold=clustering_edge_threshold,
         clustering_resolution=clustering_resolution,
         clustering_max_nodes=clustering_max_nodes,
+        active_per_silo_cap=active_per_silo_cap,
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         assign_best_silo=assign_best_silo,

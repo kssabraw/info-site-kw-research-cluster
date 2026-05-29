@@ -84,6 +84,63 @@ def _unit(*xs):
     return [x / n for x in xs]
 
 
+def test_active_per_silo_cap_demotes_lowest_relevance():
+    """The per-silo cap keeps the top-N active by relevance and demotes the rest
+    to filtered_relevance. Without the cap all three would be active."""
+    vecs = {
+        "kw high": _unit(1.0, 0.1),   # ~0.995 cosine to anchor [1,0]
+        "kw mid": _unit(1.0, 0.5),    # ~0.894
+        "kw low": _unit(1.0, 0.9),    # ~0.743
+    }
+
+    def embed(texts):
+        return [vecs[t] for t in texts]
+
+    pool = {"t1": {kw: ["s"] for kw in vecs}}
+    common = dict(per_topic_lists=pool, topic_names={"t1": "T1"},
+                  topic_embeddings={"t1": _unit(1.0, 0.0)}, embed_fn=embed,
+                  relevance_threshold=0.5)
+
+    uncapped = gate_and_cluster(**common, active_per_silo_cap=0)
+    capped = gate_and_cluster(**common, active_per_silo_cap=2)
+
+    def actives(r):
+        return {g.keyword for g in r.per_topic_gated["t1"] if g.status == "active"}
+
+    assert actives(uncapped) == {"kw high", "kw mid", "kw low"}
+    # Top-2 by relevance survive; the lowest is demoted.
+    assert actives(capped) == {"kw high", "kw mid"}
+    demoted = [g for g in capped.per_topic_gated["t1"]
+               if g.keyword == "kw low"][0]
+    assert demoted.status == "filtered_relevance"
+    assert demoted.embedding is None  # cleared on demotion (matches gate output)
+    assert demoted.relevance_score is not None  # score preserved for audit
+    # Clustering log surfaces the cap event for the debug view.
+    cap_log = capped.clustering_log["active_per_silo_cap"]
+    assert cap_log["cap"] == 2 and cap_log["total_capped"] == 1
+    assert cap_log["capped_per_topic"] == {"t1": 1}
+
+
+def test_active_per_silo_cap_no_op_when_below_cap():
+    """Pools at or below the cap pass through untouched and don't pollute the log."""
+    vecs = {"alpha kw": _unit(1.0, 0.1), "beta kw": _unit(1.0, 0.3)}
+
+    def embed(texts):
+        return [vecs[t] for t in texts]
+
+    r = gate_and_cluster(
+        per_topic_lists={"t1": {"alpha kw": ["s"], "beta kw": ["s"]}},
+        topic_names={"t1": "T1"},
+        topic_embeddings={"t1": _unit(1.0, 0.0)},
+        embed_fn=embed,
+        relevance_threshold=0.5,
+        active_per_silo_cap=10,
+    )
+    actives = {g.keyword for g in r.per_topic_gated["t1"] if g.status == "active"}
+    assert actives == {"alpha kw", "beta kw"}
+    assert "active_per_silo_cap" not in r.clustering_log
+
+
 def test_gate_and_cluster_threshold_sensitivity():
     # Anchor [1,0]; three keywords at descending cosine (~0.995, ~0.581, ~0.196).
     # The re-gate harness reuses this on a stored pool to tune the threshold.

@@ -172,6 +172,13 @@ class Settings(BaseSettings):
     # bound n to keep memory in check; the top-N most-relevant actives are
     # clustered, the long-tail remainder stays active but unclustered.
     clustering_max_nodes: int = 2500
+    # Hard cap on active keywords per silo, applied AFTER the relevance gate
+    # scores everything. The top-N most-relevant keywords per silo stay 'active'
+    # and feed clustering / the Table View; the rest are demoted to
+    # 'filtered_relevance'. Directly bounds article count and dedup work — sits
+    # below clustering_max_nodes so a tightening of this cap visibly shrinks the
+    # active pool, not just what reaches the similarity graph.
+    active_per_silo_cap: int = 1000
 
     # Recursive Fanout (PRD §7.7, Phase 1). RF deepens each silo by re-expanding
     # its top cluster representatives as sub-anchors. Mining at this level is off
