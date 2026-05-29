@@ -140,11 +140,12 @@ def submit_regate(
     threshold: float,
     edge_threshold: float,
     resolution: float,
+    active_per_silo_cap: int,
     seed_terms: list[str],
     peer_terms: list[str],
 ) -> None:
     _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold,
-                     resolution, seed_terms, peer_terms)
+                     resolution, active_per_silo_cap, seed_terms, peer_terms)
 
 
 def submit_fanout(
@@ -152,11 +153,12 @@ def submit_fanout(
     threshold: float,
     edge_threshold: float,
     resolution: float,
+    active_per_silo_cap: int,
     seed_terms: list[str],
     peer_terms: list[str],
 ) -> None:
     _EXECUTOR.submit(run_fanout_job, session_id, threshold, edge_threshold,
-                     resolution, seed_terms, peer_terms)
+                     resolution, active_per_silo_cap, seed_terms, peer_terms)
 
 
 def submit_architecture(session_id: str) -> None:
@@ -214,6 +216,7 @@ def run_expand_job(session_id: str) -> None:
             clustering_edge_threshold=s.clustering_edge_threshold,
             clustering_resolution=s.clustering_resolution,
             clustering_max_nodes=s.clustering_max_nodes,
+            active_per_silo_cap=s.active_per_silo_cap,
             llm_router=_maybe_llm_router(seed, topics),
             llm_router_margin=s.llm_routing_margin_threshold,
         )
@@ -337,7 +340,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
 @_cancellable
 def run_regate_job(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
-    seed_terms: list[str], peer_terms: list[str],
+    active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
 ) -> None:
     """Re-gate + re-cluster a session's stored keyword pool at a new threshold and
     clustering granularity, skipping DataForSEO. Clears any prior article plan."""
@@ -359,6 +362,7 @@ def run_regate_job(
             clustering_edge_threshold=edge_threshold,
             clustering_resolution=resolution,
             clustering_max_nodes=s.clustering_max_nodes,
+            active_per_silo_cap=active_per_silo_cap,
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,
@@ -395,7 +399,7 @@ def run_regate_job(
 @_cancellable
 def run_fanout_job(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
-    seed_terms: list[str], peer_terms: list[str],
+    active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
 ) -> None:
     """§7.7 Recursive Fanout (Phase 1): re-expand each silo's top cluster
     representatives as sub-anchors, merge the new keywords into the stored pool,
@@ -446,6 +450,7 @@ def run_fanout_job(
             clustering_edge_threshold=edge_threshold,
             clustering_resolution=resolution,
             clustering_max_nodes=s.clustering_max_nodes,
+            active_per_silo_cap=active_per_silo_cap,
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,

@@ -75,6 +75,9 @@ class RegateBody(BaseModel):
     relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
+    # Hard cap on active keywords per silo (post-gate, top-N by relevance). 0 =
+    # no cap. Owner-only override; the env default is `active_per_silo_cap`.
+    active_per_silo_cap: int | None = Field(default=None, ge=0, le=50000)
     # Peer-entity filter overrides (for testing on sessions whose grounding ran
     # before this existed). Omitted -> use the session's stored lists.
     aliases: list[str] | None = None
@@ -92,6 +95,7 @@ class FanoutBody(BaseModel):
     relevance_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_edge_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     clustering_resolution: float | None = Field(default=None, gt=0.0, le=20.0)
+    active_per_silo_cap: int | None = Field(default=None, ge=0, le=50000)
     aliases: list[str] | None = None
     peer_entities: list[str] | None = None
 
@@ -744,13 +748,19 @@ def regate_session(
         if body.clustering_resolution is not None
         else s.clustering_resolution
     )
-    jobs.submit_regate(session_id, threshold, edge, resolution, seed_terms, peer_terms)
+    cap = (
+        body.active_per_silo_cap
+        if body.active_per_silo_cap is not None
+        else s.active_per_silo_cap
+    )
+    jobs.submit_regate(session_id, threshold, edge, resolution, cap, seed_terms, peer_terms)
     return {
         "status": "running",
         "session_id": session_id,
         "relevance_threshold": threshold,
         "clustering_edge_threshold": edge,
         "clustering_resolution": resolution,
+        "active_per_silo_cap": cap,
         "peer_entities": peer_terms,
     }
 
@@ -825,7 +835,12 @@ def fanout_session(
         if body.clustering_resolution is not None
         else s.clustering_resolution
     )
-    jobs.submit_fanout(session_id, threshold, edge, resolution, seed_terms, peer_terms)
+    cap = (
+        body.active_per_silo_cap
+        if body.active_per_silo_cap is not None
+        else s.active_per_silo_cap
+    )
+    jobs.submit_fanout(session_id, threshold, edge, resolution, cap, seed_terms, peer_terms)
     return {"status": "running", "session_id": session_id, "estimate": estimate}
 
 
