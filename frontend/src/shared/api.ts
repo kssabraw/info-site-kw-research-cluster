@@ -633,3 +633,62 @@ export const listExports = (sessionId: string) =>
 // Re-issue a fresh signed URL for a past snapshot (the old one may have expired).
 export const downloadExport = (exportId: string) =>
   request<CsvExportResult>(`/exports/${exportId}/download`);
+
+// §9.1 bulk action — stream a flat CSV of just the selected keyword ids.
+// Transient (no Storage snapshot, no Exports-tab row); the browser saves the
+// blob directly. The `request<T>` JSON helper above doesn't fit (this returns a
+// CSV body, not JSON), so this calls fetch + supabase auth itself, then yields
+// the blob plus the filename parsed off Content-Disposition.
+export async function exportSelected(
+  sessionId: string,
+  keywordIds: string[],
+): Promise<{ blob: Blob; filename: string }> {
+  const { supabase } = await import("./supabaseClient");
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error("Not authenticated");
+  const resp = await fetch(
+    `${import.meta.env.VITE_API_BASE_URL ?? ""}/sessions/${sessionId}/export-selected`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ keyword_ids: keywordIds }),
+    },
+  );
+  if (!resp.ok) {
+    let detail = `Export failed (${resp.status})`;
+    try {
+      const body = await resp.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(detail);
+  }
+  const blob = await resp.blob();
+  // Pull the server-suggested filename so the download matches the snapshot ts
+  // the backend stamped — keeps multiple exports apart in the Downloads folder.
+  const cd = resp.headers.get("Content-Disposition") ?? "";
+  const m = cd.match(/filename="([^"]+)"/);
+  const filename = m?.[1] ?? `fanout-selected-${Date.now()}.csv`;
+  return { blob, filename };
+}
+
+// Trigger a save dialog for an in-memory blob (no server round-trip). Used by
+// the Table View bulk export — the blob comes from exportSelected().
+export function triggerBlobDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Defer revoke so Firefox/Chrome finish the download handoff first.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

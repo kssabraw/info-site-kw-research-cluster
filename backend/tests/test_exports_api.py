@@ -175,3 +175,108 @@ def test_download_reissues_fresh_signed_url(client, monkeypatch):
 def test_download_not_visible_404(client, monkeypatch):
     monkeypatch.setattr(exports_api.export_store, "get_export_visible", lambda token, eid: None)
     assert client.get("/exports/e1/download").status_code == 404
+
+
+# ---- export-selected (§9.1 bulk action) ----------------------------------
+def _stub_topics_and_clusters(monkeypatch):
+    monkeypatch.setattr(exports_api.store, "list_topics",
+                        lambda *_: [{"id": "t1", "name": "Mechanism"}])
+    monkeypatch.setattr(exports_api.store, "list_clusters",
+                        lambda *_: [{"id": "c1", "name": "Half-life"}])
+
+
+def test_export_selected_streams_flat_csv_for_selected_ids(client, monkeypatch):
+    """Happy path: rows resolve, the response is a CSV body with attachment
+    headers, and only the selected ids drive the SQL — not the surviving pool."""
+    _visible(monkeypatch)
+    _stub_topics_and_clusters(monkeypatch)
+    captured: dict = {}
+
+    def fake_by_ids(sid, ids):
+        captured["sid"] = sid
+        captured["ids"] = list(ids)
+        return [
+            {"keyword": "ozempic alternatives", "topic_id": "t1", "cluster_id": "c1",
+             "sources": ["competitor"], "status": "active", "relevance_score": 0.71,
+             "volume": 22000, "cpc_usd": 4.5,
+             "keyword_difficulty": 71.0, "competition_index": 0.34},
+            {"keyword": "ozempic dose", "topic_id": "t1", "cluster_id": None,
+             "sources": ["ki"], "status": "covered", "relevance_score": 0.83,
+             "volume": 8100, "cpc_usd": 2.1,
+             "keyword_difficulty": 55.0, "competition_index": 0.21},
+        ]
+
+    monkeypatch.setattr(exports_api.store, "list_keywords_by_ids", fake_by_ids)
+
+    r = client.post("/sessions/s1/export-selected", json={"keyword_ids": ["k1", "k2"]})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    cd = r.headers["content-disposition"]
+    assert cd.startswith("attachment;") and cd.endswith('.csv"')
+    assert r.headers["cache-control"] == "no-store"
+    # Only the requested ids are passed to the storage helper.
+    assert captured == {"sid": "s1", "ids": ["k1", "k2"]}
+    body = r.content.decode("utf-8")
+    # Header line first, two data rows after.
+    lines = body.strip().splitlines()
+    assert "keyword" in lines[0] and "volume" in lines[0] and "cpc" in lines[0]
+    assert "ozempic alternatives" in body
+    assert "22000" in body  # volume rendered
+    # Cluster id resolved to the cluster *name*.
+    assert "Half-life" in body
+    # Topic id resolved to the topic name.
+    assert "Mechanism" in body
+
+
+def test_export_selected_400_when_none_resolve(client, monkeypatch):
+    """A stale UI selection (e.g. after a re-gate) where no ids resolve should
+    surface a clear 400 rather than hand back a header-only CSV."""
+    _visible(monkeypatch)
+    _stub_topics_and_clusters(monkeypatch)
+    monkeypatch.setattr(exports_api.store, "list_keywords_by_ids", lambda *_: [])
+    r = client.post("/sessions/s1/export-selected", json={"keyword_ids": ["ghost"]})
+    assert r.status_code == 400
+    assert "Refresh" in r.json()["detail"]
+
+
+def test_export_selected_404_when_session_not_visible(client, monkeypatch):
+    """RLS-scoped: the session-visibility check fires before any DB read."""
+    _visible(monkeypatch, session=False)
+    r = client.post("/sessions/s1/export-selected", json={"keyword_ids": ["k1"]})
+    assert r.status_code == 404
+
+
+def test_export_selected_requires_at_least_one_id(client, monkeypatch):
+    """An empty selection is a client bug (the bulk bar gates the button), so
+    422 from pydantic min_length is the right answer — not a silent header-only
+    CSV."""
+    _visible(monkeypatch)
+    r = client.post("/sessions/s1/export-selected", json={"keyword_ids": []})
+    assert r.status_code == 422
+
+
+def test_export_selected_caps_request_size(client, monkeypatch):
+    """10k ids is the documented cap; one more is 422."""
+    _visible(monkeypatch)
+    r = client.post(
+        "/sessions/s1/export-selected",
+        json={"keyword_ids": [f"k{i}" for i in range(10_001)]},
+    )
+    assert r.status_code == 422
+
+
+def test_export_selected_available_to_va(client, monkeypatch):
+    """Export is ✓ for both roles (§11.2); a VA can run this on their own
+    visible session."""
+    monkeypatch.setattr("app.auth.dependencies.ensure_user_profile", lambda *_: {"role": "va"})
+    _visible(monkeypatch)
+    _stub_topics_and_clusters(monkeypatch)
+    monkeypatch.setattr(
+        exports_api.store, "list_keywords_by_ids",
+        lambda sid, ids: [{"keyword": "k", "topic_id": "t1", "cluster_id": None,
+                           "sources": [], "status": "active", "relevance_score": 0.6,
+                           "volume": None, "cpc_usd": None,
+                           "keyword_difficulty": None, "competition_index": None}],
+    )
+    r = client.post("/sessions/s1/export-selected", json={"keyword_ids": ["k1"]})
+    assert r.status_code == 200

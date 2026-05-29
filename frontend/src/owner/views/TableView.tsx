@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   bulkKeywordMove,
   bulkKeywordStatus,
+  exportSelected,
   getAllSurvivingKeywords,
   getClusters,
+  triggerBlobDownload,
   type Keyword,
 } from "../../shared/api";
 import { useSession } from "../SessionWorkspace";
@@ -50,6 +52,15 @@ export function TableView() {
       qc.invalidateQueries({ queryKey: ["clusters", sessionId] });
       setSelected(new Set());
     },
+    onError: (e: Error) => alert(e.message),
+  });
+
+  // Export-selected (§9.1 bulk action) — transient, no Storage snapshot. Keeps
+  // the selection on success so the user can re-export or chain another bulk
+  // action without re-checking the boxes.
+  const exportMut = useMutation({
+    mutationFn: (ids: string[]) => exportSelected(sessionId, ids),
+    onSuccess: ({ blob, filename }) => triggerBlobDownload(blob, filename),
     onError: (e: Error) => alert(e.message),
   });
 
@@ -199,6 +210,14 @@ export function TableView() {
             ))}
             <option value="__unassigned__">Unassigned</option>
           </select>
+          <button
+            className="btn btn-ghost"
+            style={{ width: "auto" }}
+            disabled={exportMut.isPending}
+            onClick={() => exportMut.mutate(selIds)}
+          >
+            {exportMut.isPending ? "Exporting…" : "Export CSV"}
+          </button>
           <button className="link-btn" onClick={() => setSelected(new Set())}>Clear</button>
         </div>
       )}

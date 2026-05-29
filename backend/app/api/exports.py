@@ -16,7 +16,8 @@ are deploy-only.
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel, Field
 
 from app.auth import AuthedUser, require_user
 from app.config import get_settings
@@ -150,6 +151,62 @@ def create_export(
         "generated_at": row["generated_at"],
         "download_url": download_url,
     }
+
+
+class ExportSelectedBody(BaseModel):
+    # Hard cap so a runaway client can't ask us to render an arbitrarily large
+    # CSV in-request. 10k rows lines up with the per-silo cap × ~10 silos
+    # (covers the comprehensive case) and renders well under a second.
+    keyword_ids: list[str] = Field(min_length=1, max_length=10000)
+
+
+@router.post("/sessions/{session_id}/export-selected")
+def export_selected(
+    session_id: str,
+    body: ExportSelectedBody,
+    user: AuthedUser = Depends(require_user),
+) -> Response:
+    """Stream a flat CSV of just the selected keywords (§9.1 bulk action). Unlike
+    /export, this is transient: no Storage snapshot, no `csv_exports` row — the
+    selection is ad-hoc and the body is returned directly as a downloadable CSV.
+
+    Available to both roles (§11.2 "Export" is checked for both); RLS-scoped to
+    a session the caller can see. Stale or cross-session keyword ids silently
+    drop (the storage helper filters on session_id), so a selection containing
+    an out-of-session id just yields fewer rows rather than 400 — matches how
+    the bulk-status helper handles unknown ids."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+
+    topic_name = {t["id"]: t["name"] for t in store.list_topics(session_id)}
+    keywords = store.list_keywords_by_ids(session_id, body.keyword_ids)
+    if not keywords:
+        # Selection had ids but none resolved in this session — likely a stale
+        # UI selection after a re-gate or move. Surface this clearly rather
+        # than handing back a header-only CSV the user can't tell from data.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="None of the selected keywords are still in this session. "
+            "Refresh the table and re-select.",
+        )
+    cluster_name = {c["id"]: c["name"] for c in store.list_clusters(session_id)}
+    csv_text = build_flat_csv(keywords, topic_name, cluster_name)
+    payload = csv_text.encode("utf-8")
+    filename = f"fanout-selected-{snapshot_timestamp()}.csv"
+    logger.info(
+        "csv_export_selected",
+        extra={"event": "csv_export_selected", "rows": len(keywords),
+               "requested": len(body.keyword_ids), "bytes": len(payload)},
+    )
+    return Response(
+        content=payload,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Defeat any intermediate caching: the selection is ephemeral.
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/sessions/{session_id}/exports")

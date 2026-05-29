@@ -375,9 +375,9 @@ def list_surviving_keywords(session_id: str) -> list[dict]:
     This is the pool the Table/Cluster views show (PRD §9.1), so it's what the
     flat + topic-grouped CSV exports build from (PRD §12 "matching the data shown
     in the UI"). Excludes the gate/orchestrator-discarded statuses
-    (filtered_relevance / filtered_junk / dropped_by_orchestrator). Volume/KD/CPC
-    columns don't exist yet (metrics enrichment §7.8 unbuilt), so they're omitted
-    here and render blank in the CSV."""
+    (filtered_relevance / filtered_junk / dropped_by_orchestrator). Volume / KD /
+    CPC columns now populate when §7.8 metrics enrichment ran for the session
+    (otherwise they're null and render blank in the CSV)."""
     client = get_service_client()
     out: list[dict] = []
     offset = 0
@@ -400,6 +400,35 @@ def list_surviving_keywords(session_id: str) -> list[dict]:
         if len(rows) < page:
             break
         offset += page
+    return out
+
+
+def list_keywords_by_ids(session_id: str, keyword_ids: list[str]) -> list[dict]:
+    """Fetch keyword rows by id, scoped to a session for safety (a stale or
+    cross-session id silently drops). Carries the same column projection as
+    list_surviving_keywords so the flat CSV builder consumes either shape.
+    Paged via batched `in_` filters so PostgREST's URL length doesn't blow up
+    on large selections."""
+    if not keyword_ids:
+        return []
+    # PostgREST URL caps the in() length; batch defensively even though the
+    # Table View selection is unlikely to exceed a few hundred ids.
+    client = get_service_client()
+    out: list[dict] = []
+    batch = 300
+    for start in range(0, len(keyword_ids), batch):
+        ids = keyword_ids[start : start + batch]
+        res = (
+            client.table("keywords")
+            .select(
+                "topic_id, cluster_id, keyword, sources, status, relevance_score, "
+                "volume, cpc_usd, keyword_difficulty, competition_index"
+            )
+            .eq("session_id", session_id)
+            .in_("id", ids)
+            .execute()
+        )
+        out.extend(res.data or [])
     return out
 
 
