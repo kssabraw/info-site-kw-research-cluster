@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from app import jobs
+from app import cancellation, jobs
 from app.auth import AuthedUser, get_role, require_owner, require_user
 from app.config import get_settings
 from app.cost import estimate_cost, requires_approval
@@ -550,6 +550,40 @@ def submit_for_approval(
                "estimated_cost_usd": est["estimated_cost_usd"]},
     )
     return {"status": "pending_approval", **est}
+
+
+@router.post("/sessions/{session_id}/cancel")
+def cancel_running_session(
+    session_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Cancel an in-progress pipeline run (expand / plan-articles / regate /
+    fanout / architecture). Cooperative: flips status=cancelled atomically (so a
+    second cancel races safely), signals the background worker via the
+    cancellation registry, and the worker exits at its next external-call
+    checkpoint (`raise_if_cancelled` at the top of each DataForSEO / OpenAI /
+    Anthropic call). In-flight HTTP requests still bill — worst-case wait ≈ one
+    DataForSEO timeout (60s) — but no new calls are made after the check fires.
+    Partial metered spend persists (PRD §16.4 cost meter flushes on exit).
+    Both roles, RLS-scoped — a VA can cancel their own session; the owner can
+    cancel any visible session (§11.2 'VA can manage own sessions').
+    Pending-approval sessions use /cancel-approval; only a `running` session is
+    cancellable here."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    # Atomic check-and-set so a second concurrent /cancel doesn't 409 the first
+    # caller. If it returns False, the run wasn't running (already cancelled /
+    # completed / never started).
+    claimed = store.try_mark_cancelled(session_id)
+    if not claimed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No pipeline run is in progress for this session.",
+        )
+    # Signal the worker. Setting after the DB flip is fine: the endpoint already
+    # owns the status, and the next external-call checkpoint reads this to abort.
+    cancellation.set_cancelled(session_id)
+    logger.info("run_cancelled", extra={"event": "run_cancelled"})
+    return {"status": "cancelled", "session_id": session_id}
 
 
 @router.post("/sessions/{session_id}/cancel-approval")

@@ -182,6 +182,39 @@ def try_mark_running(session_id: str) -> bool:
     return bool(res.data)
 
 
+def try_mark_cancelled(session_id: str) -> bool:
+    """Atomically flip a running session to cancelled. Returns True if this caller
+    landed the transition (status was 'running'), False if there was no run to
+    cancel (status was already cancelled, complete, error, awaiting_*, etc.).
+    Mirrors the try_mark_running check-and-set so two concurrent /cancel calls
+    can't both claim a cancel."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update({"status": "cancelled", "last_error": "Cancelled by user"})
+        .eq("id", session_id)
+        .eq("status", "running")
+        .execute()
+    )
+    return bool(res.data)
+
+
+def try_finalize_running(session_id: str, fields: dict) -> bool:
+    """Write a job's terminal field set only if the session is still 'running' —
+    so a worker that races past a concurrent /cancel doesn't overwrite the
+    'cancelled' status with its own success/error finish (or vice versa). Returns
+    True if the update landed."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update(fields)
+        .eq("id", session_id)
+        .eq("status", "running")
+        .execute()
+    )
+    return bool(res.data)
+
+
 def get_session(session_id: str) -> dict | None:
     """Service-side session fetch (no RLS), for background jobs that run after the
     request has returned and have no user token."""

@@ -355,6 +355,14 @@ export const expandSession = (id: string) =>
 export const planArticles = (id: string) =>
   request<AsyncAck>(`/sessions/${id}/plan-articles`, { method: "POST" });
 
+// Cancel an in-progress pipeline run. 200 once the worker is signalled (it will
+// exit at its next external-call checkpoint); 409 if no run is currently in
+// progress. Both roles, RLS-scoped to a visible session.
+export const cancelRun = (id: string) =>
+  request<{ status: string; session_id: string }>(`/sessions/${id}/cancel`, {
+    method: "POST",
+  });
+
 export const getSummary = (id: string) =>
   request<PipelineSummary>(`/sessions/${id}/summary`);
 

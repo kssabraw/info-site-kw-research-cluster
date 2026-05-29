@@ -21,6 +21,7 @@ from anthropic import (
     RateLimitError,
 )
 
+from app.cancellation import raise_if_cancelled
 from app.cost_meter import llm_token_cost, record_cost
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ class AnthropicLLM:
         """Force a single tool call and return its `input` dict (the structured
         output). Raises AnthropicError on transport failure or a missing tool
         block; the caller owns reprompt/degrade policy (PRD §16.2)."""
+        raise_if_cancelled()
         started = time.perf_counter()
         resp = None
         for attempt in range(self._max_transport_attempts):

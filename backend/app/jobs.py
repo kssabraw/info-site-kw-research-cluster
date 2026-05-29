@@ -19,6 +19,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 
+from app import cancellation
+from app.cancellation import CancelledByUser
 from app.config import get_settings
 from app.cost_attribution import metered_run
 from app.dataforseo import get_dataforseo
@@ -88,6 +90,43 @@ def _metered(step: str):
     return decorator
 
 
+def _cancellable(fn):
+    """Register the session's cancellation event for the job's lifetime and
+    convert `CancelledByUser` into a clean `status='cancelled'` finish.
+
+    Bypasses the per-stage `except Exception` blocks in the pipeline (it's a
+    BaseException), so an in-flight stage doesn't degrade — the whole run aborts
+    here, the terminal status write is conditional-on-running so it doesn't race
+    the /cancel endpoint's own write, and `metered_run` (outer decorator) flushes
+    the partial spend on the way out. Clear the event so the next run starts
+    fresh."""
+
+    @wraps(fn)
+    def wrapper(session_id: str, *args, **kwargs):
+        cancellation.register(session_id)
+        try:
+            return fn(session_id, *args, **kwargs)
+        except CancelledByUser:
+            logger.info(
+                "step_cancelled",
+                extra={"event": "step_cancelled", "step": fn.__name__},
+            )
+            # The /cancel endpoint has likely already set status='cancelled' via
+            # try_mark_cancelled; this is the catch-up write for a worker that
+            # raced past the endpoint's update. Conditional-on-running so it
+            # doesn't overwrite a fresh user-initiated state.
+            from app.storage import silo as _store
+            _store.try_finalize_running(
+                session_id,
+                {"status": "cancelled", "last_error": "Cancelled by user"},
+            )
+            return None
+        finally:
+            cancellation.clear(session_id)
+
+    return wrapper
+
+
 def submit_expand(session_id: str) -> None:
     _EXECUTOR.submit(run_expand_job, session_id)
 
@@ -125,6 +164,7 @@ def submit_architecture(session_id: str) -> None:
 
 
 @_metered("expand")
+@_cancellable
 def run_expand_job(session_id: str) -> None:
     """§7.3–§7.9: expansion + competitor mining + relevance gate + clustering."""
     bind_session_id(session_id)
@@ -179,7 +219,7 @@ def run_expand_job(session_id: str) -> None:
         )
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, result.per_topic_gated)
-        store.update_session(
+        store.try_finalize_running(
             session_id,
             {
                 "statistical_clustering_log": result.clustering_log,
@@ -195,10 +235,13 @@ def run_expand_job(session_id: str) -> None:
             "step_failed",
             extra={"event": "step_failed", "step": "expand_job", "reason": repr(exc)},
         )
-        store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
+        store.try_finalize_running(
+            session_id, {"status": "error", "last_error": _short(exc)}
+        )
 
 
 @_metered("article_planning")
+@_cancellable
 def run_plan_job(session_id: str, direct: bool = False) -> None:
     """§7.10: SERP for candidate primaries + per-silo orchestrator + dedup.
     With direct=True, skips the orchestrator (groupings -> articles + dedup)."""
@@ -260,7 +303,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
             # Clear any stale prior plan so an errored run doesn't leave clusters
             # behind that disagree with status=error (review M5).
             store.reset_article_planning(session_id)
-            store.update_session(
+            store.try_finalize_running(
                 session_id,
                 {
                     "status": "error",
@@ -272,7 +315,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
             return
         store.reset_article_planning(session_id)
         store.persist_article_plan(session_id, result, get_llm().embed)
-        store.update_session(
+        store.try_finalize_running(
             session_id,
             {"orchestrator_log": result.orchestrator_log(), "status": "complete"},
         )
@@ -285,10 +328,13 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
             "step_failed",
             extra={"event": "step_failed", "step": "plan_job", "reason": repr(exc)},
         )
-        store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
+        store.try_finalize_running(
+            session_id, {"status": "error", "last_error": _short(exc)}
+        )
 
 
 @_metered("regate")
+@_cancellable
 def run_regate_job(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     seed_terms: list[str], peer_terms: list[str],
@@ -322,7 +368,7 @@ def run_regate_job(
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, gc.per_topic_gated)
-        store.update_session(
+        store.try_finalize_running(
             session_id,
             {
                 "statistical_clustering_log": gc.clustering_log,
@@ -340,10 +386,13 @@ def run_regate_job(
             "step_failed",
             extra={"event": "step_failed", "step": "regate_job", "reason": repr(exc)},
         )
-        store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
+        store.try_finalize_running(
+            session_id, {"status": "error", "last_error": _short(exc)}
+        )
 
 
 @_metered("recursive_fanout")
+@_cancellable
 def run_fanout_job(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     seed_terms: list[str], peer_terms: list[str],
@@ -407,7 +456,7 @@ def run_fanout_job(
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, gc.per_topic_gated)
         new_settings = {**(session.get("settings") or {}), "recursive_fanout": True}
-        store.update_session(
+        store.try_finalize_running(
             session_id,
             {
                 "settings": new_settings,
@@ -427,10 +476,13 @@ def run_fanout_job(
             "step_failed",
             extra={"event": "step_failed", "step": "fanout_job", "reason": repr(exc)},
         )
-        store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
+        store.try_finalize_running(
+            session_id, {"status": "error", "last_error": _short(exc)}
+        )
 
 
 @_metered("architecture")
+@_cancellable
 def run_architecture_job(session_id: str) -> None:
     """§7.11 Site Architecture: one pillar per article-bearing silo + the internal
     linking matrix, persisted to site_architecture. Reads the article plan
@@ -489,7 +541,7 @@ def run_architecture_job(session_id: str) -> None:
             max_workers=s.architect_max_workers,
         )
         if result.all_degraded():
-            store.update_session(
+            store.try_finalize_running(
                 session_id,
                 {
                     "status": "error",
@@ -499,7 +551,7 @@ def run_architecture_job(session_id: str) -> None:
             )
             return
         store.persist_architecture(session_id, result.architecture_json())
-        store.update_session(session_id, {"status": "complete"})
+        store.try_finalize_running(session_id, {"status": "complete"})
         logger.info(
             "step_complete",
             extra={"event": "step_complete", "step": "architecture_job", **result.counts()},
@@ -509,4 +561,6 @@ def run_architecture_job(session_id: str) -> None:
             "step_failed",
             extra={"event": "step_failed", "step": "architecture_job", "reason": repr(exc)},
         )
-        store.update_session(session_id, {"status": "error", "last_error": _short(exc)})
+        store.try_finalize_running(
+            session_id, {"status": "error", "last_error": _short(exc)}
+        )

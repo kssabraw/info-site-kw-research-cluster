@@ -38,6 +38,10 @@ def bind_session_id(session_id: str | None) -> None:
     _session_id.set(session_id)
 
 
+def get_session_id() -> str | None:
+    return _session_id.get()
+
+
 class _ContextFilter(logging.Filter):
     """Inject correlation/session ids onto every record."""
 

@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet, useOutletContext, useParams } from "react-router
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getMe, getSession, getSummary, planArticles, type Silo } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
+import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
 import { hasResults, statusClass, statusLabel } from "../shared/sessionStatus";
 
@@ -100,10 +101,23 @@ export function SessionWorkspace() {
           <div className="card" style={{ textAlign: "center" }}>
             <div className="spinner" />
             <p className="muted">This session is still running. Results will appear when it finishes.</p>
+            <div style={{ marginTop: 12 }}>
+              <CancelRunButton sessionId={sessionId} />
+            </div>
           </div>
         )}
 
-        {status && status !== "running" && !hasResults(status) && (
+        {status === "cancelled" && (
+          <div className="card">
+            <p style={{ margin: 0, fontWeight: 600 }}>This run was cancelled.</p>
+            <p className="muted" style={{ marginBottom: 0 }}>
+              Any partial work and the cost spent before cancellation are preserved.
+              Start a new session to try again.
+            </p>
+          </div>
+        )}
+
+        {status && status !== "running" && status !== "cancelled" && !hasResults(status) && (
           <div className="card">
             <p style={{ margin: 0, fontWeight: 600 }}>This session hasn’t produced results yet.</p>
             <p className="muted" style={{ marginBottom: 0 }}>

@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.cancellation import raise_if_cancelled
 from app.cost_meter import record_cost
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,9 @@ class DataForSEOClient:
         self._auth = (login, password)
 
     def _post(self, path: str, payload: list[dict]) -> dict:
+        # Cooperative cancellation: a /cancel request signalled while the worker
+        # is between calls aborts the run here, before paying for another one.
+        raise_if_cancelled()
         url = f"{self._base_url}{path}"
         started = time.perf_counter()
         try:
