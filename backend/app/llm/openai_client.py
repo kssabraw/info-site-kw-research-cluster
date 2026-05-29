@@ -15,6 +15,7 @@ import time
 
 from openai import OpenAI
 
+from app.cancellation import raise_if_cancelled
 from app.cost_meter import embedding_token_cost, llm_token_cost, record_cost
 from app.pipeline.models import (
     PROPOSABLE_TYPES,
@@ -64,6 +65,7 @@ class OpenAILLM:
         self._web_search_tool = web_search_tool
 
     def _respond(self, prompt: str, purpose: str, *, browsing: bool) -> str:
+        raise_if_cancelled()
         started = time.perf_counter()
         kwargs: dict = {"model": self._silo_model, "input": prompt}
         if browsing:
@@ -277,6 +279,7 @@ class OpenAILLM:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        raise_if_cancelled()
         started = time.perf_counter()
         try:
             resp = self._client.embeddings.create(model=self._embedding_model, input=texts)

@@ -64,6 +64,19 @@ body {
 .btn-ghost:hover {
   background: var(--bg);
 }
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+  padding: 8px 14px;
+}
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+.btn-sm {
+  padding: 6px 10px;
+  font-size: 13px;
+}
 
 /* ---------- Login ---------- */
 .login-wrap {

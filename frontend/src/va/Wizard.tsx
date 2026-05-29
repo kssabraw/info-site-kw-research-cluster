@@ -25,6 +25,7 @@ import {
   type SiloDiscovery as Discovery,
 } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
+import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
 import { RELATIONSHIP_LABELS, RELATIONSHIP_OPTIONS } from "../shared/relationshipTypes";
 
@@ -1050,6 +1051,18 @@ function ProgressStep(p: { sessionId: string; onDone: () => void }) {
     );
   }
 
+  if (status === "cancelled") {
+    return (
+      <div className="card">
+        <h1 className="page-title">Run cancelled</h1>
+        <p className="muted">
+          The pipeline stopped at your request. Any partial work and cost spent before
+          cancellation are preserved. Start a new session to try again.
+        </p>
+      </div>
+    );
+  }
+
   if (status === "complete") {
     return (
       <div className="card" style={{ textAlign: "center" }}>
@@ -1077,6 +1090,11 @@ function ProgressStep(p: { sessionId: string; onDone: () => void }) {
       <p className="muted">{stage}… · elapsed {elapsed}s</p>
       <p className="field-hint">This usually takes a few minutes. You can leave this open.</p>
       <CostBanner cost={summaryQ.data?.cost} running />
+      {status === "running" && (
+        <div style={{ marginTop: 12 }}>
+          <CancelRunButton sessionId={p.sessionId} />
+        </div>
+      )}
     </div>
   );
 }
