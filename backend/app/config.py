@@ -156,7 +156,10 @@ class Settings(BaseSettings):
     competitor_time_budget_s: int = 240
 
     # M4 relevance gate (PRD §7.6) + clustering (§7.9).
-    relevance_threshold: float = 0.52        # cosine cutoff vs parent topic embedding
+    # 0.65 is an aggressive cutoff (owner decision) — keeps only clearly on-topic
+    # keywords, roughly halving the active pool vs the prior 0.52. Re-tune via env
+    # (RELEVANCE_THRESHOLD) or a per-run /regate without redeploying.
+    relevance_threshold: float = 0.65        # cosine cutoff vs parent topic embedding
     # Lever 3: assign each keyword to its single best silo (argmax cosine to the
     # silo anchor) instead of keeping it active in every silo it passes in. Kills
     # the cross-silo duplication that dedup otherwise has to clean up.
