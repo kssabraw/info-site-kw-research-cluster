@@ -107,6 +107,10 @@ export interface CreateSessionBody {
   disambiguation_hint?: string;
   topic_count?: number;
   coverage_mode?: "standard" | "comprehensive";
+  // §7.8 metrics enrichment toggle. Omit -> backend uses workspace default
+  // (currently true). Setting false skips the DataForSEO keyword_overview pass
+  // -> Volume / CPC / KD stay null.
+  enrich_with_metrics?: boolean;
 }
 
 export const createSession = (body: CreateSessionBody) =>
@@ -232,6 +236,11 @@ export interface Keyword {
   status: string;
   is_primary_for_cluster: boolean;
   relevance_score: number | null;
+  // §7.8 metrics (null when enrich_with_metrics was off / data unavailable).
+  volume: number | null;
+  cpc_usd: number | null;
+  keyword_difficulty: number | null;
+  competition_index: number | null;
   created_at: string;
 }
 

@@ -49,6 +49,8 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
   const [disambHint, setDisambHint] = useState("");
   const [topicCount, setTopicCount] = useState(5);
   const [mode, setMode] = useState<"standard" | "comprehensive">("standard");
+  // §7.8 metrics enrichment toggle (default on; user can opt out per run).
+  const [enrichMetrics, setEnrichMetrics] = useState(true);
   const [showOptional, setShowOptional] = useState(false);
 
   function applyResult(d: Discovery) {
@@ -124,6 +126,7 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
       disambiguation_hint: disambHint.trim() || undefined,
       topic_count: topicCount,
       coverage_mode: mode,
+      enrich_with_metrics: enrichMetrics,
     });
   }
 
@@ -163,6 +166,8 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
               setTopicCount,
               mode,
               setMode,
+              enrichMetrics,
+              setEnrichMetrics,
               showOptional,
               setShowOptional,
               onSubmit: onSubmitSeed,
@@ -559,6 +564,8 @@ function SeedForm(p: {
   setTopicCount: (v: number) => void;
   mode: "standard" | "comprehensive";
   setMode: (v: "standard" | "comprehensive") => void;
+  enrichMetrics: boolean;
+  setEnrichMetrics: (v: boolean) => void;
   showOptional: boolean;
   setShowOptional: (v: boolean) => void;
   onSubmit: (e: FormEvent) => void;
@@ -633,6 +640,20 @@ function SeedForm(p: {
             </select>
           </label>
         </div>
+
+        <label className="field" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={p.enrichMetrics}
+            onChange={(e) => p.setEnrichMetrics(e.target.checked)}
+          />
+          <span>
+            <span style={{ fontWeight: 600 }}>Fetch volume / CPC / KD</span>
+            <span className="muted" style={{ marginLeft: 8 }}>
+              · adds ~$0.40–$0.75 per run (DataForSEO)
+            </span>
+          </span>
+        </label>
 
         <button className="btn btn-primary" type="submit" style={{ marginTop: 8 }}>
           Discover silos

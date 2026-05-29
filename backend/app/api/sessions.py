@@ -46,6 +46,11 @@ class CreateSessionBody(BaseModel):
     topic_count: int = Field(default=5, ge=3, le=10)
     coverage_mode: str = Field(default="standard", pattern="^(standard|comprehensive)$")
     recursive_fanout: bool = False
+    # §7.8 metrics enrichment toggle. None -> use workspace default
+    # (`enrich_with_metrics_default`, currently True). Surfacing as Optional
+    # rather than bool=True so a deployed default flip propagates to clients
+    # that don't send the field.
+    enrich_with_metrics: bool | None = None
 
 
 class DisambiguateBody(BaseModel):
@@ -304,7 +309,11 @@ def create_session(
             "topic_count": body.topic_count,
             "coverage_mode": body.coverage_mode,
             "recursive_fanout": body.recursive_fanout,
-            "enrich_with_metrics": False,
+            "enrich_with_metrics": (
+                body.enrich_with_metrics
+                if body.enrich_with_metrics is not None
+                else get_settings().enrich_with_metrics_default
+            ),
         },
     )
     bind_session_id(session["id"])

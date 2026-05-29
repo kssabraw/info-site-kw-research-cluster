@@ -24,6 +24,27 @@ _LOCATION_CODE = 2840
 _LANGUAGE_CODE = "en"
 
 
+def _coerce_int(v) -> int | None:
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f:  # NaN
+        return None
+    return f
+
+
 class DataForSEOError(Exception):
     pass
 
@@ -224,6 +245,48 @@ class DataForSEOClient:
             kw = kd.get("keyword") if isinstance(kd, dict) else None
             if kw:
                 out.append(kw)
+        return out
+
+    def keyword_overview(self, keywords: list[str]) -> dict[str, dict]:
+        """Per-keyword metrics for a batch (PRD §7.8): search volume, CPC,
+        keyword difficulty, competition index. Returns a {keyword: {volume,
+        cpc_usd, keyword_difficulty, competition_index}} map. DataForSEO Labs
+        `keyword_overview` accepts up to 700 keywords per task — the caller
+        is responsible for batching at or below that limit. Missing keywords
+        (no data) are simply absent from the returned map; the cost meter
+        picks up the per-call charge from `task["cost"]`."""
+        if not keywords:
+            return {}
+        task = self._post(
+            "/v3/dataforseo_labs/google/keyword_overview/live",
+            [{"keywords": list(keywords), "location_code": _LOCATION_CODE,
+              "language_code": _LANGUAGE_CODE}],
+        )
+        items = (task.get("result") or [{}])[0].get("items") or []
+        out: dict[str, dict] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kw = item.get("keyword")
+            if not isinstance(kw, str):
+                continue
+            ki = item.get("keyword_info") or {}
+            kp = item.get("keyword_properties") or {}
+            si = item.get("search_intent_info") or {}
+            row = {
+                "volume": _coerce_int(ki.get("search_volume")),
+                "cpc_usd": _coerce_float(ki.get("cpc")),
+                "competition_index": _coerce_float(ki.get("competition_index")),
+                # KD lives under keyword_properties on Labs; fall back to None
+                # so a missing field doesn't drop the whole row.
+                "keyword_difficulty": _coerce_float(
+                    kp.get("keyword_difficulty") if isinstance(kp, dict) else None
+                ),
+                "search_intent": (
+                    si.get("main_intent") if isinstance(si, dict) else None
+                ),
+            }
+            out[kw] = row
         return out
 
     @staticmethod

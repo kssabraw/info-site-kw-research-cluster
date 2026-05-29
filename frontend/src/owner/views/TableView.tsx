@@ -11,7 +11,7 @@ import { useSession } from "../SessionWorkspace";
 
 type LengthBand = "all" | "short" | "mid" | "long";
 type QuestionFilter = "all" | "q" | "nonq";
-type SortCol = "keyword" | "topic" | "relevance" | "status";
+type SortCol = "keyword" | "topic" | "relevance" | "status" | "volume" | "kd" | "cpc";
 
 const QUESTION_RE =
   /^(who|what|when|where|why|how|which|is|are|can|could|does|do|did|will|would|should)\b/i;
@@ -96,6 +96,12 @@ export function TableView() {
           return dir * a.status.localeCompare(b.status);
         case "relevance":
           return dir * ((a.relevance_score ?? -1) - (b.relevance_score ?? -1));
+        case "volume":
+          return dir * ((a.volume ?? -1) - (b.volume ?? -1));
+        case "kd":
+          return dir * ((a.keyword_difficulty ?? -1) - (b.keyword_difficulty ?? -1));
+        case "cpc":
+          return dir * ((a.cpc_usd ?? -1) - (b.cpc_usd ?? -1));
       }
     });
   }, [keywords.data, search, topicSel, sourceSel, clusterSel, lengthBand, question, sort, topicName]);
@@ -206,9 +212,9 @@ export function TableView() {
               <th className="sortable" onClick={() => setSortCol("topic")}>Topic{arrow("topic")}</th>
               <th>Cluster</th>
               <th>Source</th>
-              <th>Vol</th>
-              <th>KD</th>
-              <th>CPC</th>
+              <th className="sortable num" onClick={() => setSortCol("volume")}>Vol{arrow("volume")}</th>
+              <th className="sortable num" onClick={() => setSortCol("kd")}>KD{arrow("kd")}</th>
+              <th className="sortable num" onClick={() => setSortCol("cpc")}>CPC{arrow("cpc")}</th>
               <th className="sortable num" onClick={() => setSortCol("relevance")}>Rel{arrow("relevance")}</th>
               <th className="sortable" onClick={() => setSortCol("status")}>Status{arrow("status")}</th>
             </tr>
@@ -247,9 +253,9 @@ function Row({
       <td className="cell-muted">{topicName(k.topic_id)}</td>
       <td className="cell-muted">{clusterName(k.cluster_id)}</td>
       <td className="cell-muted cell-sources">{k.sources.join(", ")}</td>
-      <td className="num cell-muted">—</td>
-      <td className="num cell-muted">—</td>
-      <td className="num cell-muted">—</td>
+      <td className="num">{k.volume != null ? k.volume.toLocaleString() : <span className="cell-muted">—</span>}</td>
+      <td className="num">{k.keyword_difficulty != null ? Math.round(k.keyword_difficulty) : <span className="cell-muted">—</span>}</td>
+      <td className="num">{k.cpc_usd != null ? `$${k.cpc_usd.toFixed(2)}` : <span className="cell-muted">—</span>}</td>
       <td className="num">{k.relevance_score != null ? k.relevance_score.toFixed(2) : "—"}</td>
       <td><span className={"status-tag status-" + k.status}>{k.status}</span></td>
     </tr>

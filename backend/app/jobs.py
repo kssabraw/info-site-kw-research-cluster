@@ -27,6 +27,7 @@ from app.dataforseo import get_dataforseo
 from app.llm import get_llm, get_orchestrator
 from app.logging import bind_session_id
 from app.pipeline.llm_router import build_llm_router
+from app.pipeline.metrics import enrich_keywords
 from app.pipeline.architecture import (
     ArticleInput,
     PillarInput,
@@ -56,6 +57,35 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
 
 def _short(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
+
+
+def _maybe_enrich_metrics(session: dict, per_topic_gated) -> None:
+    """If the session opted into §7.8 metrics enrichment, fetch volume / CPC /
+    KD / competition for the active pool and persist onto the keyword rows.
+    Cost-bearing — the active_per_silo_cap bounds it (~$0.40 for 5 silos at
+    list price). Degrades quietly: any failure logs + writes nothing, the run
+    still completes."""
+    settings = session.get("settings") or {}
+    if not settings.get("enrich_with_metrics"):
+        return
+    s = get_settings()
+    active_keywords = sorted({
+        g.keyword
+        for kws in per_topic_gated.values()
+        for g in kws
+        if g.status == "active"
+    })
+    if not active_keywords:
+        return
+    result = enrich_keywords(
+        keywords=active_keywords,
+        dfs=get_dataforseo(),
+        batch_size=s.metrics_batch_size,
+        max_workers=s.metrics_max_workers,
+        time_budget_s=float(s.metrics_time_budget_s),
+    )
+    if result.metrics:
+        store.update_keyword_metrics(session["id"], result.metrics)
 
 
 def _maybe_llm_router(seed: str, topics: list[dict]):
@@ -222,6 +252,7 @@ def run_expand_job(session_id: str) -> None:
         )
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, result.per_topic_gated)
+        _maybe_enrich_metrics(session, result.per_topic_gated)
         store.try_finalize_running(
             session_id,
             {
@@ -372,6 +403,7 @@ def run_regate_job(
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        _maybe_enrich_metrics(session, gc.per_topic_gated)
         store.try_finalize_running(
             session_id,
             {
@@ -460,6 +492,7 @@ def run_fanout_job(
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        _maybe_enrich_metrics(session, gc.per_topic_gated)
         new_settings = {**(session.get("settings") or {}), "recursive_fanout": True}
         store.try_finalize_running(
             session_id,

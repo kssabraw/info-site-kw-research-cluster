@@ -317,7 +317,9 @@ def delete_topic(topic_id: str) -> None:
 # ---- M3 keyword expansion -------------------------------------------------
 _KEYWORD_COLS = (
     "id, topic_id, cluster_id, keyword, sources, status, relevance_score, "
-    "is_primary_for_cluster, orchestrator_drop_reason, created_at"
+    "is_primary_for_cluster, orchestrator_drop_reason, "
+    "volume, cpc_usd, keyword_difficulty, competition_index, metrics_updated_at, "
+    "created_at"
 )
 
 
@@ -384,7 +386,8 @@ def list_surviving_keywords(session_id: str) -> list[dict]:
         res = (
             client.table("keywords")
             .select(
-                "topic_id, cluster_id, keyword, sources, status, relevance_score"
+                "topic_id, cluster_id, keyword, sources, status, relevance_score, "
+                "volume, cpc_usd, keyword_difficulty, competition_index"
             )
             .eq("session_id", session_id)
             .in_("status", list(_SURVIVING_STATUSES))
@@ -587,6 +590,75 @@ def insert_classified_keywords(
     for start in range(0, len(rows), 500):
         client.table("keywords").insert(rows[start : start + 500]).execute()
     return len(rows)
+
+
+_METRIC_COLS = ("volume", "cpc_usd", "keyword_difficulty", "competition_index")
+
+
+def update_keyword_metrics(
+    session_id: str, metrics_by_keyword: dict[str, dict]
+) -> int:
+    """Bulk-apply DataForSEO Labs `keyword_overview` results to a session's
+    keyword rows (PRD §7.8). Looks up `(session_id, keyword) -> id` in one paged
+    scan, then issues per-row UPDATEs in small parallel batches so a few
+    thousand rows finish in seconds (PostgREST has no per-row-values bulk
+    update). Only the active set is updated — callers are expected to pass the
+    active pool — but the keyword-text lookup is status-agnostic so a future
+    enrich-on-demand path can reuse the helper. Sets metrics_updated_at as a
+    point-in-time snapshot timestamp (PRD §7.8: no on-read refresh)."""
+    if not metrics_by_keyword:
+        return 0
+    client = get_service_client()
+
+    # 1) Resolve keyword text -> row id for this session, in pages.
+    target_keywords = set(metrics_by_keyword.keys())
+    id_by_keyword: dict[str, str] = {}
+    offset = 0
+    page = 1000
+    while True:
+        res = (
+            client.table("keywords")
+            .select("id, keyword")
+            .eq("session_id", session_id)
+            .order("id")
+            .range(offset, offset + page - 1)
+            .execute()
+        )
+        rows = res.data or []
+        for r in rows:
+            kw = r.get("keyword")
+            if kw in target_keywords and kw not in id_by_keyword:
+                id_by_keyword[kw] = r["id"]
+        if len(rows) < page:
+            break
+        offset += page
+
+    if not id_by_keyword:
+        return 0
+
+    # 2) Issue per-row updates in parallel. Bound the pool to keep the
+    # PostgREST connection count sane (~8 concurrent).
+    from concurrent.futures import ThreadPoolExecutor as _Pool
+
+    ts = datetime.now(timezone.utc).isoformat()
+
+    def _apply(kw: str, kid: str) -> bool:
+        m = metrics_by_keyword.get(kw) or {}
+        fields = {col: m.get(col) for col in _METRIC_COLS}
+        fields["metrics_updated_at"] = ts
+        client.table("keywords").update(fields).eq("id", kid).execute()
+        return True
+
+    updated = 0
+    with _Pool(max_workers=8) as pool:
+        futures = [pool.submit(_apply, kw, kid) for kw, kid in id_by_keyword.items()]
+        for f in futures:
+            try:
+                if f.result():
+                    updated += 1
+            except Exception:  # noqa: BLE001 — a single-row failure is non-fatal
+                continue
+    return updated
 
 
 def set_topic_embedding(topic_id: str, vector: list[float]) -> None:
