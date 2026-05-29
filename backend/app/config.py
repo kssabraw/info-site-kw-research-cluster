@@ -180,6 +180,16 @@ class Settings(BaseSettings):
     # active pool, not just what reaches the similarity graph.
     active_per_silo_cap: int = 1000
 
+    # §7.8 keyword metrics enrichment (DataForSEO Labs keyword_overview): per-
+    # keyword search volume / CPC / KD / competition. Run against the active
+    # pool after the gate + cap, so cost scales with active_per_silo_cap × silos
+    # (~$0.40 for a typical 5-silo run at list price). Tunable per session via
+    # CreateSessionBody.enrich_with_metrics; this is the workspace default.
+    enrich_with_metrics_default: bool = True
+    metrics_batch_size: int = 500            # keywords per keyword_overview call
+    metrics_max_workers: int = 4             # parallel keyword_overview calls
+    metrics_time_budget_s: int = 120
+
     # Recursive Fanout (PRD §7.7, Phase 1). RF deepens each silo by re-expanding
     # its top cluster representatives as sub-anchors. Mining at this level is off
     # (M5 finding: mining adds noise the gate rejects).

@@ -84,6 +84,9 @@ export function Wizard() {
   // Step 3 (folded into the seed screen)
   const [topicCount, setTopicCount] = useState(5);
   const [mode, setMode] = useState<"standard" | "comprehensive">("standard");
+  // §7.8 metrics enrichment — adds ~$0.40/run for a 5-silo standard run.
+  // Defaults on per workspace; the toggle just lets the user opt out.
+  const [enrichMetrics, setEnrichMetrics] = useState(true);
   // Deep-mine selection (step 6), carried into the cost confirmation (step 7) so
   // "Run now" can submit it.
   const [gated, setGated] = useState<string[]>([]);
@@ -153,6 +156,7 @@ export function Wizard() {
       disambiguation_hint: disambHint.trim() || undefined,
       topic_count: topicCount,
       coverage_mode: mode,
+      enrich_with_metrics: enrichMetrics,
     });
   }
 
@@ -186,6 +190,7 @@ export function Wizard() {
               seed, setSeed, audience, setAudience, disambHint, setDisambHint,
               showAudience, setShowAudience, showDisamb, setShowDisamb,
               topicCount, setTopicCount, mode, setMode,
+              enrichMetrics, setEnrichMetrics,
               onBack: () => setStep("project"),
               onSubmit: submitSeed,
             }}
@@ -366,6 +371,8 @@ function SeedStep(p: {
   setTopicCount: (v: number) => void;
   mode: "standard" | "comprehensive";
   setMode: (v: "standard" | "comprehensive") => void;
+  enrichMetrics: boolean;
+  setEnrichMetrics: (v: boolean) => void;
   onBack: () => void;
   onSubmit: (e: FormEvent) => void;
 }) {
@@ -455,11 +462,21 @@ function SeedStep(p: {
           </label>
         </div>
 
-        <div className="locked-settings">
-          <span className="locked-row">
-            <span>Metrics (volume / KD / CPC)</span>
-            <span className="badge">On · locked</span>
+        <label className="field" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="checkbox"
+            checked={p.enrichMetrics}
+            onChange={(e) => p.setEnrichMetrics(e.target.checked)}
+          />
+          <span>
+            <span style={{ fontWeight: 600 }}>Fetch volume / CPC / KD</span>
+            <span className="muted" style={{ marginLeft: 8 }}>
+              · adds ~$0.40–$0.75 per run (DataForSEO)
+            </span>
           </span>
+        </label>
+
+        <div className="locked-settings">
           <span className="locked-row">
             <span>Relevance threshold</span>
             <span className="badge">Workspace default · locked</span>
