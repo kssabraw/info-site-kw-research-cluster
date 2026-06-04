@@ -397,7 +397,7 @@ def test_language_filter_detected_once_per_unique_keyword():
         assert statuses["wat is een vraag"] == "filtered_language"
 
 
-def test_language_filter_runs_before_junk_and_loses_to_junk():
+def test_junk_filter_runs_first_and_language_filter_is_not_called_for_junk():
     # Junk is the cheapest gate (regex check, no model call) and applies first.
     # A keyword that is BOTH junk and non-English is tagged filtered_junk, never
     # passed to the language detector (so a regression in junk-first ordering

@@ -17,7 +17,7 @@ resume lands.
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from functools import wraps
+from functools import lru_cache, wraps
 
 from app import cancellation
 from app.cancellation import CancelledByUser
@@ -60,13 +60,25 @@ def _short(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
 
 
-def _maybe_language_filter():
-    """Build the gate's language filter from settings. Returns None when the
-    flag is off OR lingua-py is unavailable, so callers can pass through."""
-    s = get_settings()
-    if not s.language_filter_enabled:
+@lru_cache(maxsize=4)
+def _build_language_filter(enabled: bool, confidence: float):
+    """Cache the lingua detector across jobs. lingua's builder allocates and
+    its model data loads lazily on first use; rebuilding for every expand /
+    regate / fanout call is wasted work (the same threshold + flag yields the
+    same closure). Keyed by (enabled, confidence) so a settings change at
+    runtime — e.g. lowering the threshold for an A/B — still rebuilds."""
+    if not enabled:
         return None
-    return make_language_filter(confidence_threshold=s.language_filter_confidence)
+    return make_language_filter(confidence_threshold=confidence)
+
+
+def _maybe_language_filter():
+    """Build (or reuse) the gate's language filter from settings. Returns None
+    when the flag is off OR lingua-py is unavailable, so callers can pass
+    through."""
+    s = get_settings()
+    return _build_language_filter(s.language_filter_enabled,
+                                  s.language_filter_confidence)
 
 
 def _maybe_enrich_metrics(session: dict, per_topic_gated) -> None:

@@ -7,9 +7,10 @@
 -- embedding-cosine relevance gate then accepts them because most of the string
 -- embeds close to the English equivalent.
 --
--- ALTER TYPE ... ADD VALUE cannot run inside an explicit transaction block, so
--- this migration MUST be the only statement in the file (Supabase's migration
--- runner applies each file as a single batch). The IF NOT EXISTS clause keeps it
--- idempotent across re-runs (Postgres 12+).
+-- Postgres 12+ allows ALTER TYPE ... ADD VALUE inside a transaction block, but
+-- the newly-added enum value cannot be USED in the same transaction. This file
+-- only adds the value (no inserts/updates that reference it), so it's safe to
+-- run as a single migration regardless of how Supabase wraps it. The IF NOT
+-- EXISTS clause makes the migration idempotent across re-runs.
 
 alter type fanout.keyword_status add value if not exists 'filtered_language';

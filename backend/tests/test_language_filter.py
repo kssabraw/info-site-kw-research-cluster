@@ -113,12 +113,14 @@ def test_keeps_low_confidence_non_english(monkeypatch):
     assert f("ambiguous short") is False
 
 
-def test_swallows_per_call_detector_errors(monkeypatch):
+def test_empty_string_short_circuits_to_keep(monkeypatch):
+    # Empty string is never embedded / never sent to the detector; the filter
+    # returns False (= keep) immediately. (Per-call detector errors are tested
+    # in tests/test_relevance.py via the gate's swallowing path.)
     _install_fake_lingua(monkeypatch, english_score=0.1)
     language = _fresh_language_module()
     f = language.make_language_filter(confidence_threshold=0.6)
     assert f is not None
-    # Empty string short-circuits to False (= keep) before touching the detector.
     assert f("") is False
 
 

@@ -54,6 +54,7 @@ def simulate_best_silo_clustering(
     examples_per_silo: int = 6,
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
+    language_filter: Callable[[str], bool] | None = None,
 ) -> dict:
     """Read-only dry run of Lever 3. Gates the pool, then assigns each unique
     active keyword to its single best silo (argmax raw cosine to the rationale
@@ -69,6 +70,7 @@ def simulate_best_silo_clustering(
         threshold=relevance_threshold,
         seed_terms=seed_terms,
         peer_terms=peer_terms,
+        language_filter=language_filter,
     )
     anchors = {
         tid: np.asarray(v, dtype=np.float64)
@@ -373,6 +375,7 @@ def cluster_preview(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    language_filter: Callable[[str], bool] | None = None,
 ) -> dict:
     """Embed + gate once, then cluster under each (edge_threshold, resolution)
     config and report granularity stats — without persisting anything. The
@@ -388,6 +391,7 @@ def cluster_preview(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         assign_best_silo=assign_best_silo,
+        language_filter=language_filter,
     )
     active_keywords, active_embeddings = _active_for_clustering(
         gate.per_topic, clustering_max_nodes

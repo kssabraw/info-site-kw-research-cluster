@@ -912,6 +912,7 @@ def lever3_simulate_endpoint(
         clustering_max_nodes=s.clustering_max_nodes,
         seed_terms=seed_terms,
         peer_terms=peer_terms,
+        language_filter=jobs._maybe_language_filter(),
     )
 
 
@@ -950,6 +951,7 @@ def cluster_preview_endpoint(
         clustering_max_nodes=s.clustering_max_nodes,
         seed_terms=seed_terms,
         peer_terms=peer_terms,
+        language_filter=jobs._maybe_language_filter(),
     )
 
 

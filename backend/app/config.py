@@ -159,17 +159,20 @@ class Settings(BaseSettings):
     # 0.65 is an aggressive cutoff (owner decision) — keeps only clearly on-topic
     # keywords, roughly halving the active pool vs the prior 0.52. Re-tune via env
     # (RELEVANCE_THRESHOLD) or a per-run /regate without redeploying.
-    # Pre-embedding language ID filter. DataForSEO is locked to en/US but its
-    # related/autocomplete endpoints occasionally surface non-English Latin-
-    # script phrases when the dominant terms share spelling with English (e.g.
-    # "wat is een managed service provider"). The embedding-cosine gate would
-    # then accept them. lingua-py runs over each unique candidate keyword BEFORE
-    # embedding; a confident non-English prediction is tagged filtered_language.
-    # Conservative: only fires when confidence is above the threshold, so short
-    # ambiguous keywords stay in. Disable to roll back without redeploy.
+    relevance_threshold: float = 0.65        # cosine cutoff vs parent topic embedding
+
+    # Pre-embedding language ID filter (PRD §7.6 follow-up). DataForSEO is
+    # locked to en/US but its related/autocomplete endpoints occasionally
+    # surface non-English Latin-script phrases when the dominant terms share
+    # spelling with English (e.g. "wat is een managed service provider"). The
+    # embedding-cosine gate would then accept them. The filter runs over each
+    # unique candidate keyword BEFORE embedding: a curated starter regex catches
+    # mixed-language patterns ("wat is een…"), and lingua-py catches pure-non-
+    # English on >=3-token strings. Either firing tags the keyword as
+    # filtered_language. Confidence threshold only affects layer 2 (lingua);
+    # layer 1 is deterministic. Disable for a no-redeploy rollback.
     language_filter_enabled: bool = True
     language_filter_confidence: float = 0.6
-    relevance_threshold: float = 0.65        # cosine cutoff vs parent topic embedding
     # Lever 3: assign each keyword to its single best silo (argmax cosine to the
     # silo anchor) instead of keeping it active in every silo it passes in. Kills
     # the cross-silo duplication that dedup otherwise has to clean up.
