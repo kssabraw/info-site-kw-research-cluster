@@ -25,7 +25,8 @@ def client():
 def _visible(monkeypatch, session=None):
     monkeypatch.setattr(
         exports_api.store, "session_visible_to_user",
-        lambda *_: session if session is not None else {"id": "s1"},
+        lambda *_: session if session is not None
+        else {"id": "s1", "seed_keyword": "retatrutide"},
     )
 
 
@@ -66,8 +67,10 @@ def test_create_flat_export_uploads_records_and_signs(client, monkeypatch):
     assert calls["upload"][0][0].startswith("u-1/s1/")  # {user}/{session}/...
     assert calls["insert"][0] == ("s1", "u-1", "flat", body["storage_path"])
     assert len(calls["sign"]) == 1
-    # The signed URL is stamped with a friendly attachment filename (server-side).
-    assert calls["sign"][0][2] == "fanout-flat.csv"
+    # The signed URL is stamped with a seed-based attachment filename so the
+    # user's downloads folder shows e.g. retatrutide-flat.csv (not the opaque
+    # fanout-flat.csv we used pre-personalization).
+    assert calls["sign"][0][2] == "retatrutide-flat.csv"
 
 
 def test_create_cleans_up_object_when_insert_fails(client, monkeypatch):
@@ -162,6 +165,8 @@ def test_download_reissues_fresh_signed_url(client, monkeypatch):
     monkeypatch.setattr(exports_api.export_store, "get_export_visible",
                         lambda token, eid: {"id": eid, "session_id": "s1", "format": "flat",
                                             "storage_path": "u-1/s1/x.csv", "generated_at": "t"})
+    # Re-download refetches the session for the seed-based download name.
+    _visible(monkeypatch)
     signed = {}
     monkeypatch.setattr(exports_api.export_store, "create_signed_url",
                         lambda path, ttl, download_name=None:
@@ -170,6 +175,23 @@ def test_download_reissues_fresh_signed_url(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["download_url"] == "https://fresh/url"
     assert signed["path"] == "u-1/s1/x.csv"
+    assert signed["name"] == "retatrutide-flat.csv"
+
+
+def test_download_falls_back_to_fanout_slug_when_session_missing(client, monkeypatch):
+    # Race: the export row is visible but the parent session was deleted between
+    # list and download. Filename falls back to "fanout-…" rather than 500.
+    monkeypatch.setattr(exports_api.export_store, "get_export_visible",
+                        lambda token, eid: {"id": eid, "session_id": "s1", "format": "flat",
+                                            "storage_path": "p", "generated_at": "t"})
+    _visible(monkeypatch, session=False)
+    signed = {}
+    monkeypatch.setattr(exports_api.export_store, "create_signed_url",
+                        lambda path, ttl, download_name=None:
+                        signed.update(name=download_name) or "https://fresh/url")
+    r = client.get("/exports/e1/download")
+    assert r.status_code == 200
+    assert signed["name"] == "fanout-flat.csv"
 
 
 def test_download_not_visible_404(client, monkeypatch):
@@ -213,6 +235,9 @@ def test_export_selected_streams_flat_csv_for_selected_ids(client, monkeypatch):
     assert r.headers["content-type"].startswith("text/csv")
     cd = r.headers["content-disposition"]
     assert cd.startswith("attachment;") and cd.endswith('.csv"')
+    # Filename is seed-slugged so the download lands as e.g.
+    # retatrutide-selected-…csv in the user's downloads folder.
+    assert 'filename="retatrutide-selected-' in cd
     assert r.headers["cache-control"] == "no-store"
     # Only the requested ids are passed to the storage helper.
     assert captured == {"sid": "s1", "ids": ["k1", "k2"]}
@@ -244,6 +269,43 @@ def test_export_selected_404_when_session_not_visible(client, monkeypatch):
     _visible(monkeypatch, session=False)
     r = client.post("/sessions/s1/export-selected", json={"keyword_ids": ["k1"]})
     assert r.status_code == 404
+
+
+# ---- download-name slug rules --------------------------------------------
+def test_slug_seed_lowercases_and_hyphenates_punctuation():
+    # Common seed shapes: spaces, casing, trailing punctuation, mixed alnum.
+    assert exports_api._slug_seed("Managed Service Provider") == "managed-service-provider"
+    assert exports_api._slug_seed("cyber security") == "cyber-security"
+    assert exports_api._slug_seed("AI agents 2026!") == "ai-agents-2026"
+    assert exports_api._slug_seed("  whitespace  ") == "whitespace"
+
+
+def test_slug_seed_collapses_repeated_separators():
+    assert exports_api._slug_seed("a//b   c—d") == "a-b-c-d"
+    assert exports_api._slug_seed("--leading and trailing--") == "leading-and-trailing"
+
+
+def test_slug_seed_falls_back_for_empty_or_pure_punct():
+    assert exports_api._slug_seed(None) == "fanout"
+    assert exports_api._slug_seed("") == "fanout"
+    assert exports_api._slug_seed("???") == "fanout"
+    assert exports_api._slug_seed("   ") == "fanout"
+
+
+def test_slug_seed_caps_length_at_80_chars():
+    long_seed = "a" * 200
+    slug = exports_api._slug_seed(long_seed)
+    assert len(slug) <= 80
+    assert slug == "a" * 80
+
+
+def test_download_filename_format_matches_seed_and_format():
+    assert exports_api._download_filename("flat", "retatrutide") == "retatrutide-flat.csv"
+    assert (
+        exports_api._download_filename("topic_grouped", "cyber security")
+        == "cyber-security-topic_grouped.zip"
+    )
+    assert exports_api._download_filename("architecture", None) == "fanout-architecture.csv"
 
 
 def test_export_selected_requires_at_least_one_id(client, monkeypatch):

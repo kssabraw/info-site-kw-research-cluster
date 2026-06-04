@@ -14,6 +14,7 @@ are deploy-only.
 """
 
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -43,6 +44,23 @@ _CONTENT_TYPE_BY_FORMAT = {
     "architecture": "text/csv",
 }
 
+# Slug rules for the download filename. Non-alnum collapses to a single hyphen,
+# the whole thing lowercases, leading/trailing hyphens drop, and we cap at 80
+# chars so a pathological seed can't produce a filename the OS rejects.
+_SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+_MAX_SLUG_LEN = 80
+
+
+def _slug_seed(seed: str | None) -> str:
+    """Lowercase, hyphenate, length-cap a seed keyword into a filesystem-safe
+    slug. Returns "fanout" as a fallback for None / empty / pure-punctuation."""
+    if not seed:
+        return "fanout"
+    slug = _SLUG_NON_ALNUM.sub("-", seed.lower()).strip("-")
+    if not slug:
+        return "fanout"
+    return slug[:_MAX_SLUG_LEN].rstrip("-") or "fanout"
+
 
 def _require_session(user: AuthedUser, session_id: str) -> dict:
     session = store.session_visible_to_user(user.access_token, session_id)
@@ -51,10 +69,13 @@ def _require_session(user: AuthedUser, session_id: str) -> dict:
     return session
 
 
-def _download_filename(fmt: str) -> str:
+def _download_filename(fmt: str, seed: str | None) -> str:
     """Friendly attachment name handed to Storage at signing time so the browser
-    downloads (rather than displays) the file, cross-origin-reliably."""
-    return f"fanout-{fmt}.{_EXT_BY_FORMAT.get(fmt, 'csv')}"
+    downloads (rather than displays) the file, cross-origin-reliably. Built from
+    the seed keyword so the user sees `{seed}-{format}.{ext}` in their downloads
+    folder instead of an opaque "fanout-flat.csv"."""
+    ext = _EXT_BY_FORMAT.get(fmt, "csv")
+    return f"{_slug_seed(seed)}-{fmt}.{ext}"
 
 
 def _build_payload(session_id: str, fmt: str) -> bytes:
@@ -117,7 +138,7 @@ def create_export(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"format must be one of {', '.join(_FORMATS)}.",
         )
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
     bind_session_id(session_id)
 
     data = _build_payload(session_id, format)
@@ -137,7 +158,9 @@ def create_export(
         export_store.remove_object(object_path)
         raise
     download_url = export_store.create_signed_url(
-        object_path, get_settings().csv_signed_url_ttl_s, _download_filename(format)
+        object_path,
+        get_settings().csv_signed_url_ttl_s,
+        _download_filename(format, session.get("seed_keyword")),
     )
     logger.info(
         "csv_export_created",
@@ -175,7 +198,7 @@ def export_selected(
     drop (the storage helper filters on session_id), so a selection containing
     an out-of-session id just yields fewer rows rather than 400 — matches how
     the bulk-status helper handles unknown ids."""
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
     bind_session_id(session_id)
 
     topic_name = {t["id"]: t["name"] for t in store.list_topics(session_id)}
@@ -192,7 +215,7 @@ def export_selected(
     cluster_name = {c["id"]: c["name"] for c in store.list_clusters(session_id)}
     csv_text = build_flat_csv(keywords, topic_name, cluster_name)
     payload = csv_text.encode("utf-8")
-    filename = f"fanout-selected-{snapshot_timestamp()}.csv"
+    filename = f"{_slug_seed(session.get('seed_keyword'))}-selected-{snapshot_timestamp()}.csv"
     logger.info(
         "csv_export_selected",
         extra={"event": "csv_export_selected", "rows": len(keywords),
@@ -229,10 +252,17 @@ def download_export(
     row = export_store.get_export_visible(user.access_token, export_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export not found")
+    # Refetch the parent session for its seed_keyword so the re-issued download
+    # name matches the one the user got at create time. RLS-scoped (the user
+    # could already see the export so the session is reachable too); on the
+    # rare race where the session has been deleted, fall back to the generic
+    # "fanout" slug rather than 500ing.
+    session = store.session_visible_to_user(user.access_token, row["session_id"])
+    seed = (session or {}).get("seed_keyword")
     download_url = export_store.create_signed_url(
         row["storage_path"],
         get_settings().csv_signed_url_ttl_s,
-        _download_filename(row["format"]),
+        _download_filename(row["format"], seed),
     )
     return {
         "export_id": row["id"],
