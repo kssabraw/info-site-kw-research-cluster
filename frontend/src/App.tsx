@@ -10,6 +10,7 @@ import { SessionWorkspace } from "./owner/SessionWorkspace";
 import { DebugView } from "./owner/DebugView";
 import { TableView } from "./owner/views/TableView";
 import { ClusterView } from "./owner/views/ClusterView";
+import { ArchitectureView } from "./owner/views/ArchitectureView";
 import { SplitView } from "./owner/views/SplitView";
 import { ExportsView } from "./owner/views/ExportsView";
 import { Wizard } from "./va/Wizard";
@@ -51,8 +52,7 @@ function OwnerRoutes() {
         <Route index element={<Navigate to="table" replace />} />
         <Route path="table" element={<TableView />} />
         <Route path="cluster" element={<ClusterView />} />
-        {/* Architecture view retired from the UI; redirect old links to Table. */}
-        <Route path="architecture" element={<Navigate to="../table" replace />} />
+        <Route path="architecture" element={<ArchitectureView />} />
         <Route path="split" element={<SplitView />} />
         <Route path="exports" element={<ExportsView />} />
       </Route>
@@ -61,9 +61,9 @@ function OwnerRoutes() {
   );
 }
 
-// VA routes (PRD §10.3): the wizard plus the restricted two-view results
-// (Table + Cluster). No split view, no architecture, no project browser; any
-// other path lands back on the wizard.
+// VA routes (PRD §10.3): the wizard plus the restricted results surface
+// (Table + Cluster + read-only Architecture). No split view, no project
+// browser; any other path lands back on the wizard.
 function VaRoutes() {
   return (
     <Routes>
@@ -72,8 +72,7 @@ function VaRoutes() {
         <Route index element={<Navigate to="table" replace />} />
         <Route path="table" element={<TableView />} />
         <Route path="cluster" element={<ClusterView />} />
-        {/* Architecture + split retired/hidden for VAs; redirect to Table. */}
-        <Route path="architecture" element={<Navigate to="../table" replace />} />
+        <Route path="architecture" element={<ArchitectureView />} />
         <Route path="exports" element={<ExportsView />} />
         <Route path="split" element={<Navigate to="../table" replace />} />
       </Route>

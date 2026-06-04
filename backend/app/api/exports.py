@@ -25,6 +25,7 @@ from app.config import get_settings
 from app.csv_export import (
     build_architecture_csv,
     build_flat_csv,
+    build_linking_csv,
     build_topic_grouped_csvs,
     snapshot_timestamp,
     zip_named_csvs,
@@ -36,12 +37,13 @@ from app.storage import silo as store
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["exports"])
 
-_FORMATS = ("flat", "topic_grouped", "architecture")
-_EXT_BY_FORMAT = {"flat": "csv", "topic_grouped": "zip", "architecture": "csv"}
+_FORMATS = ("flat", "topic_grouped", "architecture", "linking")
+_EXT_BY_FORMAT = {"flat": "csv", "topic_grouped": "zip", "architecture": "csv", "linking": "csv"}
 _CONTENT_TYPE_BY_FORMAT = {
     "flat": "text/csv",
     "topic_grouped": "application/zip",
     "architecture": "text/csv",
+    "linking": "text/csv",
 }
 
 # Slug rules for the download filename. Non-alnum collapses to a single hyphen,
@@ -92,7 +94,8 @@ def _build_payload(session_id: str, fmt: str) -> bytes:
         named = build_topic_grouped_csvs(keywords, topic_name, cluster_name)
         return zip_named_csvs(named)
 
-    # architecture
+    # architecture / linking — both formats share the architecture fetch + the
+    # name-resolution dictionaries, only the builder differs.
     arch = store.get_architecture(session_id)
     if not arch:
         raise HTTPException(
@@ -102,6 +105,15 @@ def _build_payload(session_id: str, fmt: str) -> bytes:
     architecture_json = arch.get("architecture_json") or {}
     clusters = store.list_clusters(session_id)
     article_name_by_id = {c["id"]: c["name"] for c in clusters}
+    # Pillar title keyed by its silo (topic) id, for parent + lateral resolution.
+    pillar_title_by_topic = {
+        p.get("topic_id"): (p.get("title") or p.get("silo_name") or "")
+        for p in (architecture_json.get("pillars") or [])
+    }
+    if fmt == "linking":
+        return build_linking_csv(
+            architecture_json, article_name_by_id, pillar_title_by_topic,
+        ).encode("utf-8")
     h2s_by_article = {c["id"]: (c.get("suggested_h2s") or []) for c in clusters}
     # Resolve each article's target keyword (its cluster's primary keyword text).
     primary_ids = [c["primary_keyword_id"] for c in clusters if c.get("primary_keyword_id")]
@@ -109,11 +121,6 @@ def _build_payload(session_id: str, fmt: str) -> bytes:
     target_kw_by_article = {
         c["id"]: kw_texts.get(c.get("primary_keyword_id") or "", "")
         for c in clusters
-    }
-    # Pillar title keyed by its silo (topic) id, for parent + lateral resolution.
-    pillar_title_by_topic = {
-        p.get("topic_id"): (p.get("title") or p.get("silo_name") or "")
-        for p in (architecture_json.get("pillars") or [])
     }
     return build_architecture_csv(
         architecture_json,
