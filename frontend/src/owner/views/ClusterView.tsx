@@ -7,7 +7,7 @@ import {
   deleteCluster,
   dismissGap,
   editCluster,
-  getAllSurvivingKeywords,
+  getClusterKeywords,
   getClusters,
   mergeClusters,
   planArticles,
@@ -29,10 +29,15 @@ export function ClusterView() {
   const isVA = role === "va";
   const qc = useQueryClient();
   const clustersQ = useQuery({ queryKey: ["clusters", sessionId], queryFn: () => getClusters(sessionId) });
-  const keywordsQ = useQuery({ queryKey: ["keywords-all", sessionId], queryFn: () => getAllSurvivingKeywords(sessionId) });
+  // Cluster View only — the row payload includes dedupe_canonical_id so the
+  // card can hide near-duplicate variants without losing them from the pool.
+  const keywordsQ = useQuery({ queryKey: ["cluster-keywords", sessionId], queryFn: () => getClusterKeywords(sessionId) });
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["clusters", sessionId] });
+    qc.invalidateQueries({ queryKey: ["cluster-keywords", sessionId] });
+    // Edits on a session's keyword pool affect both views; bust the Table
+    // View's cache too so a Cluster-side change is visible in the Table.
     qc.invalidateQueries({ queryKey: ["keywords-all", sessionId] });
     // Structural edits (delete/merge/split/accept-gap) clear the stored
     // architecture server-side, so drop its cached copy too.
@@ -234,9 +239,27 @@ function ArticleRow(p: {
   const [nameDraft, setNameDraft] = useState(c.name);
   const [splitMode, setSplitMode] = useState(false);
   const [splitSel, setSplitSel] = useState<Set<string>>(new Set());
+  const [showVariants, setShowVariants] = useState(false);
 
-  const primary = keywords.find((k) => k.is_primary_for_cluster) ?? keywords.find((k) => k.id === c.primary_keyword_id);
-  const supporting = keywords.filter((k) => k.id !== primary?.id);
+  // Display-time dedup: rows with dedupe_canonical_id are near-duplicates of
+  // another keyword in this cluster (the canonical). Hide them from the main
+  // supporting list and group them under their canonical so the user can
+  // optionally reveal "near-duplicates" per keyword.
+  const canonicalKeywords = keywords.filter((k) => !k.dedupe_canonical_id);
+  const variantsByCanonical = useMemo(() => {
+    const m = new Map<string, Keyword[]>();
+    keywords.forEach((k) => {
+      if (!k.dedupe_canonical_id) return;
+      const arr = m.get(k.dedupe_canonical_id) ?? [];
+      arr.push(k);
+      m.set(k.dedupe_canonical_id, arr);
+    });
+    return m;
+  }, [keywords]);
+  const hiddenVariantCount = keywords.length - canonicalKeywords.length;
+
+  const primary = canonicalKeywords.find((k) => k.is_primary_for_cluster) ?? canonicalKeywords.find((k) => k.id === c.primary_keyword_id);
+  const supporting = canonicalKeywords.filter((k) => k.id !== primary?.id);
   const links = c.peer_article_links ?? [];
 
   function saveName() {
@@ -292,7 +315,14 @@ function ArticleRow(p: {
           )}
           {c.intent && <span className="badge badge-rel">{c.intent}</span>}
           {c.is_gap_placeholder && <span className="badge badge-warn">gap placeholder</span>}
-          <span className="topic-group-count">{keywords.length} kw</span>
+          <span className="topic-group-count">
+            {canonicalKeywords.length} kw
+            {hiddenVariantCount > 0 && (
+              <span className="cell-muted" title="Near-duplicates collapsed by display-time dedup">
+                {" "}(+{hiddenVariantCount} var.)
+              </span>
+            )}
+          </span>
         </button>
       </div>
 
@@ -321,34 +351,67 @@ function ArticleRow(p: {
           <DetailLine label="Supporting">
             {supporting.length === 0 && <span className="cell-muted">none</span>}
             <div className="kw-edit-list">
-              {supporting.map((k) => (
-                <div key={k.id} className="kw-edit-row">
-                  {splitMode && (
-                    <input type="checkbox" checked={splitSel.has(k.id)} onChange={() => toggleSplit(k.id)} />
-                  )}
-                  <span className="kw-edit-text">{k.keyword}</span>
-                  {!isVA && (
-                    <button className="link-btn" onClick={() => run(() => promotePrimary(c.id, k.id))}>
-                      make primary
-                    </button>
-                  )}
-                  <select
-                    className="select kw-move-select"
-                    value=""
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (!v) return;
-                      run(() => bulkKeywordMove(p.sessionId, [k.id], v === "__unassigned__" ? null : v));
-                    }}
-                  >
-                    <option value="">move to…</option>
-                    {p.siblings.filter((s) => s.id !== c.id).map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                    <option value="__unassigned__">Unassigned</option>
-                  </select>
+              {supporting.map((k) => {
+                const variants = variantsByCanonical.get(k.id) ?? [];
+                return (
+                  <div key={k.id} className="kw-edit-row">
+                    {splitMode && (
+                      <input type="checkbox" checked={splitSel.has(k.id)} onChange={() => toggleSplit(k.id)} />
+                    )}
+                    <span className="kw-edit-text">{k.keyword}</span>
+                    {variants.length > 0 && (
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => setShowVariants((s) => !s)}
+                        title="Near-duplicate phrasings collapsed into this keyword"
+                      >
+                        +{variants.length} var.
+                      </button>
+                    )}
+                    {!isVA && (
+                      <button className="link-btn" onClick={() => run(() => promotePrimary(c.id, k.id))}>
+                        make primary
+                      </button>
+                    )}
+                    <select
+                      className="select kw-move-select"
+                      value=""
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (!v) return;
+                        run(() => bulkKeywordMove(p.sessionId, [k.id], v === "__unassigned__" ? null : v));
+                      }}
+                    >
+                      <option value="">move to…</option>
+                      {p.siblings.filter((s) => s.id !== c.id).map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                      <option value="__unassigned__">Unassigned</option>
+                    </select>
+                  </div>
+                );
+              })}
+              {showVariants && hiddenVariantCount > 0 && (
+                <div className="kw-variants-block">
+                  <div className="cell-muted" style={{ fontSize: "0.8rem", marginBottom: "0.25rem" }}>
+                    Collapsed near-duplicates (still in the pool, hidden from this card):
+                  </div>
+                  {supporting.flatMap((k) => {
+                    const variants = variantsByCanonical.get(k.id) ?? [];
+                    if (variants.length === 0) return [];
+                    return variants.map((v) => (
+                      <div key={v.id} className="kw-edit-row" style={{ paddingLeft: "1rem" }}>
+                        <span className="cell-muted">↳</span>
+                        <span className="kw-edit-text">{v.keyword}</span>
+                        <span className="cell-muted" style={{ fontSize: "0.75rem" }}>
+                          (variant of "{k.keyword}")
+                        </span>
+                      </div>
+                    ));
+                  })}
                 </div>
-              ))}
+              )}
             </div>
           </DetailLine>
 

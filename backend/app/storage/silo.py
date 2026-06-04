@@ -370,6 +370,49 @@ def list_keywords(
 _SURVIVING_STATUSES = ("active", "excluded", "covered")
 
 
+def list_clustered_keywords_with_embeddings(session_id: str) -> list[dict]:
+    """Every surviving keyword that's been assigned to a cluster, with its
+    embedding vector pulled along. Feeds the Cluster View's display-time dedup
+    (cluster_dedupe). Embeddings are parsed from pgvector's text form to a
+    Python list (None when null — old rows pre-migration, or non-active rows
+    that the gate never embedded). Skips keywords without a cluster_id since
+    the dedup runs per cluster."""
+    client = get_service_client()
+    out: list[dict] = []
+    offset = 0
+    page = 1000
+    while True:
+        res = (
+            client.table("keywords")
+            .select(
+                "id, topic_id, cluster_id, keyword, sources, status, "
+                "relevance_score, is_primary_for_cluster, "
+                "volume, cpc_usd, keyword_difficulty, competition_index, "
+                "embedding"
+            )
+            .eq("session_id", session_id)
+            .in_("status", list(_SURVIVING_STATUSES))
+            .not_.is_("cluster_id", "null")
+            .order("id")
+            .range(offset, offset + page - 1)
+            .execute()
+        )
+        rows = res.data or []
+        for row in rows:
+            emb = row.get("embedding")
+            if isinstance(emb, str):
+                try:
+                    emb = json.loads(emb)
+                except (ValueError, TypeError):
+                    emb = None
+            row["embedding"] = emb
+        out.extend(rows)
+        if len(rows) < page:
+            break
+        offset += page
+    return out
+
+
 def list_surviving_keywords(session_id: str) -> list[dict]:
     """Every surviving keyword (active / excluded / covered) for a session, paged.
     This is the pool the Table/Cluster views show (PRD §9.1), so it's what the
@@ -602,7 +645,12 @@ def insert_classified_keywords(
     session_id: str, per_topic: dict[str, list[GatedKeyword]]
 ) -> int:
     """Persist gate output: every keyword with its status (active /
-    filtered_relevance / filtered_junk) and relevance_score. Nothing is dropped."""
+    filtered_relevance / filtered_junk) and relevance_score. Nothing is dropped.
+
+    Active keywords also persist the per-keyword embedding the gate already
+    computed (the same vector §7.9 clustering consumes in memory), so the
+    display-time within-cluster dedup (`cluster_dedupe`) can run cosine without
+    re-embedding. Non-active rows leave it null — the dedup never reads them."""
     rows = [
         {
             "session_id": session_id,
@@ -611,6 +659,7 @@ def insert_classified_keywords(
             "sources": g.sources,
             "status": g.status,
             "relevance_score": g.relevance_score,
+            "embedding": _vector_literal(g.embedding) if g.embedding else None,
         }
         for tid, kws in per_topic.items()
         for g in kws

@@ -223,6 +223,17 @@ class Settings(BaseSettings):
     # + this many additional silos; the seed is always mined and never counts.
     va_deep_mine_max_silos: int = 2
 
+    # Display-time within-cluster keyword dedup (Cluster View / PRD §9.2). After
+    # surface-form normalization collapses obvious variants (plurals, articles,
+    # "what is/are X", aliases like msp <-> managed service provider), the
+    # remaining canonicals get a cosine pass over the per-keyword embeddings
+    # persisted by the relevance gate. Pairs at or above this threshold collapse
+    # to the higher-volume / higher-relevance winner. Set to 1.0 to disable the
+    # cosine half without touching surface-form dedup; lower the value to
+    # collapse more semantic dupes ("definition" vs "meaning") at the cost of a
+    # few legitimate variants. Pure display-time pass; no DB writes.
+    cluster_display_dedupe_cosine_threshold: float = 0.95
+
     # M10 CSV export (PRD §12). Downloads are served via a time-limited signed URL
     # the backend mints from the private csv-snapshots bucket; this is its TTL.
     # Re-issued fresh on every download, so a short window is fine.
