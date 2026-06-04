@@ -169,21 +169,38 @@ def _lateral_pillar_links(
     pillar_topic_ids: list[str],
     topic_embeddings: dict[str, list[float] | None],
     threshold: float,
+    max_per_pillar: int,
 ) -> dict[str, list[str]]:
     """topic_id -> peer topic_ids whose topic-embedding cosine exceeds `threshold`
-    (PRD §7.11 / §15.2 #4). Symmetric. Silos without an embedding get no links."""
+    (PRD §7.11 / §15.2 #4), with each pillar's outbound list capped at the top
+    `max_per_pillar` peers by cosine. Silos without an embedding get no links.
+
+    Note: the cap is applied per-pillar, so the resulting graph may be mildly
+    asymmetric — A's list can include B while B's top-N omits A if B sits at
+    the center of a denser neighborhood. That's the right call: each pillar
+    points at its most-related peers, not at every peer above the bar."""
     vecs = {
         tid: np.asarray(topic_embeddings[tid], dtype=np.float32)
         for tid in pillar_topic_ids
         if topic_embeddings.get(tid) is not None
     }
-    links: dict[str, list[str]] = {tid: [] for tid in pillar_topic_ids}
+    # First pass: collect (cosine, peer) for every above-threshold pair.
+    scored: dict[str, list[tuple[float, str]]] = {tid: [] for tid in pillar_topic_ids}
     ids = list(vecs.keys())
     for i in range(len(ids)):
         for j in range(i + 1, len(ids)):
-            if _cosine(vecs[ids[i]], vecs[ids[j]]) > threshold:
-                links[ids[i]].append(ids[j])
-                links[ids[j]].append(ids[i])
+            cos = _cosine(vecs[ids[i]], vecs[ids[j]])
+            if cos > threshold:
+                scored[ids[i]].append((cos, ids[j]))
+                scored[ids[j]].append((cos, ids[i]))
+    # Per pillar, keep its top-N peers by cosine (descending). max_per_pillar
+    # <= 0 disables the cap (returns every above-threshold peer).
+    links: dict[str, list[str]] = {}
+    for tid, peers in scored.items():
+        peers.sort(reverse=True)
+        if max_per_pillar and max_per_pillar > 0:
+            peers = peers[:max_per_pillar]
+        links[tid] = [pid for _, pid in peers]
     return links
 
 
@@ -237,6 +254,7 @@ def run_architecture_generation(
     cluster_centroids: dict[str, list[float] | None],
     skipped_silos: list[str] | None = None,
     pillar_lateral_cosine_threshold: float = 0.55,
+    pillar_lateral_links_max: int = 5,
     lateral_article_links_max: int = 3,
     max_workers: int = 5,
 ) -> ArchitectureResult:
@@ -263,7 +281,10 @@ def run_architecture_generation(
     # ---- deterministic linking matrix ------------------------------------
     pillar_topic_ids = [p.topic_id for p in pillars_input]
     lateral_pillars = _lateral_pillar_links(
-        pillar_topic_ids, topic_embeddings, pillar_lateral_cosine_threshold
+        pillar_topic_ids,
+        topic_embeddings,
+        pillar_lateral_cosine_threshold,
+        pillar_lateral_links_max,
     )
 
     for p in pillars_input:

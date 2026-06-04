@@ -216,7 +216,15 @@ class Settings(BaseSettings):
     architect_max_workers: int = 2
     # Pillars link laterally only above this topic-embedding cosine (§15.2 #4).
     architecture_pillar_lateral_cosine: float = 0.55
-    # Lateral peer links per supporting article (§7.11 "2-3 lateral links").
+    # Cap a pillar's outbound lateral links (pillar -> peer pillar) at top-N
+    # by cosine. Keeps "no page > 5 outbound internal links" honest for pillars
+    # in seeds with many tightly-related silos (where the cosine threshold
+    # alone could leave 6+ peers above the bar). Structural links (pillar ->
+    # its supporting articles) are NOT capped here — those are the §15.2 #3
+    # no-orphan guarantee.
+    architecture_pillar_lateral_links_max: int = 5
+    # Lateral peer links per supporting article (§7.11 "2-3 lateral links";
+    # owner-requested ≤5 outbound rule applies here too — 3 stays under 5).
     architecture_lateral_article_links_max: int = 3
 
     # M8 VA mode (PRD §10.2 / §15.2 §7.2 #3). A VA may deep-mine at most the seed
