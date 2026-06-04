@@ -1238,6 +1238,49 @@ def get_keywords(
     )
 
 
+@router.get("/sessions/{session_id}/cluster-keywords")
+def get_cluster_keywords(
+    session_id: str,
+    user: AuthedUser = Depends(require_user),
+) -> list[dict]:
+    """Surviving keywords for the Cluster View (§9.2), tagged with within-cluster
+    deduplication so the card shows one variant per intent instead of every
+    phrasing the gate kept. Returns the full set in one shot (no pagination —
+    the Cluster View needs them all to group by cluster_id), each row carrying
+    a `dedupe_canonical_id` field (null when the row IS the canonical, else the
+    id of the variant that should be shown in its place). The Table View / CSV
+    exports keep using `/keywords`; they intentionally show every variant."""
+    from app import cluster_dedupe
+
+    _require_session(user, session_id)
+    rows = store.list_clustered_keywords_with_embeddings(session_id)
+    inputs = [
+        cluster_dedupe.KeywordRow(
+            id=r["id"],
+            cluster_id=r["cluster_id"],
+            keyword=r["keyword"],
+            volume=r.get("volume"),
+            relevance_score=r.get("relevance_score"),
+            is_primary_for_cluster=bool(r.get("is_primary_for_cluster")),
+            embedding=r.get("embedding"),
+        )
+        for r in rows
+    ]
+    settings = get_settings()
+    mapping = cluster_dedupe.dedupe_by_cluster(
+        inputs,
+        cosine_threshold=settings.cluster_display_dedupe_cosine_threshold,
+    )
+    # Strip the embedding before returning — it never leaves the backend.
+    out: list[dict] = []
+    for r in rows:
+        row = {k: v for k, v in r.items() if k != "embedding"}
+        canonical = mapping.get(row["id"])
+        row["dedupe_canonical_id"] = canonical if canonical and canonical != row["id"] else None
+        out.append(row)
+    return out
+
+
 # ---- Session browser (PRD §9.4) -------------------------------------------
 @router.get("/projects/{project_id}/sessions")
 def list_project_sessions(

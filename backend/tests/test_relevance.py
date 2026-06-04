@@ -251,6 +251,63 @@ def test_assign_best_silo_routes_keyword_to_one_silo():
     assert b["kw one"] == "filtered_relevance"   # routed away from B
 
 
+def test_past_year_keyword_filtered_as_junk():
+    # "best vpn 2024" carries a year strictly before the (test-injected)
+    # current year and no current/future year -> filtered_junk before the
+    # embed call (so no embedding is wasted).
+    embed = make_embed_fn({"best vpn": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={"t1": {
+            "best vpn": ["x"],          # no year -> kept (scored)
+            "best vpn 2024": ["x"],     # past -> junk
+            "best vpn 2023": ["x"],     # past -> junk
+        }},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        current_year=2026,
+    )
+    by_kw = {g.keyword: g.status for g in r.per_topic["t1"]}
+    assert by_kw["best vpn 2024"] == "filtered_junk"
+    assert by_kw["best vpn 2023"] == "filtered_junk"
+    assert by_kw["best vpn"] == "active"
+
+
+def test_current_or_future_year_keyword_kept():
+    embed = make_embed_fn({
+        "best vpn 2026": _unit(1, 0),
+        "best vpn 2027 predictions": _unit(1, 0),
+    })
+    r = run_relevance_gate(
+        per_topic={"t1": {
+            "best vpn 2026": ["x"],              # current year -> kept
+            "best vpn 2027 predictions": ["x"],  # future year -> kept
+        }},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        current_year=2026,
+    )
+    by_kw = {g.keyword: g.status for g in r.per_topic["t1"]}
+    assert by_kw["best vpn 2026"] == "active"
+    assert by_kw["best vpn 2027 predictions"] == "active"
+
+
+def test_past_year_with_current_year_kept_as_comparison():
+    # A keyword that names BOTH a past and the current year is a comparison
+    # ("ipad 2024 vs 2026"); the past-year filter must not drop it.
+    embed = make_embed_fn({"ipad 2024 vs 2026": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={"t1": {"ipad 2024 vs 2026": ["x"]}},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        current_year=2026,
+    )
+    by_kw = {g.keyword: g.status for g in r.per_topic["t1"]}
+    assert by_kw["ipad 2024 vs 2026"] == "active"
+
+
 def test_without_assign_best_silo_keyword_stays_in_both():
     # Default (flag off): the keyword is active in every silo it passes.
     embed = make_embed_fn({"kw one": _unit(1, 0)})

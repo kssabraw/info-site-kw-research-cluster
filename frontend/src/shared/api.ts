@@ -242,6 +242,11 @@ export interface Keyword {
   keyword_difficulty: number | null;
   competition_index: number | null;
   created_at: string;
+  // Within-cluster display-time dedup. Populated only by the cluster-keywords
+  // endpoint (Cluster View); null on the Table View's `/keywords` shape. When
+  // set, this row is a near-duplicate of the row with id == dedupe_canonical_id
+  // (which lives in the same cluster) and should be hidden by default.
+  dedupe_canonical_id?: string | null;
 }
 
 // One planned article (the orchestrator's output). Mirrors fanout.clusters
@@ -465,6 +470,14 @@ export const getKeywords = (id: string, topicId: string, limit = 200, status = "
 // at 500, so we page through with offset until a short page comes back. Hard
 // stop at 20 pages (10k) so a runaway never spins forever.
 const SURVIVING_STATUSES = "active,excluded,covered";
+
+// Cluster View only: surviving keywords already assigned to a cluster, each
+// row carrying a `dedupe_canonical_id` set when the row is a near-duplicate
+// of another keyword in the same cluster (so the card can render one variant
+// per intent instead of every phrasing). Backend handles surface-form + cosine
+// dedup; the frontend filters non-canonicals out of the card.
+export const getClusterKeywords = (id: string): Promise<Keyword[]> =>
+  request<Keyword[]>(`/sessions/${id}/cluster-keywords`);
 
 export async function getAllSurvivingKeywords(id: string): Promise<Keyword[]> {
   const pageSize = 500;

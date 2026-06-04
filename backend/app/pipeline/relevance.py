@@ -25,6 +25,7 @@ clustering step (§7.9) can reuse them rather than re-embedding.
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -77,13 +78,30 @@ class RelevanceResult:
         return out
 
 
-def _is_junk(keyword: str) -> bool:
+_YEAR_RE = re.compile(r"\b(20\d{2})\b")
+
+
+def _has_dated_year(keyword: str, current_year: int) -> bool:
+    """True when `keyword` contains a 4-digit year (20XX) strictly before
+    `current_year` AND no year >= current_year. Used by the junk filter to
+    drop keywords whose intent has aged out ("best vpn 2024", "trends 2023")
+    while preserving comparisons that name both a past and the current year
+    ("ipad 2024 vs 2026") and forward-looking phrases ("2027 predictions")."""
+    years = [int(m) for m in _YEAR_RE.findall(keyword)]
+    if not years:
+        return False
+    return any(y < current_year for y in years) and not any(y >= current_year for y in years)
+
+
+def _is_junk(keyword: str, current_year: int) -> bool:
     if len(keyword) < _MIN_CHARS:
         return True
     words = _WORD_RE.findall(keyword)
     if not words or len(words) > _MAX_WORDS:
         return True
-    return any(w in _BLOCKED_TOKENS or w in _PLATFORM_TOKENS for w in words)
+    if any(w in _BLOCKED_TOKENS or w in _PLATFORM_TOKENS for w in words):
+        return True
+    return _has_dated_year(keyword, current_year)
 
 
 def _term_pattern(terms: list[str] | None):
@@ -166,6 +184,7 @@ def run_relevance_gate(
     assign_best_silo: bool = False,
     llm_router=None,
     llm_router_margin: float = 0.04,
+    current_year: int | None = None,
 ) -> RelevanceResult:
     """Classify every keyword in `per_topic` as active / filtered_relevance /
     filtered_junk. `embed_fn(list[str]) -> list[list[float]]` embeds keywords.
@@ -179,6 +198,11 @@ def run_relevance_gate(
     topic_names = topic_names or {}
     seed_pat = _term_pattern(seed_terms)
     peer_pat = _term_pattern(peer_terms)
+    # `current_year` drives the past-year junk filter. Default to the calendar
+    # year at gate-call time (read here, not at module import, so a long-lived
+    # worker spanning a year boundary sees the new year on its next run).
+    if current_year is None:
+        current_year = datetime.now(timezone.utc).year
 
     # 1. Junk filter per topic; collect the unique non-junk keywords to embed.
     #    Only embed keywords that belong to at least one topic that HAS an
@@ -192,7 +216,7 @@ def run_relevance_gate(
         cands: list[tuple[str, list[str]]] = []
         for kw, sources in pool.items():
             srt = sorted(sources)
-            if _is_junk(kw) or _off_niche(kw, seed_pat, peer_pat):
+            if _is_junk(kw, current_year) or _off_niche(kw, seed_pat, peer_pat):
                 junk.append(GatedKeyword(kw, srt, "filtered_junk"))
             else:
                 cands.append((kw, srt))

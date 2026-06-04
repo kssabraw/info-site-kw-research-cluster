@@ -311,7 +311,7 @@ function PipelineView(p: {
     return phase === "planning" ? (
       <WorkingProgress stages={PLANNING_STAGES} targetS={120} estimate="usually 1–4 minutes" />
     ) : (
-      <WorkingProgress stages={EXPANSION_STAGES} targetS={150} estimate="usually 3–6 minutes" />
+      <WorkingProgress stages={EXPANSION_STAGES} targetS={480} estimate="usually 6–10 minutes" />
     );
   }
 
