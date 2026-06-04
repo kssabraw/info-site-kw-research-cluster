@@ -109,7 +109,8 @@ def test_counts_summary():
         embed_fn=embed,
         threshold=0.62,
     )
-    assert r.counts() == {"active": 1, "filtered_relevance": 1, "filtered_junk": 1}
+    assert r.counts() == {"active": 1, "filtered_relevance": 1,
+                          "filtered_junk": 1, "filtered_language": 0}
 
 
 def test_gated_keyword_dataclass_defaults():
@@ -319,3 +320,132 @@ def test_without_assign_best_silo_keyword_stays_in_both():
     )
     assert {g.status for g in r.per_topic["A"]} == {"active"}
     assert {g.status for g in r.per_topic["B"]} == {"active"}
+
+
+def test_language_filter_tags_non_english_before_embedding():
+    # The lingua-py detector is injected as a stub: every keyword in the set is
+    # "non-English". They must be tagged filtered_language and NEVER embedded
+    # (no embedding cost spent on something we just filtered out).
+    embed = make_embed_fn({"english kw": _unit(1, 0)})
+    non_english = {"wat is een managed service provider",
+                   "was ist eine managed service provider"}
+
+    def lang_filter(kw):
+        return kw in non_english
+
+    r = run_relevance_gate(
+        per_topic={"t1": {
+            "english kw": ["x"],
+            "wat is een managed service provider": ["x"],
+            "was ist eine managed service provider": ["x"],
+        }},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        language_filter=lang_filter,
+    )
+    by_kw = {g.keyword: g for g in r.per_topic["t1"]}
+    assert by_kw["wat is een managed service provider"].status == "filtered_language"
+    assert by_kw["was ist eine managed service provider"].status == "filtered_language"
+    assert by_kw["wat is een managed service provider"].relevance_score is None
+    assert by_kw["wat is een managed service provider"].embedding is None
+    assert by_kw["english kw"].status == "active"
+    # Counts surface the new bucket; only the surviving candidate was embedded.
+    assert r.counts()["filtered_language"] == 2
+    # The English candidate was embedded once.
+    assert embed.calls["n"] == 1
+
+
+def test_language_filter_off_by_default_keeps_everything():
+    # No language_filter supplied -> the gate runs as before (no filter).
+    embed = make_embed_fn({"wat is een managed service provider": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={"t1": {"wat is een managed service provider": ["x"]}},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+    )
+    assert r.per_topic["t1"][0].status == "active"
+    assert r.counts()["filtered_language"] == 0
+
+
+def test_language_filter_detected_once_per_unique_keyword():
+    # A keyword fanned into many silos must be detected ONCE — the cache
+    # prevents N model calls for N silo memberships.
+    calls = {"n": 0}
+
+    def lang_filter(kw):
+        calls["n"] += 1
+        return kw == "wat is een vraag"
+
+    embed = make_embed_fn({"english kw": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={
+            "A": {"wat is een vraag": ["x"], "english kw": ["x"]},
+            "B": {"wat is een vraag": ["x"], "english kw": ["x"]},
+            "C": {"wat is een vraag": ["x"]},
+        },
+        topic_embeddings={"A": _unit(1, 0), "B": _unit(1, 0), "C": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        language_filter=lang_filter,
+    )
+    # Exactly 2 unique keywords -> at most 2 detector calls (cache hits otherwise).
+    assert calls["n"] == 2
+    for tid in ("A", "B", "C"):
+        statuses = {g.keyword: g.status for g in r.per_topic[tid]}
+        assert statuses["wat is een vraag"] == "filtered_language"
+
+
+def test_language_filter_runs_before_junk_and_loses_to_junk():
+    # Junk is the cheapest gate (regex check, no model call) and applies first.
+    # A keyword that is BOTH junk and non-English is tagged filtered_junk, never
+    # passed to the language detector (so a regression in junk-first ordering
+    # would show up as the detector seeing a junk keyword).
+    seen: list[str] = []
+
+    def lang_filter(kw):
+        seen.append(kw)
+        return True  # claim everything is non-English
+
+    embed = make_embed_fn({"clean kw": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={"t1": {
+            "clean kw": ["x"],
+            "best casino bonus": ["x"],  # blocked token -> junk first
+        }},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        language_filter=lang_filter,
+    )
+    by_kw = {g.keyword: g.status for g in r.per_topic["t1"]}
+    assert by_kw["best casino bonus"] == "filtered_junk"
+    # Junk shortcuts before the language detector even runs.
+    assert "best casino bonus" not in seen
+
+
+def test_language_filter_swallows_per_call_errors():
+    # A misbehaving detector (raises on a specific keyword) must NOT abort the
+    # gate; the keyword stays in (False = keep) and the rest are detected.
+    def lang_filter(kw):
+        if kw == "exploder":
+            raise RuntimeError("model died")
+        return kw == "wat is een vraag"
+
+    embed = make_embed_fn({"exploder": _unit(1, 0), "english kw": _unit(1, 0)})
+    r = run_relevance_gate(
+        per_topic={"t1": {
+            "exploder": ["x"],
+            "english kw": ["x"],
+            "wat is een vraag": ["x"],
+        }},
+        topic_embeddings={"t1": _unit(1, 0)},
+        embed_fn=embed,
+        threshold=0.5,
+        language_filter=lang_filter,
+    )
+    by_kw = {g.keyword: g.status for g in r.per_topic["t1"]}
+    assert by_kw["exploder"] == "active"            # detector error -> keep
+    assert by_kw["english kw"] == "active"
+    assert by_kw["wat is een vraag"] == "filtered_language"

@@ -990,7 +990,8 @@ def _count(table: str, **eqs) -> int:
 
 
 _EMPTY_EXPANSION = {
-    "counts": {"active": 0, "filtered_relevance": 0, "filtered_junk": 0},
+    "counts": {"active": 0, "filtered_relevance": 0,
+               "filtered_junk": 0, "filtered_language": 0},
     "topics": [],
 }
 
@@ -1106,6 +1107,8 @@ def get_pipeline_summary(session_id: str) -> dict:
                                              status="filtered_relevance"),
                 "filtered_junk": _count("keywords", session_id=session_id,
                                         status="filtered_junk"),
+                "filtered_language": _count("keywords", session_id=session_id,
+                                            status="filtered_language"),
             },
             "topics": expansion_topics,
         },

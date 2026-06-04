@@ -20,6 +20,7 @@ dependencies = [
   "networkx>=3.2,<4.0",
   "python-louvain>=0.16,<0.17",
   "numpy>=1.26,<3.0",
+  "lingua-language-detector>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]

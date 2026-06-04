@@ -26,6 +26,7 @@ from app.cost_attribution import metered_run
 from app.dataforseo import get_dataforseo
 from app.llm import get_llm, get_orchestrator
 from app.logging import bind_session_id
+from app.pipeline.language import make_language_filter
 from app.pipeline.llm_router import build_llm_router
 from app.pipeline.metrics import enrich_keywords
 from app.pipeline.architecture import (
@@ -57,6 +58,15 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
 
 def _short(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
+
+
+def _maybe_language_filter():
+    """Build the gate's language filter from settings. Returns None when the
+    flag is off OR lingua-py is unavailable, so callers can pass through."""
+    s = get_settings()
+    if not s.language_filter_enabled:
+        return None
+    return make_language_filter(confidence_threshold=s.language_filter_confidence)
 
 
 def _maybe_enrich_metrics(session: dict, per_topic_gated) -> None:
@@ -249,6 +259,7 @@ def run_expand_job(session_id: str) -> None:
             active_per_silo_cap=s.active_per_silo_cap,
             llm_router=_maybe_llm_router(seed, topics),
             llm_router_margin=s.llm_routing_margin_threshold,
+            language_filter=_maybe_language_filter(),
         )
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, result.per_topic_gated)
@@ -399,6 +410,7 @@ def run_regate_job(
             assign_best_silo=s.relevance_assign_best_silo,
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
+            language_filter=_maybe_language_filter(),
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
@@ -488,6 +500,7 @@ def run_fanout_job(
             assign_best_silo=s.relevance_assign_best_silo,
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
+            language_filter=_maybe_language_filter(),
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)

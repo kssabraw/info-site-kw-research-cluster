@@ -172,6 +172,9 @@ export interface PipelineCounts {
   active: number;
   filtered_relevance: number;
   filtered_junk: number;
+  // Optional: older sessions / older backend payloads predate the
+  // pre-embedding language filter, so this field may be absent.
+  filtered_language?: number;
 }
 
 // The long pipeline steps run in the background and return this immediately;

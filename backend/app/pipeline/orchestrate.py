@@ -19,6 +19,7 @@ outrun the gateway. Background execution is deferred to M11 (handoff §4).
 
 import logging
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 
@@ -225,7 +226,8 @@ class PipelineResult:
     timed_out: bool = False
 
     def counts(self) -> dict[str, int]:
-        out = {"active": 0, "filtered_relevance": 0, "filtered_junk": 0}
+        out = {"active": 0, "filtered_relevance": 0,
+               "filtered_junk": 0, "filtered_language": 0}
         for kws in self.per_topic_gated.values():
             for k in kws:
                 out[k.status] = out.get(k.status, 0) + 1
@@ -258,6 +260,7 @@ def gate_and_cluster(
     assign_best_silo: bool = False,
     llm_router=None,
     llm_router_margin: float = 0.04,
+    language_filter: Callable[[str], bool] | None = None,
 ) -> PipelineResult:
     """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
     per-topic candidate pool. Shared by the full pipeline and the re-gate path
@@ -281,6 +284,7 @@ def gate_and_cluster(
         assign_best_silo=assign_best_silo,
         llm_router=llm_router,
         llm_router_margin=llm_router_margin,
+        language_filter=language_filter,
     )
     result.degraded_notes.extend(gate.degraded_notes)
     cap_log = _cap_active_per_silo(gate.per_topic, active_per_silo_cap)
@@ -456,6 +460,7 @@ def run_refinement_pipeline(
     assign_best_silo: bool = False,
     llm_router=None,
     llm_router_margin: float = 0.04,
+    language_filter: Callable[[str], bool] | None = None,
 ) -> PipelineResult:
     result = PipelineResult()
     topic_names = {t.id: t.name for t in topics}
@@ -539,6 +544,7 @@ def run_refinement_pipeline(
         assign_best_silo=assign_best_silo,
         llm_router=llm_router,
         llm_router_margin=llm_router_margin,
+        language_filter=language_filter,
     )
     result.degraded_notes.extend(gc.degraded_notes)
     result.per_topic_gated = gc.per_topic_gated
