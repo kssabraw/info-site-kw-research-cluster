@@ -170,17 +170,59 @@ def test_lateral_pillar_links_only_above_threshold_and_symmetric():
             "t3": [0.0, 1.0],     # orthogonal to t1 -> not linked
         },
         threshold=0.55,
+        max_per_pillar=5,
     )
     assert links["t2"] == ["t1"]
-    assert links["t1"] == ["t2"]   # symmetric
+    assert links["t1"] == ["t2"]   # symmetric (when each side has room under the cap)
     assert links["t3"] == []       # below threshold
 
 
 def test_lateral_pillar_links_skip_silos_without_embeddings():
     links = _lateral_pillar_links(
-        ["t1", "t2"], {"t1": [1.0, 0.0]}, threshold=0.55  # t2 has no embedding
+        ["t1", "t2"], {"t1": [1.0, 0.0]}, threshold=0.55, max_per_pillar=5,
     )
     assert links == {"t1": [], "t2": []}
+
+
+def test_lateral_pillar_links_caps_at_top_n_by_cosine():
+    # Seven pillars all within the cosine threshold of t0; with max_per_pillar=5,
+    # t0's outbound list keeps the FIVE closest peers (highest cosine) and drops
+    # the bottom two. The owner-set "no page > 5 outbound internal links" rule
+    # for pillar laterals lives here.
+    # Vectors crafted so t0 -> t1..t7 cosines descend monotonically:
+    #   t1 closest, t7 farthest (but still above threshold).
+    pillar_ids = [f"t{i}" for i in range(8)]
+    embeddings = {
+        "t0": [1.0, 0.0],
+        "t1": [1.00, 0.05],
+        "t2": [1.00, 0.10],
+        "t3": [1.00, 0.15],
+        "t4": [1.00, 0.20],
+        "t5": [1.00, 0.25],
+        "t6": [1.00, 0.30],
+        "t7": [1.00, 0.35],
+    }
+    links = _lateral_pillar_links(
+        pillar_ids, embeddings, threshold=0.55, max_per_pillar=5,
+    )
+    # All seven peers exceed the cosine bar, but t0's list is capped to its
+    # five closest (t1..t5). t6 and t7 are dropped from t0's outbound list.
+    assert len(links["t0"]) == 5
+    assert links["t0"] == ["t1", "t2", "t3", "t4", "t5"]
+    # t6 and t7 still appear in the OTHER pillars' lists (their own caps allow
+    # it), confirming the cap is per-pillar rather than a global edge drop.
+    assert "t6" in links["t1"] or "t6" in links["t7"]
+
+
+def test_lateral_pillar_links_cap_of_zero_disables_the_cap():
+    # max_per_pillar=0 (or negative) returns every above-threshold peer — used
+    # in code paths where the caller wants the raw graph (e.g. diagnostics).
+    pillar_ids = [f"t{i}" for i in range(8)]
+    embeddings = {f"t{i}": [1.0, i * 0.05] for i in range(8)}
+    links = _lateral_pillar_links(
+        pillar_ids, embeddings, threshold=0.55, max_per_pillar=0,
+    )
+    assert len(links["t0"]) == 7  # every other pillar above the threshold
 
 
 # ---- lateral article links: prioritize peer links, fill by centroid --------
