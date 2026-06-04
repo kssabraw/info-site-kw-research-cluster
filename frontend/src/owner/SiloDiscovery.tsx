@@ -363,9 +363,10 @@ function ExpansionResults(p: {
       <p className="muted">
         {c.active.toLocaleString()} relevant keywords across {expansion.topics.length} silos
         {" · "}
-        {(c.filtered_relevance + c.filtered_junk).toLocaleString()} filtered out (
-        {c.filtered_relevance.toLocaleString()} off-topic, {c.filtered_junk.toLocaleString()}{" "}
-        junk).
+        {(c.filtered_relevance + c.filtered_junk + (c.filtered_language ?? 0)).toLocaleString()}{" "}
+        filtered out ({c.filtered_relevance.toLocaleString()} off-topic,{" "}
+        {c.filtered_junk.toLocaleString()} junk
+        {c.filtered_language ? `, ${c.filtered_language.toLocaleString()} non-English` : ""}).
       </p>
 
       {expansion.topics.map((t) => (

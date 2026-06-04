@@ -6,6 +6,7 @@ service client after ownership has been verified.
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -17,6 +18,8 @@ from app.storage.supabase_client import (
     get_service_client,
     get_user_client,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _norm(kw: str) -> str:
@@ -989,8 +992,26 @@ def _count(table: str, **eqs) -> int:
     return q.execute().count or 0
 
 
+def _count_status_safe(session_id: str, status: str) -> int:
+    """Status-count helper that tolerates a status value Postgres doesn't know
+    yet (e.g. the `filtered_language` enum addition deployed without its
+    migration). A real DB error would propagate from `_count` and 500 the
+    polled summary endpoint; here we log + return 0 so the rest of the payload
+    still renders. Migration 20260604000001 makes this branch dead code."""
+    try:
+        return _count("keywords", session_id=session_id, status=status)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "status_count_skipped",
+            extra={"event": "status_count_skipped", "status": status,
+                   "session_id": session_id, "reason": repr(exc)},
+        )
+        return 0
+
+
 _EMPTY_EXPANSION = {
-    "counts": {"active": 0, "filtered_relevance": 0, "filtered_junk": 0},
+    "counts": {"active": 0, "filtered_relevance": 0,
+               "filtered_junk": 0, "filtered_language": 0},
     "topics": [],
 }
 
@@ -1106,6 +1127,7 @@ def get_pipeline_summary(session_id: str) -> dict:
                                              status="filtered_relevance"),
                 "filtered_junk": _count("keywords", session_id=session_id,
                                         status="filtered_junk"),
+                "filtered_language": _count_status_safe(session_id, "filtered_language"),
             },
             "topics": expansion_topics,
         },

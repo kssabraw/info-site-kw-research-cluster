@@ -12,6 +12,12 @@ to every silo in §7.3) into the silo each keyword actually belongs to.
   keyword into many silos, we embed each *unique* keyword once across all silos
   (not once per silo) and reuse the vector.
 - Junk filter (cheap, pre-embedding): blocked tokens + length sanity.
+- Language filter (optional, pre-embedding): when a `language_filter` callable
+  is supplied, every unique keyword is run through a real language ID model
+  (see `app/pipeline/language.py`) and tagged `filtered_language` if it's
+  confidently not English. Catches non-English Latin-script phrases that
+  DataForSEO leaks past its en/US locale lock and that the cosine gate would
+  otherwise accept (their English content embeds close to English).
 - Relevance: cosine >= threshold (default 0.62) -> active, else
   filtered_relevance. Junk -> filtered_junk. Nothing is deleted; failures are
   tagged and stored for v1 calibration.
@@ -26,6 +32,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Callable
 
 import numpy as np
 
@@ -59,7 +66,7 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 class GatedKeyword:
     keyword: str
     sources: list[str]
-    status: str  # 'active' | 'filtered_relevance' | 'filtered_junk'
+    status: str  # 'active' | 'filtered_relevance' | 'filtered_junk' | 'filtered_language'
     relevance_score: float | None = None
     embedding: list[float] | None = None  # kept only for scored 'active' (for §7.9)
 
@@ -71,7 +78,8 @@ class RelevanceResult:
     degraded_notes: list[str] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
-        out = {"active": 0, "filtered_relevance": 0, "filtered_junk": 0}
+        out = {"active": 0, "filtered_relevance": 0,
+               "filtered_junk": 0, "filtered_language": 0}
         for kws in self.per_topic.values():
             for k in kws:
                 out[k.status] = out.get(k.status, 0) + 1
@@ -185,6 +193,7 @@ def run_relevance_gate(
     llm_router=None,
     llm_router_margin: float = 0.04,
     current_year: int | None = None,
+    language_filter: Callable[[str], bool] | None = None,
 ) -> RelevanceResult:
     """Classify every keyword in `per_topic` as active / filtered_relevance /
     filtered_junk. `embed_fn(list[str]) -> list[list[float]]` embeds keywords.
@@ -204,25 +213,46 @@ def run_relevance_gate(
     if current_year is None:
         current_year = datetime.now(timezone.utc).year
 
-    # 1. Junk filter per topic; collect the unique non-junk keywords to embed.
-    #    Only embed keywords that belong to at least one topic that HAS an
-    #    embedding (a keyword living only in unembeddable silos is never scored).
+    # 1. Junk + language filter per topic; collect the unique non-filtered
+    #    keywords to embed. Only embed keywords that belong to at least one topic
+    #    that HAS an embedding (a keyword living only in unembeddable silos is
+    #    never scored). Language detection is per *unique* keyword — same
+    #    string in many silos is detected once.
     junk_by_topic: dict[str, list[GatedKeyword]] = {}
+    lang_by_topic: dict[str, list[GatedKeyword]] = {}
     cands_by_topic: dict[str, list[tuple[str, list[str]]]] = {}
     unique: dict[str, None] = {}  # insertion-ordered unique keyword set
+    lang_cache: dict[str, bool] = {}
+
+    def _is_non_english(kw: str) -> bool:
+        if language_filter is None:
+            return False
+        cached = lang_cache.get(kw)
+        if cached is None:
+            try:
+                cached = bool(language_filter(kw))
+            except Exception:  # noqa: BLE001 — never abort the gate on a detector blow-up
+                cached = False
+            lang_cache[kw] = cached
+        return cached
+
     for tid, pool in per_topic.items():
         has_anchor = bool(topic_embeddings.get(tid))
         junk: list[GatedKeyword] = []
+        lang: list[GatedKeyword] = []
         cands: list[tuple[str, list[str]]] = []
         for kw, sources in pool.items():
             srt = sorted(sources)
             if _is_junk(kw, current_year) or _off_niche(kw, seed_pat, peer_pat):
                 junk.append(GatedKeyword(kw, srt, "filtered_junk"))
+            elif _is_non_english(kw):
+                lang.append(GatedKeyword(kw, srt, "filtered_language"))
             else:
                 cands.append((kw, srt))
                 if has_anchor:
                     unique.setdefault(kw, None)
         junk_by_topic[tid] = junk
+        lang_by_topic[tid] = lang
         cands_by_topic[tid] = cands
 
     # 2. Embed every unique keyword once (dedup across silos), resilient to
@@ -294,7 +324,9 @@ def run_relevance_gate(
 
     # 3. Score per topic against that topic's own anchor.
     for tid, cands in cands_by_topic.items():
-        classified: list[GatedKeyword] = list(junk_by_topic[tid])
+        classified: list[GatedKeyword] = (
+            list(junk_by_topic[tid]) + list(lang_by_topic[tid])
+        )
         anchor = topic_embeddings.get(tid)
 
         if not anchor:
@@ -343,7 +375,9 @@ def run_relevance_gate(
                "active": counts["active"],
                "filtered_relevance": counts["filtered_relevance"],
                "filtered_junk": counts["filtered_junk"],
+               "filtered_language": counts["filtered_language"],
                "unique_embedded": len(emb_by_kw),
+               "language_filter": language_filter is not None,
                "threshold": threshold},
     )
     return result
