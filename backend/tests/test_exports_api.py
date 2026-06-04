@@ -124,6 +124,40 @@ def test_create_architecture_ok(client, monkeypatch):
     assert calls["upload"][0][2] == "text/csv"
 
 
+def test_create_linking_requires_generated_architecture(client, monkeypatch):
+    # Same prerequisite as the architecture format: no stored architecture -> 400.
+    _visible(monkeypatch)
+    monkeypatch.setattr(exports_api.store, "list_topics", lambda *_: [])
+    monkeypatch.setattr(exports_api.store, "get_architecture", lambda *_: None)
+    _capture_storage(monkeypatch)
+    r = client.post("/sessions/s1/export?format=linking")
+    assert r.status_code == 400
+
+
+def test_create_linking_ok(client, monkeypatch):
+    _visible(monkeypatch)
+    monkeypatch.setattr(exports_api.store, "list_topics", lambda *_: [{"id": "t1", "name": "M"}])
+    monkeypatch.setattr(exports_api.store, "get_architecture",
+                        lambda *_: {"architecture_json": {"pillars": [
+                            {"topic_id": "t1", "title": "T",
+                             "supporting_article_ids": ["c1"],
+                             "lateral_pillar_links": []}],
+                            "supporting_articles": [
+                                {"article_id": "c1", "name": "A1",
+                                 "parent_pillar_topic_id": "t1",
+                                 "lateral_article_links": []}]}})
+    monkeypatch.setattr(exports_api.store, "list_clusters",
+                        lambda *_: [{"id": "c1", "name": "A1",
+                                     "primary_keyword_id": None, "suggested_h2s": []}])
+    monkeypatch.setattr(exports_api.store, "get_keyword_texts", lambda *_: {})
+    calls = _capture_storage(monkeypatch)
+    r = client.post("/sessions/s1/export?format=linking")
+    assert r.status_code == 200
+    # Linking is a single CSV file (not a zip).
+    assert calls["upload"][0][2] == "text/csv"
+    assert calls["sign"][0][2] == "retatrutide-linking.csv"
+
+
 def test_create_invalid_format(client, monkeypatch):
     _visible(monkeypatch)
     assert client.post("/sessions/s1/export?format=bogus").status_code == 400

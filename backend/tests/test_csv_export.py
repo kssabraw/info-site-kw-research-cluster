@@ -12,8 +12,10 @@ import zipfile
 from app.csv_export import (
     ARCHITECTURE_HEADERS,
     FLAT_HEADERS,
+    LINKING_HEADERS,
     build_architecture_csv,
     build_flat_csv,
+    build_linking_csv,
     build_topic_grouped_csvs,
     snapshot_timestamp,
     zip_named_csvs,
@@ -210,6 +212,111 @@ def test_architecture_rows():
 def test_architecture_empty_json():
     out = _parse(build_architecture_csv({}, {}, {}, {}, {}))
     assert out == [ARCHITECTURE_HEADERS]
+
+
+# ---- linking (edge list) --------------------------------------------------
+def test_linking_csv_emits_one_row_per_edge_with_resolved_names():
+    arch = {
+        "pillars": [
+            {
+                "topic_id": "topic-mech",
+                "title": "How Retatrutide Works",
+                "supporting_article_ids": ["a1", "a2"],
+                "lateral_pillar_links": ["topic-dose"],
+            },
+            {
+                "topic_id": "topic-dose",
+                "title": "Retatrutide Dosing",
+                "supporting_article_ids": ["a3"],
+                "lateral_pillar_links": [],
+            },
+        ],
+        "supporting_articles": [
+            {
+                "article_id": "a1",
+                "name": "Triple agonism explained",
+                "parent_pillar_topic_id": "topic-mech",
+                "lateral_article_links": ["a2"],
+            },
+            {
+                "article_id": "a2",
+                "name": "Mechanism deep dive",
+                "parent_pillar_topic_id": "topic-mech",
+                "lateral_article_links": [],
+            },
+            {
+                "article_id": "a3",
+                "name": "Dose escalation schedule",
+                "parent_pillar_topic_id": "topic-dose",
+                "lateral_article_links": ["a1"],
+            },
+        ],
+    }
+    csv_text = build_linking_csv(
+        arch,
+        article_name_by_id={
+            "a1": "Triple agonism explained",
+            "a2": "Mechanism deep dive",
+            "a3": "Dose escalation schedule",
+        },
+        pillar_title_by_topic={
+            "topic-mech": "How Retatrutide Works",
+            "topic-dose": "Retatrutide Dosing",
+        },
+    )
+    rows = _parse(csv_text)
+    assert rows[0] == LINKING_HEADERS
+
+    # Cast to a set-of-tuples for order-insensitive comparison; the function
+    # produces a deterministic order but we assert on edge content, not order.
+    edges = {tuple(r) for r in rows[1:]}
+    # Pillar -> articles (down-links)
+    assert ("How Retatrutide Works", "pillar", "Triple agonism explained", "article", "pillar_to_article") in edges
+    assert ("How Retatrutide Works", "pillar", "Mechanism deep dive", "article", "pillar_to_article") in edges
+    assert ("Retatrutide Dosing", "pillar", "Dose escalation schedule", "article", "pillar_to_article") in edges
+    # Pillar -> pillar (lateral)
+    assert ("How Retatrutide Works", "pillar", "Retatrutide Dosing", "pillar", "pillar_to_pillar") in edges
+    # Article -> pillar (up-link)
+    assert ("Triple agonism explained", "article", "How Retatrutide Works", "pillar", "article_to_pillar") in edges
+    assert ("Dose escalation schedule", "article", "Retatrutide Dosing", "pillar", "article_to_pillar") in edges
+    # Article -> article (lateral peer)
+    assert ("Triple agonism explained", "article", "Mechanism deep dive", "article", "article_to_article") in edges
+    assert ("Dose escalation schedule", "article", "Triple agonism explained", "article", "article_to_article") in edges
+    # Total: 3 down + 1 pillar-lateral + 3 up + 2 article-lateral = 9
+    assert len(edges) == 9
+
+
+def test_linking_csv_skips_article_to_pillar_when_parent_unresolved():
+    # A supporting article whose parent_pillar_topic_id doesn't resolve to a
+    # pillar title gets no up-link row — better an honest omission than a row
+    # pointing at a stale or empty title.
+    arch = {
+        "pillars": [],
+        "supporting_articles": [
+            {"article_id": "a1", "name": "Orphan",
+             "parent_pillar_topic_id": "missing", "lateral_article_links": []},
+        ],
+    }
+    rows = _parse(build_linking_csv(arch, {"a1": "Orphan"}, {}))
+    assert rows == [LINKING_HEADERS]
+
+
+def test_linking_csv_falls_back_to_ids_when_names_missing():
+    # A lateral link to an article id with no name in the resolver renders the
+    # raw id rather than dropping the edge — the export is for human review.
+    arch = {
+        "pillars": [{"topic_id": "t1", "title": "T",
+                     "supporting_article_ids": ["a-ghost"],
+                     "lateral_pillar_links": []}],
+        "supporting_articles": [],
+    }
+    rows = _parse(build_linking_csv(arch, {}, {"t1": "T"}))
+    # The pillar -> ghost article edge survives, with the raw id as the title.
+    assert ("T", "pillar", "a-ghost", "article", "pillar_to_article") in {tuple(r) for r in rows[1:]}
+
+
+def test_linking_csv_empty_architecture():
+    assert _parse(build_linking_csv({}, {}, {})) == [LINKING_HEADERS]
 
 
 # ---- misc -----------------------------------------------------------------

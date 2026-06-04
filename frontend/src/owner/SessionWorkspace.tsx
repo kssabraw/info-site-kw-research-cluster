@@ -18,18 +18,19 @@ export function useSession() {
   return useOutletContext<SessionCtx>();
 }
 
-// VAs get a simplified two-view results surface; no split view
-// (PRD §10.2 / §10.3). The Architecture view is intentionally not surfaced in
-// the UI (owner decision) — its backend stays dormant.
+// VAs get a simplified results surface + a read-only Architecture view
+// (PRD §10.2 / §10.3): no split view, no orchestrator re-run controls.
 const OWNER_TABS = [
   { to: "table", label: "Table" },
   { to: "cluster", label: "Cluster" },
+  { to: "architecture", label: "Architecture" },
   { to: "split", label: "Split" },
   { to: "exports", label: "Exports" },
 ];
 const VA_TABS = [
   { to: "table", label: "Table" },
   { to: "cluster", label: "Cluster" },
+  { to: "architecture", label: "Architecture" },
   { to: "exports", label: "Exports" },
 ];
 

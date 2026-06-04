@@ -2,13 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createExport,
   downloadExport,
+  getSummary,
   listExports,
   type CsvExportFormat,
   type CsvExportListItem,
 } from "../../shared/api";
 import { useSession } from "../SessionWorkspace";
 
-// Exports tab (PRD §12): three CSV formats generated live from Postgres, frozen
+// Exports tab (PRD §12): four CSV formats generated live from Postgres, frozen
 // to Storage, and listed for re-download. Available to both Owner and VA (Export
 // is ✓ for both in §11.2). The frontend never touches Storage — the backend
 // returns a short-lived signed URL it opens.
@@ -16,6 +17,7 @@ const FORMAT_LABELS: Record<CsvExportFormat, string> = {
   flat: "Flat keyword list",
   topic_grouped: "Topic-grouped (.zip)",
   architecture: "Site architecture",
+  linking: "Internal linking (edge list)",
 };
 
 function openDownload(url: string) {
@@ -28,7 +30,10 @@ export function ExportsView() {
   const { sessionId } = useSession();
   const qc = useQueryClient();
 
+  const summary = useQuery({ queryKey: ["summary", sessionId], queryFn: () => getSummary(sessionId) });
   const exportsQ = useQuery({ queryKey: ["exports", sessionId], queryFn: () => listExports(sessionId) });
+
+  const architectureReady = Boolean(summary.data?.architecture);
 
   const gen = useMutation({
     mutationFn: (format: CsvExportFormat) => createExport(sessionId, format),
@@ -45,7 +50,10 @@ export function ExportsView() {
     onError: (e: Error) => alert(e.message),
   });
 
-  const formats: CsvExportFormat[] = ["flat", "topic_grouped"];
+  // architecture + linking both consume the generated site-architecture; if it
+  // hasn't been built yet, gate both buttons rather than 400ing the user.
+  const formats: CsvExportFormat[] = ["flat", "topic_grouped", "architecture", "linking"];
+  const needsArchitecture = (f: CsvExportFormat) => f === "architecture" || f === "linking";
 
   return (
     <div>
@@ -57,13 +65,19 @@ export function ExportsView() {
         </p>
         <div className="export-actions">
           {formats.map((f) => {
-            const disabled = gen.isPending;
+            const disabled =
+              gen.isPending || (needsArchitecture(f) && !architectureReady);
             return (
               <button
                 key={f}
                 className="btn btn-ghost"
                 style={{ width: "auto" }}
                 disabled={disabled}
+                title={
+                  needsArchitecture(f) && !architectureReady
+                    ? "Generate the site architecture first"
+                    : undefined
+                }
                 onClick={() => gen.mutate(f)}
               >
                 {gen.isPending && gen.variables === f ? (

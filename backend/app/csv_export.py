@@ -49,6 +49,20 @@ ARCHITECTURE_HEADERS = [
     "internal_links_out",
 ]
 
+# Internal-linking matrix (PRD §7.11 / §12, follow-on): one row per edge in the
+# site graph so the user can pivot/sort by from-page or to-page in a spreadsheet
+# without splitting the architecture CSV's joined `internal_links_out` cell.
+# link_type is one of: pillar_to_article (pillar -> its supporting articles),
+# article_to_pillar (the mandatory up-link), pillar_to_pillar (lateral, M6 §15.2
+# #4), article_to_article (lateral peer, §7.11 "2-3 lateral links").
+LINKING_HEADERS = [
+    "from_page",
+    "from_type",
+    "to_page",
+    "to_type",
+    "link_type",
+]
+
 _DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
@@ -192,6 +206,51 @@ def build_architecture_csv(
         ])
 
     return _rows_to_csv(ARCHITECTURE_HEADERS, rows)
+
+
+def build_linking_csv(
+    architecture_json: dict,
+    article_name_by_id: dict[str, str],
+    pillar_title_by_topic: dict[str, str],
+) -> str:
+    """Flat from-page -> to-page edge list for the site's internal linking
+    graph (companion to `build_architecture_csv` which keeps the links joined
+    in a single cell per page). One row per directed edge; the user can sort
+    by from_page or to_page in a spreadsheet to audit hubs / leaks. Edges are
+    written in a deterministic order (pillars in source order, then their
+    supporting articles, then laterals) so a re-export is diff-stable.
+    """
+    pillars = architecture_json.get("pillars") or []
+    supporting = architecture_json.get("supporting_articles") or []
+    rows: list[list[object]] = []
+
+    for p in pillars:
+        from_title = p.get("title") or p.get("silo_name") or ""
+        # Pillar -> supporting articles (down-links). Guaranteed by M6's
+        # deterministic linking matrix.
+        for aid in (p.get("supporting_article_ids") or []):
+            to_title = article_name_by_id.get(aid, aid)
+            rows.append([from_title, "pillar", to_title, "article", "pillar_to_article"])
+        # Pillar -> pillar (lateral, only above the topic-embedding cosine
+        # threshold per §15.2 #4).
+        for tid in (p.get("lateral_pillar_links") or []):
+            to_title = pillar_title_by_topic.get(tid, tid)
+            rows.append([from_title, "pillar", to_title, "pillar", "pillar_to_pillar"])
+
+    for a in supporting:
+        aid = a.get("article_id")
+        from_title = a.get("name") or aid or ""
+        parent_topic = a.get("parent_pillar_topic_id")
+        parent_title = pillar_title_by_topic.get(parent_topic, "")
+        # Article -> pillar (mandatory up-link).
+        if parent_title:
+            rows.append([from_title, "article", parent_title, "pillar", "article_to_pillar"])
+        # Article -> article (lateral peer, within-silo + cross-silo).
+        for lid in (a.get("lateral_article_links") or []):
+            to_title = article_name_by_id.get(lid, lid)
+            rows.append([from_title, "article", to_title, "article", "article_to_article"])
+
+    return _rows_to_csv(LINKING_HEADERS, rows)
 
 
 def zip_named_csvs(named_csvs: list[tuple[str, str]]) -> bytes:

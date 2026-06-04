@@ -611,7 +611,7 @@ export const rejectSession = (id: string, note?: string) =>
   });
 
 // ---- M10 CSV export (PRD §12) --------------------------------------------
-export type CsvExportFormat = "flat" | "topic_grouped" | "architecture";
+export type CsvExportFormat = "flat" | "topic_grouped" | "architecture" | "linking";
 
 export interface CsvExportResult {
   export_id: string;
