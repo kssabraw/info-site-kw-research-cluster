@@ -2,10 +2,24 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-_Last updated: 2026-05-29. **M11 (cost + observability, §16) complete — the FINAL
-milestone; M1–M11 all built.** Pending review + live validation (sandbox egress).
-Built on `claude/exciting-davinci-tZGwH` (off `main` `4b10ed2`); **not yet merged
-to `main`** — the owner decides the merge. Real-metered per-step cost attribution
+_Last updated: 2026-06-05. **Post-M11 site-creation planning** — captured in §8.
+Two-template (informational + local SEO, one-site-per-business) site generation
+pipeline orchestrating existing writer apps. Writer landscape discovered via
+MCP probing 2026-06-05: **AR-Internal-Tools `public` schema is a 5-module content
+production pipeline** (brief → SIE → research → **writer** → sources_cited) — the
+natural informational writer, sitting in the SAME Supabase as this app (no cross-DB
+coordination needed). ShowUP Local on its own Supabase is the local-SEO option.
+Coordination decided: **shared Postgres queue (Option C)** — orchestrator inserts
+work rows, writer claims via `SELECT … FOR UPDATE SKIP LOCKED`, mirrors the M5
+`app/jobs.py` pattern. **Nothing built.** Seven open decisions in §8.5 to resolve
+before drafting M12. M11 still pending review + live validation per §2. Security
+finding to address before M12 ships: `AR-Internal-Tools.public.sie_cache` has RLS
+disabled (§8.7). Prior milestone summary follows._
+
+_2026-05-29: **M11 (cost + observability, §16) complete — the FINAL milestone;
+M1–M11 all built.** Pending review + live validation (sandbox egress). Built on
+`claude/exciting-davinci-tZGwH` (off `main` `4b10ed2`); **not yet merged to `main`**
+— the owner decides the merge. Real-metered per-step cost attribution
 (`app/cost_meter.py` `CostMeter`: DataForSEO's real per-call charge + token-derived
 LLM cost) flushed live to `sessions.actual_cost_usd` + a new `cost_breakdown` jsonb
 every 10s from the background jobs (`app/cost_attribution.py`), cumulative across a
@@ -120,6 +134,8 @@ round-trip and M8's VA/owner routing on the live stack. For M9: (a) as a **VA**,
 
 **Calibration workflow that emerged in M5** (reuse it): tuning is done against the **deployed API via browser-console `fetch`** (sandbox has no egress), and results are inspected via the **Supabase MCP tools**, not the UI (no session resume until M7). `/regate` re-runs gate+cluster on the *stored* pool (no DataForSEO) at an overridden threshold / edge / resolution / aliases / peer_entities — the cheap iteration loop. `/cluster-preview` and `/lever3-simulate` are read-only analysis.
 
+**After M11 validation completes and merges to `main`, the M1–M11 build sequence is done.** Post-M11 design conversation for the site creation orchestrator phase is captured in **§8** — seven open decisions to resolve before drafting M12.
+
 ## 3. Deploy & infra state (CRITICAL — caused most of the pain this session)
 
 - **`main` is the single deploy branch** for both Railway and Netlify. Milestones are built on `m{N}-...` branches and **merged to `main` (`--no-ff`)** when validated. Do NOT expect deploys from feature branches.
@@ -202,3 +218,81 @@ where t.session_id=(select id from latest) group by t.name order by total desc;
 - All tables under `fanout` schema; real RLS (never `using (true)`); one migration file per change.
 - Don't pre-build later milestones. Flag PRD ambiguity, pick the conservative interpretation, surface it.
 - The model is `claude-opus-4-7[1m]`; never put the model id in commits/PRs/code.
+
+## 8. Post-M11 planning — site creation orchestrator
+
+**Status: planning only, nothing built.** Captures the 2026-06-05 design conversation. Open decisions in §8.5 to resolve before drafting M12.
+
+### 8.1 The shape
+
+Extend this tool from "produces a content map" to "produces a live site." Stack: GitHub (one repo per site) + Cloudflare Pages (one project per site) + existing Supabase + Railway. **Two templates** — informational (no images, editorial design) and local SEO (**one site per business/location**, with images, schema.org `LocalBusiness`, NAP). Owner picks template at site-creation; data model is identical for both (one `fanout.sites` row, one repo, one CF Pages project per site).
+
+### 8.2 Workflow
+
+1. **Research** (M1–M11, already built) — seed → architecture → finalized in Owner UI.
+2. **Site setup** (new) — owner picks template + domain + brand/business config. Orchestrator provisions GitHub repo + CF Pages project + domain attach via APIs. Persists to `fanout.sites`.
+3. **Content orchestration** (new) — orchestrator inserts one work row per planned page; an existing writer service claims it, produces HTML, pushes to the repo. Async, server-side (mirrors M5 `app/jobs.py`).
+4. **Review** (optional, new) — owner inspects drafts before publish (per-article or per-silo).
+5. **Publish** (new) — CF Pages auto-builds on push; deploy status streams to the Owner UI.
+
+Postgres = source of truth for content; the repo is regenerated from it. "Regenerate one article" is trivial (no git surgery); "edit repo directly and have it flow back" doesn't work — acceptable for this use case.
+
+### 8.3 Decisions made (2026-06-05 conversation)
+
+- **Coordination = shared Postgres queue (Option C).** Orchestrator inserts work rows, writer claims via `SELECT … FOR UPDATE SKIP LOCKED`, updates status when done. Restart-tolerant on both sides; status visibility is free (Owner UI reads the same rows). No HTTP between services. Mirrors `app/jobs.py`. (Considered: sync HTTP — fragile to Railway's 5-min edge cap; async HTTP + webhook — more wiring; Redis — overkill for hundreds of jobs.)
+- **One repo + one CF Pages project per site** — sites portable as standalone assets; scales to hundreds (reassess at thousands).
+- **Internal links via registry table + republish fan-out** — pages publish incrementally, so the writer can't render links to targets that don't exist yet. Writer emits placeholders; orchestrator resolves at publish time against a live `internal_links` table. When a new page publishes, already-published referrers get their links re-resolved and re-pushed.
+- **Two-pass content generation is the cost sweet spot** — Haiku draft for all articles + Opus rewrite for pillars only. ~$9/site for ~300 articles vs. ~$38 all-Opus or ~$8 all-Haiku. Easy to flip per-site.
+- **Cost reference** (per ~3000-word article, 1.5K input / 4.5K output, current rates): Opus 4.8 ~12¢, Sonnet 4.6 ~7¢, Haiku 4.5 ~2.5¢.
+
+### 8.4 Writer landscape (discovered via MCP probing 2026-06-05)
+
+Three apps could serve as the content writer:
+
+- **ShowUP Local** (Railway service `showup-local` in project `ShowUP Local`, Supabase project `ShowUp` ref `yvdfiwabdvcpqwrmtysd`) — production local-SEO writer. Schema: `business_profiles` (GBP data, hours, brand voice, ICP) + `keyword_analyses` (SERP/competitor research per kw) + `generated_pages` (`mode` ∈ generate/reoptimize/audit, scoring, `content_html`/`schema_json` outputs). **Synchronous (no queue), no repo push** — output lives in `generated_pages.content_html`. Full SaaS scaffolding (credits, users, notifications, press releases). 7 business profiles, 24 generated pages, 17 keyword analyses.
+- **Kyle The SEO GOAT** (Railway service `kyletheseogoat` in project `eloquent-integrity`, Supabase project `Kyle The SEO GOAT` ref `txcwedbyyneeqtfidtyo`) — byte-identical schema clone of ShowUP Local, **all tables empty, unused.** Looks like a whitelabel/staging instance never repurposed.
+- **AR-Internal-Tools `public` schema** (same Supabase as this app, ref `wvcthtmmcmhkybcesirb`) — **the real find.** Multi-module content production pipeline:
+  - `clients` (multi-tenant brand profiles with brand guide, ICP, GBP, GSC property, Google Drive folder)
+  - `runs` (per-keyword runs; status flows `queued → brief_running → sie_running → research_running → writer_running → sources_cited_running → complete`)
+  - `module_outputs` (5 modules per run: brief / sie / research / **writer** / sources_cited; with attempt tracking, cost, duration)
+  - `client_context_snapshots` (frozen client context per run)
+  - `async_jobs` (generic queue with retry/backoff; currently used for `website_scrape` + `silo_dedup`)
+  - `briefs_cache` + `sie_cache` (cross-client caches keyed by keyword+location_code)
+  - `silo_candidates` with pgvector embeddings + status `proposed|approved|rejected|in_progress|published|superseded` — **this app already does silo planning too** (conceptual overlap with `info-site-kw-research-cluster`)
+  - `local_seo_pages` (empty/scaffolded — an unbuilt port of ShowUP Local's `generated_pages` into AR-Internal-Tools)
+
+**Recommended mapping (subject to §8.5 decisions):**
+- **Informational template → AR-Internal-Tools `runs` pipeline.** Research-backed, source-cited, brief-driven — exactly what an authority site wants. Orchestrator inserts one `public.runs` row per planned article (with `client_id` = the AR-Internal-Tools `clients` row representing the site). Same Supabase as the orchestrator → no cross-DB coordination.
+- **Local SEO** — two paths: (a) keep ShowUP Local on its separate Supabase (cross-Supabase, HTTP coordination, ships faster); (b) port into AR-Internal-Tools `local_seo_pages` (single-Supabase, queue coordination, cleaner long-term).
+
+### 8.5 Open decisions (resolve before drafting M12)
+
+1. **Informational writer:** use AR-Internal-Tools `runs` pipeline, or build a duplicated standalone writer? AR-Internal-Tools = deeper app-to-app coupling but skips duplication + yields higher-quality writer (research + sources cited out of the gate).
+2. **Local SEO writer:** keep ShowUP Local (cross-Supabase, HTTP coordination) or port into AR-Internal-Tools `local_seo_pages` (single-Supabase, queue coordination)?
+3. **H2 outline preservation:** pass M5/M6 H2 outlines as constraints to AR-Internal-Tools' `brief` module, or let it produce its own outline from scratch? M5/M6 outlines are reasoned over carefully but may conflict with the brief module's opinions.
+4. **Repo + CF Pages provisioning:** orchestrator owns it (recommended; provisions at site-create time), or owner provisions manually (faster to ship the first version)?
+5. **Owner review step:** required before publish (safer; recommended), or auto-publish on generation complete (faster; per-site toggle later)?
+6. **One writer with template modes vs. two writers per template** — depends on how much the two templates' generation pipelines actually share. Currently leaning two (different shape: local SEO needs business context + schema.org + images; informational needs internal-linking-heavy editorial with no images).
+7. **Strip duplicate writer of SaaS scaffolding** (credits/users/notifications/press releases) — only relevant if #1 goes the "duplicate" route.
+
+### 8.6 Outstanding integration contract details (if using AR-Internal-Tools)
+
+- **`runs` input mapping:** AR-Internal-Tools takes `keyword + intent_override + sie_outlier_mode`. The M5/M6 H2 outline has no obvious slot — it would either go into the brief module's input (overriding/guiding) or be discarded. See decision #3.
+- **Repo push step:** AR-Internal-Tools doesn't push to a repo today. Two options: (a) add a 6th module (extends `runs.status` with `publishing → published` tail), or (b) do it in this orchestrator (reads completed `module_outputs`, formats HTML, pushes). **Recommendation: orchestrator owns it** — keeps AR-Internal-Tools focused on content, keeps GitHub credentials in one service.
+- **`clients` per site:** orchestrator creates one AR-Internal-Tools `client` per `fanout.sites` (or reuses for whitelabel scenarios).
+- **Internal-link awareness:** AR-Internal-Tools' writer doesn't know about sibling articles — either it emits placeholders the orchestrator resolves at publish time, or the orchestrator does a post-write link-injection pass on the writer's HTML output.
+
+### 8.7 Security finding (address before M12 ships)
+
+**`AR-Internal-Tools.public.sie_cache` has RLS DISABLED** while every other table in that schema has it on. With Supabase's anon key, anyone could read or modify the SIE cache. Remediation:
+```sql
+ALTER TABLE public.sie_cache ENABLE ROW LEVEL SECURITY;
+```
+**Don't run blind** — enabling RLS without policies will break the writer service's reads. Add a service-role-only policy (or whatever pattern AR-Internal-Tools uses elsewhere) before flipping it on. Decide with the AR-Internal-Tools owner.
+
+### 8.8 Likely M12 shape (once decisions land)
+
+- **New `fanout` tables:** `sites` (id, name, template, repo_url, cf_project_id, domain, site_config jsonb, ar_client_id), `generation_jobs` (or use AR-Internal-Tools `runs` directly per decision #1), `internal_links` (from_slug, to_slug, anchor, status), `published_pages` (slug, status, commit_sha, published_at), `site_publishes` (per-push log). All under `fanout` schema with real RLS.
+- **Backend:** site provisioning service (GitHub repo + CF Pages project + domain attach via APIs), dispatcher that materializes architecture → writer jobs, publish step (HTML → repo push), internal-link resolver + republish fan-out, retry/status endpoints.
+- **Frontend:** "Create site from session" action on the workspace, sites list, generation progress dashboard (reads queue rows directly), optional review tab, publish status.
+- **Writer-side:** depends on decision #1. If using AR-Internal-Tools: no writer changes beyond the orchestrator's `runs`-row insertion (plus a contract doc describing the input/output shapes). If duplicating: duplicate needs a queue worker + repo push + simplification of SaaS scaffolding.
