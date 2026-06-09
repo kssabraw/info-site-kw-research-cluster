@@ -2,7 +2,22 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-_Last updated: 2026-06-05. **Post-M11 site-creation planning** — captured in §8.
+_Last updated: 2026-06-09. **§9 added — Blog Writer module integration plan.**
+After reviewing the AR Tools Blog Writer PRD bundle (8 PRDs), locked direction:
+port **only the Writer module** (PRD #1, v1.7) into `backend/app/writer/` in
+degraded mode (`1.7-no-context`, `no_citations: true`) + a deterministic
+cluster→brief **adapter** + a deterministic **internal-link injector**. Skip
+Brief Generator / SIE / Research / Sources Cited modules. Per-article publish
+dates with bulk **`Schedule all`** (all-at-once OR drip N/day, ≤365d,
+pillars-first, every calendar day, whole-session scope) using **absolute URLs**
+that require `sessions.site_base_url`. Worker is an **in-process asyncio loop**
+in the existing backend (matches M5 `app/jobs.py`; CLAUDE.md scheduler-
+confirmation requirement met). Implicitly shifts §8.5 #1 to a third option
+(neither AR-Internal-Tools `runs` coupling nor a full duplicate). M12/M13
+sketch in §9.10. **Nothing built** — see §9 for the full plan + open decisions
+in §9.9._
+
+_2026-06-05: **Post-M11 site-creation planning** — captured in §8.
 Two-template (informational + local SEO, one-site-per-business) site generation
 pipeline orchestrating existing writer apps. Writer landscape discovered via
 MCP probing 2026-06-05: **AR-Internal-Tools `public` schema is a 5-module content
@@ -134,7 +149,7 @@ round-trip and M8's VA/owner routing on the live stack. For M9: (a) as a **VA**,
 
 **Calibration workflow that emerged in M5** (reuse it): tuning is done against the **deployed API via browser-console `fetch`** (sandbox has no egress), and results are inspected via the **Supabase MCP tools**, not the UI (no session resume until M7). `/regate` re-runs gate+cluster on the *stored* pool (no DataForSEO) at an overridden threshold / edge / resolution / aliases / peer_entities — the cheap iteration loop. `/cluster-preview` and `/lever3-simulate` are read-only analysis.
 
-**After M11 validation completes and merges to `main`, the M1–M11 build sequence is done.** Post-M11 design conversation for the site creation orchestrator phase is captured in **§8** — seven open decisions to resolve before drafting M12.
+**After M11 validation completes and merges to `main`, the M1–M11 build sequence is done.** Post-M11 design captured in **§8** (broader "produce a live site" plan) and **§9** (the now-current Writer-module integration direction — 2026-06-09; supersedes §8.5 #1; M12/M13 sketch in §9.10). Both planning-only — nothing built.
 
 ## 3. Deploy & infra state (CRITICAL — caused most of the pain this session)
 
@@ -296,3 +311,294 @@ ALTER TABLE public.sie_cache ENABLE ROW LEVEL SECURITY;
 - **Backend:** site provisioning service (GitHub repo + CF Pages project + domain attach via APIs), dispatcher that materializes architecture → writer jobs, publish step (HTML → repo push), internal-link resolver + republish fan-out, retry/status endpoints.
 - **Frontend:** "Create site from session" action on the workspace, sites list, generation progress dashboard (reads queue rows directly), optional review tab, publish status.
 - **Writer-side:** depends on decision #1. If using AR-Internal-Tools: no writer changes beyond the orchestrator's `runs`-row insertion (plus a contract doc describing the input/output shapes). If duplicating: duplicate needs a queue worker + repo push + simplification of SaaS scaffolding.
+
+## 9. Blog Writer module integration plan (post-M11, 2026-06-09)
+
+**Status: design captured, nothing built.** From the 2026-06-09 conversation
+reviewing the AR Tools Blog Writer PRD bundle (8 PRDs: Writer / Brief Generator
+/ SIE / Research & Citations / Sources Cited / Content Quality / Suite
+Architecture / Engineering Spec). **Narrower than §8** — §9 generates *article
+prose* per planned architecture article into `fanout.article_outputs`; §8's
+GitHub / CF Pages publish layer would sit on top of it. Implicitly shifts
+§8.5 #1 from "use AR-Internal-Tools `runs` pipeline" to a **third option**:
+port only the Writer module into this repo in degraded mode (no cross-Supabase
+coupling, no full duplicate).
+
+### 9.1 Scope (v1)
+
+Port the **Writer module** (PRD #1, v1.7) into `backend/app/writer/` as an
+in-process Python package. **Skip** the other 4 modules. Degraded mode:
+- `schema_version_effective: "1.7-no-context"` — no brand voice / ICP / client
+  context (skip Steps 3.5a / 3.5b / 3.6 / 3.8 — distillation, reconciliation,
+  placement plan, ICP-callout judge).
+- `no_citations: true` — no Research module, no `{{cit_N}}` markers, no Sources
+  Cited renderer (skip Step 4F + the §5.8.8 citable-claim retries).
+
+Writer invariants we **keep**: topic-adherence filter, paragraph-length cap,
+per-H2 body-length floor, key takeaways, Agree/Promise/Preview intro, CTA,
+banned-term regex (no-op with empty list), title-case pass, MD + HTML
+serialization.
+
+Cost: ~$0.20–$0.40/article. Time: ~30–45s. **No new third-party deps** (no
+Google NLP, no ScrapeOwl, no client/brand layer). Provider unchanged
+(Anthropic — Sonnet for prose, Haiku for short/classification per the PRD's
+Call Inventory §17).
+
+### 9.2 Adapter (cluster → Writer input)
+
+`backend/app/writer/adapter.py`, pure function
+`build_writer_payload(cluster_id) → (brief, sie_stub)`. Synthesizes the
+Writer's required inputs from existing data:
+
+| Writer field | Source in this repo |
+|---|---|
+| `brief.keyword` | `clusters.primary_keyword.text` |
+| `brief.title` | One Haiku tool-use call (cached on `clusters.adapter_cache`) |
+| `brief.scope_statement` | Derived from `clusters.intent` + name |
+| `brief.intent_type` | One Haiku classification call (8 enums; cached) |
+| `brief.heading_structure[]` | H1 + parsed H2s from `clusters.h2_outline` + faq-header + N faq-questions + conclusion |
+| `brief.faqs[]` | One Sonnet tool-use call (3–5 FAQs; cached) |
+| `brief.format_directives` | Static lookup keyed by `intent_type` (mirrors Brief Gen v2.3 `intent_format_template`) |
+| `brief.metadata.word_budget` | 2,500 default |
+| `sie.terms.required[]` | Cluster's supporting keywords as flat list (no zone targets, no `is_entity`) |
+| `sie.target_keyword.minimum_usage` | `{h2: 1, h3: 0, paragraphs: 6}` |
+| `research.citations[]` | `[]` (Writer flips `no_citations: true`) |
+| `client_context` | omitted |
+
+Three LLM calls per cluster (title + intent + FAQs), all cached on
+`clusters.adapter_cache` → amortized to ~$0 per re-run.
+
+### 9.3 Schema additions (all in `fanout` schema, real RLS)
+
+```sql
+-- migration 2026...._writer_integration.sql
+
+alter table fanout.sessions add column site_base_url text;
+alter table fanout.clusters add column slug text;
+alter table fanout.clusters add column adapter_cache jsonb;
+create unique index on fanout.clusters (session_id, slug);
+
+create table fanout.content_schedules (
+  id            uuid primary key default gen_random_uuid(),
+  session_id    uuid not null references fanout.sessions(id) on delete cascade,
+  mode          text not null check (mode in ('all_at_once','drip')),
+  per_day       int,            -- null for all_at_once; >=1 for drip
+  start_date    date,
+  time_of_day   time not null default '09:00',
+  timezone      text not null default 'UTC',
+  status        text not null default 'active'
+                check (status in ('active','paused','complete','cancelled')),
+  total_count   int not null,
+  user_id       uuid not null,
+  created_at    timestamptz not null default now()
+);
+
+create table fanout.scheduled_article_runs (
+  id                    uuid primary key default gen_random_uuid(),
+  content_schedule_id   uuid references fanout.content_schedules(id) on delete cascade,
+  cluster_id            uuid not null references fanout.clusters(id) on delete cascade,
+  session_id            uuid not null references fanout.sessions(id) on delete cascade,
+  scheduled_at          timestamptz not null,
+  status                text not null default 'queued'
+                          check (status in ('queued','running','complete','failed','cancelled')),
+  user_id               uuid not null,
+  started_at            timestamptz,
+  completed_at          timestamptz,
+  error                 text,
+  created_at            timestamptz not null default now()
+);
+create index on fanout.scheduled_article_runs (status, scheduled_at)
+  where status = 'queued';
+
+create table fanout.article_outputs (
+  id                          uuid primary key default gen_random_uuid(),
+  cluster_id                  uuid not null references fanout.clusters(id) on delete cascade,
+  scheduled_article_run_id    uuid references fanout.scheduled_article_runs(id) on delete set null,
+  article_json                jsonb not null,
+  article_markdown            text not null,
+  article_html                text not null,
+  total_word_count            int,
+  cost_usd                    numeric(10,4),
+  schema_version_effective    text not null,
+  generated_at                timestamptz not null default now()
+);
+create index on fanout.article_outputs (cluster_id, generated_at desc);
+```
+
+RLS: owner = all; VA = via session ownership (mirrors M7/M8 keyword +
+architecture policies). Never `using (true)`.
+
+### 9.4 Bulk scheduling — all-at-once OR drip N/day
+
+**`Schedule all`** modal on the Architecture view:
+- **Whole-session scope** (not subset — kept simple).
+- Mode toggle: **All at once** or **Drip N/day**.
+- Drip fields: per-day, start date (≤ 365d out), time of day.
+- **Every calendar day** (no weekend skip).
+- **Required:** `Site base URL` — modal blocks if empty (absolute URLs, §9.5).
+- Live preview: *"315 articles · 5/day · finishes Aug 18, 2026 (63 days)."*
+- Cost preview: `count × ~$0.30`.
+
+`backend/app/writer/schedule_planner.py` (pure):
+1. Order all session clusters **pillars first**, then by architecture order
+   (stable, deterministic).
+2. all-at-once: every run `scheduled_at = now()`.
+3. drip: `scheduled_at(i) = start_date + floor(i / per_day) days @ time_of_day` in `timezone`.
+4. Validate `ceil(count / per_day) ≤ 365` — else 400 with `min_per_day` hint.
+5. Materialize the parent `content_schedules` row + N children in **one transaction**.
+
+Pillars-first guarantees a supporting article never generates before its
+pillar — its up-link resolves on day 1.
+
+### 9.5 Internal linking (deterministic injection)
+
+Writer PRD §1.3 explicitly excludes internal linking. M6 already computed the
+link graph in `site_architecture.architecture_json` (pillars + supporting +
+lateral, no orphans, no dangling). The integration **deterministically injects**
+the links — same philosophy as M6 ("LLM writes the prose, code wires the
+graph"), same contract pattern as `{{cit_N}}`.
+
+**Slugs assigned at plan time:** every cluster gets a stable `slug`
+(deterministic from primary keyword/title, deduped within session). So article A
+generated on day 1 can link to article B scheduled for day 40 — B's URL is
+knowable from B's slug + session base URL before B exists. **Drip-safe by
+construction.**
+
+**Absolute URL form:**
+- Pillar: `{base_url}/{silo-slug}/`
+- Supporting article: `{base_url}/{silo-slug}/{article-slug}`
+
+**`backend/app/writer/link_injector.py`** runs after Writer returns, **before**
+Step 10 serialization:
+1. Read targets from `architecture_json` (up + lateral for supporting; down for
+   pillars).
+2. For each target, find first prose occurrence of its primary keyword (then
+   supporting kw, then title tokens) — skipping headings, existing links, code
+   spans — and wrap as `[match](absolute URL)`. One link per target, one wrap.
+3. **Pillars** render an "In this guide" structured list of all children
+   (don't inline 60 links).
+4. **Fallback:** unmatched targets drop into a **"Related articles"** list
+   before the conclusion — guarantees the M6 link contract regardless of prose.
+5. Re-serialize → `article_markdown` / `article_html` carry resolvable
+   absolute internal links.
+
+**Link-health report** at batch end: flags any link whose target was
+cancelled/failed (dangling).
+
+### 9.6 Worker (cron mechanism)
+
+**In-process asyncio loop** in the existing FastAPI backend (CLAUDE.md
+scheduler-confirmation requirement met). Matches the M5 `app/jobs.py` pattern;
+no new Railway service, no Postgres extensions enabled on shared Supabase, no
+new infra. Trade-off: heartbeat lives in the web process — but durable rows
+mean a restart catches up on the next tick, and the **startup recovery sweep**
+resets stuck `running` rows older than a timeout (closes the M5-flagged
+durable-queue gap on this path).
+
+Every ~60s:
+```sql
+update fanout.scheduled_article_runs
+   set status='running', started_at=now()
+ where id in (
+   select id from fanout.scheduled_article_runs
+    where status='queued' and scheduled_at <= now()
+    order by scheduled_at
+    limit (CAP - currently_running)
+    for update skip locked     -- two heartbeats / replicas never grab same row
+ )
+returning *;
+```
+
+For each claimed row → adapter → Writer (degraded) → `link_injector` →
+persist `article_outputs` → flush cost via M11's `CostMeter` under a new
+`article_generation` phase.
+
+Concurrency cap: **3 in-flight** (LLM rate-limit guard). So "all at once" on
+315 articles = "as fast as cap + rate limits allow," not 315 parallel calls.
+
+### 9.7 UI surface
+
+- **Architecture view** (existing) gains a session-level **`Schedule all`**
+  button → modal (§9.4). Per-article **`Schedule`** / **`Generate now`**
+  controls for one-offs.
+- **Article view** (new, `/session/:id/article/:cluster_id`): latest
+  `article_outputs.article_markdown` (MD / HTML / JSON toggle), cost,
+  generation timestamp, owner-only **`Regenerate now`**.
+- **Schedule overview** (new, `/schedule` for owner; per-session for VA):
+  table of all scheduled + recent runs (cluster, project, `scheduled_at`,
+  status, cost). Per-batch row above (mode, progress "14 / 315 done", next
+  run, pause/cancel). Link-health indicator.
+- **App-shell badge** (owner-only, 30s poll): "due in next 24h" + "failed in
+  last 24h" counts.
+
+### 9.8 Workflow summary (end-to-end)
+
+1. **Plan** (M1–M11): seed → silos → clusters (articles with H2 outline + kw) →
+   architecture (pillars + linking graph) — unchanged.
+2. **Pre-schedule** (new, one-time per session): assign `clusters.slug` for
+   every article, set `sessions.site_base_url` in the modal.
+3. **Schedule** (new): `Schedule all` → planner materializes
+   `content_schedules` + N `scheduled_article_runs` rows.
+4. **Worker drains** (new): asyncio loop claims due rows up to the cap;
+   adapter → Writer → link injector → `article_outputs`. Pillars first, so
+   children's up-links always resolve.
+5. **Review** (new): Article view / Schedule overview. Owner can regenerate or
+   pause/cancel the batch. Link-health report flags dangling targets.
+
+### 9.9 Open decisions (resolve before drafting M12)
+
+1. **Concurrency cap default** (3?) — fine-tune against Anthropic rate limits
+   on first live run.
+2. **Re-plan cascade** — M5/M7's `reset_article_planning` deletes clusters →
+   FK cascade drops pending schedules. UI should warn before re-plan;
+   alternative is to re-target by `cluster.name` match (more complex).
+3. **Dangling-link policy** when a child article is cancelled/failed —
+   leave + report (default), auto-prune, or block.
+4. **VA scope** — can a VA schedule + view articles, or owner-only? Wizard
+   surface implications.
+5. **Anthropic model tier for Writer section calls** — PRD §17 locks Sonnet;
+   this repo's M5/M6 orchestrator uses Opus 4.7. Confirm: Sonnet for
+   cost/budget vs. Opus on pillars only (cf. §8.3 "two-pass" cost note).
+
+### 9.10 Likely milestone sequence
+
+- **M12 — Writer foundation:** port Writer module + adapter + degraded-mode
+  contract; manual **`Generate now`** button (owner-only) on the Architecture
+  view. No scheduling, no link injection yet. Validates the Writer contract
+  on real clusters; cost + quality observed before scheduling logic.
+- **M13 — Scheduling + internal linking:** asyncio worker loop, **`Schedule
+  all`** modal (all-at-once + drip), `link_injector`, article view, schedule
+  overview, link-health report.
+- **M14 (optional) — Brand voice + citations:** add `fanout.clients` layer +
+  bolt in Research module + Sources Cited renderer. Deferred until v1 quality
+  is judged insufficient.
+
+### 9.11 Locked decisions (2026-06-09)
+
+| Topic | Decision |
+|---|---|
+| Integration depth | **Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited. |
+| Brand voice | **Skip in v1** (`1.7-no-context`). `clients` layer deferred to v2 (M14). |
+| Citations | **Skip in v1** (`no_citations: true`). Research module bolted on later without schema changes. |
+| Cadence semantics | **Per-article one-shot publish date.** Recurring refresh deferred. |
+| Bulk mode | **All-at-once** OR **drip N/day**, whole-session scope, ≤365d horizon. |
+| Drip order | **Pillars first**, then architecture order. |
+| Drip days | **Every calendar day** (no weekend skip). |
+| Internal-link anchors | **Deterministic injection** (code-finds keyword + wraps; "Related articles" fallback). |
+| Internal-link URLs | **Absolute** (`sessions.site_base_url` required to schedule). |
+| Cron mechanism | **In-process asyncio loop** (matches M5 `app/jobs.py`). |
+
+### 9.12 Relationship to §8
+
+§8 is the broader "produce a live site" plan (GitHub repo + CF Pages + domain
+attach). §9 is the **content generation layer** §8 needs. The §8.5 #1
+decision ("informational writer: AR-Internal-Tools `runs` pipeline vs full
+duplicate") shifts to a **third option** — port only the Writer module from
+the AR Tools Blog Writer bundle into this repo, in degraded mode. No
+cross-Supabase coupling, no AR-Internal-Tools `runs` dependency. The §8.4
+writer-landscape findings remain useful context but the chosen path is
+neither of the two paths §8.5 #1 originally framed.
+
+If §8's publish layer ships later, it reads `fanout.article_outputs`
+(Markdown + HTML already serialized + internally linked) and pushes them
+into the repo. No further generation step required.
