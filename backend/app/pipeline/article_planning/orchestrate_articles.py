@@ -64,7 +64,6 @@ _INPUT_SCHEMA = {
                         "items": {"type": "string"},
                     },
                     "intent": {"type": "string", "enum": list(INTENTS)},
-                    "suggested_h2s": {"type": "array", "items": {"type": "string"}},
                     "source_statistical_grouping_id": {"type": "string"},
                     "orchestrator_notes": {"type": "string"},
                 },
@@ -72,7 +71,6 @@ _INPUT_SCHEMA = {
                     "primary_keyword",
                     "supporting_keywords",
                     "intent",
-                    "suggested_h2s",
                     "orchestrator_notes",
                 ],
             },
@@ -109,7 +107,7 @@ _SYSTEM = """You are the editorial orchestrator for a niche authority site. Your
 For each grouping, choose one outcome:
 - MERGE keywords into one article when they share search intent AND the candidate primaries' top-3 SERP URLs overlap (≥3 of 10) AND the grouping is topically cohesive. Primary = the highest-volume or most-central keyword; the rest become supporting keywords.
 - SPLIT a grouping into multiple articles when its keywords cluster statistically but have distinct intents OR their SERPs barely overlap (<2 of 10). You decide the split lines.
-- PROMOTE + DEMOTE when one broad keyword has the SERP presence and several narrow children share its SERP space but lack standalone traction: one article, broad keyword as primary, narrow children become suggested H2s (and supporting keywords).
+- PROMOTE + DEMOTE when one broad keyword has the SERP presence and several narrow children share its SERP space but lack standalone traction: one article, broad keyword as primary, narrow children become supporting keywords.
 - ROUTE a keyword into a different grouping within this topic when it editorially belongs there; just place it in the right article.
 - DROP a keyword that doesn't justify article-level treatment (no SERP traction, off-niche, redundant). Report it in dropped_keywords with a short reason. Dropped keywords are stored, not deleted.
 
@@ -120,7 +118,7 @@ Also flag COVERAGE GAPS: article concepts a topical-authority site about this su
 Rules:
 - Use ONLY keywords that appear in the provided groupings. Never invent keywords.
 - Every article needs a non-empty primary AND at least one supporting keyword. A keyword with no natural companions should be dropped or left out, not made into a one-keyword article.
-- suggested_h2s should be a real outline a writer could follow (4–8 entries typical).
+- Do NOT produce an H2 outline — the writer module generates each article's headings at write time.
 - Emit your answer through the emit_article_plan tool only."""
 
 
@@ -224,7 +222,8 @@ def _validate_and_build(
         intent = str(art.get("intent") or "").strip().lower()
         if intent not in INTENTS:
             intent = DEFAULT_INTENT
-        h2s = [str(h).strip() for h in (art.get("suggested_h2s") or []) if str(h).strip()]
+        # H2 outline is owned by the writer module, not the orchestrator. The field
+        # is kept on the record (always empty here) so the writer can fill it later.
         grouping_id = art.get("source_statistical_grouping_id")
         plan.articles.append(
             ArticleRecord(
@@ -232,7 +231,7 @@ def _validate_and_build(
                 primary_keyword=primary,
                 supporting_keywords=supporting,
                 intent=intent,
-                suggested_h2s=h2s,
+                suggested_h2s=[],
                 source_statistical_grouping_id=str(grouping_id) if grouping_id else None,
                 orchestrator_notes=str(art.get("orchestrator_notes") or "").strip(),
                 serp_top_urls=rep_serps.get(primary, []),

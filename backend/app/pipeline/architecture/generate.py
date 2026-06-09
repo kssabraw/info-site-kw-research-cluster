@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 _TOOL_NAME = "submit_pillar"
 _TOOL_DESCRIPTION = (
     "Emit the pillar overview for this silo: a working title, the broadest "
-    "commercially-meaningful target keyword, a short summary, and a 5-8 item H2 "
-    "outline that maps onto the silo's supporting articles."
+    "commercially-meaningful target keyword, and a short summary. The H2 outline "
+    "is NOT produced here — the writer module generates it at write time."
 )
 
 _INPUT_SCHEMA = {
@@ -56,9 +56,8 @@ _INPUT_SCHEMA = {
         "title": {"type": "string"},
         "target_keyword": {"type": "string"},
         "summary": {"type": "string"},
-        "h2_outline": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["title", "target_keyword", "summary", "h2_outline"],
+    "required": ["title", "target_keyword", "summary"],
 }
 
 _SYSTEM = """You are designing the site architecture for a niche authority site. For one silo, you write the PILLAR PAGE: a high-level overview article that establishes the silo's authority and links down to all its supporting articles.
@@ -69,7 +68,8 @@ Produce, via the submit_pillar tool:
 - title: a real, compelling article title that reflects the silo (e.g. "The Complete Guide to Triple Agonist Drugs"), not just the silo's raw name.
 - target_keyword: the broadest commercially-meaningful keyword for the silo as a whole (the pillar competes for the head term, the supporting articles for the long tail).
 - summary: 1-2 sentences describing what the pillar covers.
-- h2_outline: 5-8 H2 headings that summarize the silo's coverage; each H2 should correspond to one or more of the supporting articles.
+
+Do NOT produce an H2 outline — the writer module generates the pillar's headings at write time.
 
 Emit your answer through the submit_pillar tool only."""
 
@@ -99,7 +99,8 @@ def _build_pillar_prompt(pillar: PillarInput, seed: str, audience: str) -> str:
 
 def _stub_pillar_content(pillar: PillarInput, *, reason: str) -> dict:
     """Degraded fallback (PRD §16.2): a usable-but-plain pillar derived from the
-    silo + its article names, no LLM. H2 outline is the first 8 article names."""
+    silo + its article names, no LLM. The H2 outline is left empty — the writer
+    module generates pillar headings at write time."""
     logger.warning(
         "degraded",
         extra={"event": "degraded", "step": "architecture", "topic_id": pillar.topic_id,
@@ -109,7 +110,7 @@ def _stub_pillar_content(pillar: PillarInput, *, reason: str) -> dict:
         "title": pillar.silo_name,
         "target_keyword": pillar.silo_name.lower(),
         "summary": f"Overview of {pillar.silo_name}.",
-        "h2_outline": [a.name for a in pillar.articles[:8]],
+        "h2_outline": [],
         "degraded": True,
     }
 
@@ -154,12 +155,13 @@ def _write_pillar_content(
         if not title or not target:
             last_error = "title and target_keyword are required"
             continue
-        h2s = [str(h).strip() for h in (raw.get("h2_outline") or []) if str(h).strip()]
+        # H2 outline is owned by the writer module, not the architect — persist an
+        # empty list (kept on the model so the writer can fill it later).
         return {
             "title": title,
             "target_keyword": target,
             "summary": str(raw.get("summary") or "").strip(),
-            "h2_outline": h2s,
+            "h2_outline": [],
             "degraded": False,
         }
     return _stub_pillar_content(pillar, reason=last_error or "architect failed")
