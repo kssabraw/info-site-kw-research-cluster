@@ -2,6 +2,35 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
+_2026-06-09 (later): **Two post-M11 cost fixes during live validation (Track A,
+items 1–4).** Both on `claude/wonderful-cray-wo84am`; backend tests pass (52 run:
+approvals + cost_meter + roles + cost), ruff clean. **(1) Opus LLM rate
+calibrated.** `cost_meter.py` `_LLM_RATES` rated `claude-opus-4-7` at (15, 75)
+USD/1M tok — a flagged estimate. The published Opus 4.7/4.8 list price is **(5, 25)**;
+the old value was **3× too high**, inflating the LLM-heavy `article_planning` +
+`architecture` phases of `actual_cost_usd`/`cost_breakdown`. Corrected to (5, 25),
+added `claude-opus-4-8` at the same rate, updated `test_cost_meter.py`. DataForSEO
+cost is the real per-call charge and was unaffected; `gpt-5.4`/embedding rates left
+as-is (silo_discovery meters within cents of §8.1). This closes §2's "recalibrate
+`_LLM_RATES`" item. **(2) `estimated_cost_usd` now persisted on every run path.**
+It was written only by `submit-for-approval` (the VA over-cap path), so **owner runs
+and under-cap VA "Run now" runs left it NULL** — the §8.4 cost banner reads the
+stored column off `GET /summary`, so on those (most common) paths it had no estimate
+to compare the live actual against (confirmed: all 3 live metered sessions had
+`estimated_cost_usd: NULL`). `POST /expand` now computes the §8.1 estimate once (it
+already needed it for the VA gate) and persists it when the run is claimed; the
+approval path still writes its own at submit time, and an owner-approved run (kicked
+via `jobs.submit_expand`) keeps that one, so no path double-writes. `test_approvals`
+updated. **Both fixes take effect only after merge to `main` + Railway redeploy** —
+a validation run before then still shows the old behavior. Live-probe findings while
+validating: deployment current (Railway redeployed 2026-06-09 02:12 UTC on latest
+`main`), the M11 meter is working in prod (3 sessions carry real `actual_cost_usd` +
+per-phase `cost_breakdown`), and **§7.8 metrics enrichment is now built** (migration
+`keyword_metrics` shipped 2026-05-29) — so the M11 checklist note that "+metrics
+can't be exercised" is stale. Item 4 (nested-thread `external_call` logs carrying
+`cost_usd` + non-null `session_id`) still needs a fresh pipeline run on the current
+deploy — none has happened post-redeploy._
+
 _Last updated: 2026-06-09. **§9 added — Blog Writer module integration plan.**
 After reviewing the AR Tools Blog Writer PRD bundle (8 PRDs), locked direction:
 port **only the Writer module** (PRD #1, v1.7) into `backend/app/writer/` in

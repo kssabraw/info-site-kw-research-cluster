@@ -466,23 +466,28 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No silos to expand. Finalize at least one silo first.",
         )
+    # Cost estimate (PRD §8.1), computed for every run path: it both enforces the
+    # VA approval gate (below) and is persisted for the §8.4 cost banner.
+    est = _estimate_for_session(session, None)
     # Approval gate, enforced server-side (PRD §8.4 / §11.3): a VA cannot start a
     # run that exceeds the workspace cost cap by calling /expand directly — it must
     # go through the approval workflow. The Owner's approve action kicks the run
     # via jobs.submit_expand (not this endpoint), so an approved run is unaffected.
-    if get_role(user) != "owner":
-        est = _estimate_for_session(session, None)
-        if est["requires_approval"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This run exceeds the workspace cost cap. Submit it for "
-                "approval instead of running it directly.",
-            )
+    if get_role(user) != "owner" and est["requires_approval"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This run exceeds the workspace cost cap. Submit it for "
+            "approval instead of running it directly.",
+        )
     if not store.try_mark_running(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A pipeline run is already in progress for this session.",
         )
+    # Persist the §8.1 estimate so the cost banner (§8.4) can compare estimate vs
+    # the live actual on owner and under-cap VA runs — not only the approval path
+    # (submit-for-approval persists its own; an owner-approved run keeps that one).
+    store.update_session(session_id, {"estimated_cost_usd": est["estimated_cost_usd"]})
     jobs.submit_expand(session_id)
     return {"status": "running", "session_id": session_id}
 

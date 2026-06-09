@@ -181,7 +181,12 @@ def test_expand_allows_under_cap_va(client, monkeypatch):
                         lambda: {"va_soft_cap_usd": 5.00})
     monkeypatch.setattr(sessions_api.store, "try_mark_running", lambda *_: True)
     monkeypatch.setattr(sessions_api.jobs, "submit_expand", lambda *_: None)
+    # The estimate is persisted at run-start so the cost banner has it (PRD §8.4).
+    persisted = {}
+    monkeypatch.setattr(sessions_api.store, "update_session",
+                        lambda sid, fields: persisted.update(fields) or {"id": sid})
     assert client.post("/sessions/s1/expand").status_code == 202
+    assert persisted["estimated_cost_usd"] > 0
 
 
 def test_reject_sets_rejected_with_note(client, monkeypatch):

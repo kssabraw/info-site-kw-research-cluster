@@ -20,16 +20,16 @@ from app.cost_meter import (
 
 
 def test_llm_token_cost_known_and_default():
-    # Opus rate (15/75 per 1M): 1000 in + 500 out.
+    # Opus rate (5/25 per 1M, published list price): 1000 in + 500 out.
     c = llm_token_cost("claude-opus-4-7", 1000, 500)
-    assert c == round(1000 / 1e6 * 15 + 500 / 1e6 * 75, 6)
+    assert c == round(1000 / 1e6 * 5 + 500 / 1e6 * 25, 6)
     # Unknown model falls back to the default rate, not a crash.
     assert llm_token_cost("some-unknown-model", 1000, 0) is not None
 
 
 def test_llm_token_cost_prefix_match():
     # A versioned model id should match the known prefix.
-    assert llm_token_cost("claude-opus-4-7-20260101", 1_000_000, 0) == 15.0
+    assert llm_token_cost("claude-opus-4-7-20260101", 1_000_000, 0) == 5.0
 
 
 def test_llm_token_cost_none_when_no_tokens():
