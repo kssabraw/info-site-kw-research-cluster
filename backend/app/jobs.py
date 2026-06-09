@@ -617,9 +617,20 @@ def run_architecture_job(session_id: str) -> None:
             return
         store.persist_architecture(session_id, result.architecture_json())
         store.try_finalize_running(session_id, {"status": "complete"})
+        # No-orphan / no-dangling invariant audit (§15.2 #3) on the live graph, not
+        # just by construction. A non-zero count means a regression — surface it.
+        health = result.link_health()
+        if health["orphan_articles"] or health["orphan_pillars"] or health["dangling_links"]:
+            logger.warning(
+                "architecture_link_health_violation",
+                extra={"event": "architecture_link_health_violation", **health},
+            )
         logger.info(
             "step_complete",
-            extra={"event": "step_complete", "step": "architecture_job", **result.counts()},
+            extra={
+                "event": "step_complete", "step": "architecture_job",
+                **result.counts(), **health,
+            },
         )
     except Exception as exc:  # noqa: BLE001
         logger.error(

@@ -152,8 +152,21 @@ def flush_session_cost(session_id: str, total: float, breakdown: dict) -> None:
 def get_session_debug(session_id: str) -> dict:
     """Raw debug payload for the Owner debug view (PRD §15.3 #8): the statistical
     clustering log (Louvain groupings) + the orchestrator log (per-topic
-    merge/split/drop rationales + dedup collisions) + the cost attribution."""
+    merge/split/drop rationales + dedup collisions) + the cost attribution + the
+    architecture link-health audit (§15.2 #3 no-orphan / no-dangling)."""
     session = get_session(session_id) or {}
+    arch = (
+        get_service_client()
+        .table("site_architecture")
+        .select("architecture_json")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    link_health = (
+        (arch[0].get("architecture_json") or {}).get("link_health") if arch else None
+    )
     return {
         "status": session.get("status"),
         "seed_keyword": session.get("seed_keyword"),
@@ -164,6 +177,7 @@ def get_session_debug(session_id: str) -> dict:
         },
         "statistical_clustering_log": session.get("statistical_clustering_log"),
         "orchestrator_log": session.get("orchestrator_log"),
+        "architecture_link_health": link_health,
     }
 
 
