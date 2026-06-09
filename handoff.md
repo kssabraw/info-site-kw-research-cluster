@@ -2,6 +2,37 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
+_2026-06-09 (architecture is now LLM-free; writer owns pillar editorial):
+**Removed the per-pillar architect Opus call entirely** (owner decision, merged to
+`main` `713da24`). Site-architecture generation is now **fully deterministic** — the
+writer module owns the pillar title + summary (placeholder: title = silo name,
+summary = ""; target keyword = silo-name-lowercased; H2 outline already empty from
+the earlier change). Net −208 lines: gone are `_write_pillar_content` /
+`_build_pillar_prompt` / `_stub_pillar_content`, the tool schema + system prompt, the
+Anthropic + `ThreadPoolExecutor` imports, the `architect`/`max_workers` params, the
+dead `all_degraded()` + the all-degraded error branch (a pillar can no longer
+degrade), and the unused `architect_max_workers` config. **No more architecture LLM
+cost / latency / rate-limit handling.** `ArchitectureView` shows "Title & summary:
+written by the writer module" when the summary is empty. `cost_breakdown`'s
+`architecture` phase is now ~$0 (DataForSEO/LLM-free; just embedding reads via the
+gate). Flagged divergence from PRD §7.11 (which has Opus write the editorial fields)._
+
+_2026-06-09 (link audit + ArchitectureView fix + review fixes): **(a) Runtime
+no-orphan/no-dangling audit** — `ArchitectureResult.link_health()` (orphan_articles
+/ orphan_pillars / dangling_links, all 0 by construction) persisted in
+`architecture_json`, logged in the job (warns on any non-zero), surfaced in the owner
+Debug view + the Architecture toolbar ("✓ no orphans, no dangling links"). Turns the
+"by construction" no-orphan claim into a per-run check. **(b) ArchitectureView bug
+fix** — the "Links down to" field rendered `articlesForPillar` (ALL children) instead
+of the capped `supporting_article_ids`, so pillars *looked* like they had 40+ links
+even though the backend cap (≤3) was working; now renders the real down-links with a
+count. **(c) Adversarial-review fixes**: `/expand`'s `estimated_cost_usd` write is
+best-effort (a DB error there no longer strands the session as `running`); `/expand`
+no longer reads topics twice; the dormant owner H2-edit API (`PATCH /clusters`
+suggested_h2s) is **closed** (writer owns H2s even at the raw-API level). All merged
+to `main`. Live-verified on session `790f750f` (regenerated post-deploy): pillar
+down-links capped at 3, article laterals ≤4, `link_health {0,0,0}`._
+
 _2026-06-09 (≤5 links/page): **Capped internal links at 5 per page; re-based the
 no-orphan guarantee on a within-silo article cycle** (owner rule). Commit `78b403c`
 on `claude/wonderful-cray-wo84am`. Pillars were linking DOWN to **every** child
