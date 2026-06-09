@@ -591,11 +591,13 @@ def run_architecture_job(session_id: str) -> None:
             )
 
         s = get_settings()
+        # Architecture generation is fully deterministic now (no architect LLM —
+        # the writer owns pillar editorial), so there is no all-degraded failure
+        # mode to guard against; DB/embedding read failures are caught below.
         result = run_architecture_generation(
             seed=session["seed_keyword"],
             audience=session.get("detected_audience") or "",
             pillars_input=pillars_input,
-            architect=get_orchestrator(),
             topic_embeddings=store.get_topic_embeddings(session_id),
             cluster_centroids=store.get_cluster_centroids(session_id),
             skipped_silos=skipped,
@@ -603,18 +605,7 @@ def run_architecture_job(session_id: str) -> None:
             pillar_lateral_links_max=s.architecture_pillar_lateral_links_max,
             pillar_down_links_max=s.architecture_pillar_down_links_max,
             lateral_article_links_max=s.architecture_lateral_article_links_max,
-            max_workers=s.architect_max_workers,
         )
-        if result.all_degraded():
-            store.try_finalize_running(
-                session_id,
-                {
-                    "status": "error",
-                    "last_error": "Site architecture failed on every silo "
-                    "(architect LLM unavailable). Article plan preserved.",
-                },
-            )
-            return
         store.persist_architecture(session_id, result.architecture_json())
         store.try_finalize_running(session_id, {"status": "complete"})
         # No-orphan / no-dangling invariant audit (§15.2 #3) on the live graph, not
