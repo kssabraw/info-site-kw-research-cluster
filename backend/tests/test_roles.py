@@ -112,11 +112,24 @@ def test_owner_deep_mine_uncapped(client, monkeypatch):
     assert resp.status_code == 200
 
 
-def test_va_cannot_edit_intent_or_h2(client, monkeypatch):
+def test_va_cannot_edit_intent(client, monkeypatch):
     _as_role(monkeypatch, "va")
     monkeypatch.setattr(sessions_api, "_require_cluster", lambda *_: ({"id": "c1"}, "s1"))
     assert client.patch("/clusters/c1", json={"intent": "commercial"}).status_code == 403
-    assert client.patch("/clusters/c1", json={"suggested_h2s": ["a"]}).status_code == 403
+
+
+def test_h2_edit_path_is_closed(client, monkeypatch):
+    # H2 outlines are writer-owned: PATCH /clusters ignores suggested_h2s entirely,
+    # even for an owner — the pipeline/API no longer set article outlines.
+    _as_role(monkeypatch, "owner")
+    monkeypatch.setattr(sessions_api, "_require_cluster", lambda *_: ({"id": "c1"}, "s1"))
+    monkeypatch.setattr(sessions_api.store, "get_cluster", lambda cid: {"id": cid})
+    called: dict = {}
+    monkeypatch.setattr(sessions_api.store, "update_cluster",
+                        lambda cid, fields: called.update(fields) or {"id": cid})
+    resp = client.patch("/clusters/c1", json={"suggested_h2s": ["a"]})
+    assert resp.status_code == 200
+    assert "suggested_h2s" not in called  # never persisted
 
 
 def test_va_can_rename_cluster(client, monkeypatch):

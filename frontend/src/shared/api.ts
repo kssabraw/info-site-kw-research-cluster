@@ -288,7 +288,7 @@ export const getClusters = (id: string) =>
 export interface ClusterEdit {
   name?: string;
   intent?: string;
-  suggested_h2s?: string[];
+  // H2 outlines are owned by the writer module — no longer editable via PATCH.
 }
 
 export const editCluster = (clusterId: string, body: ClusterEdit) =>

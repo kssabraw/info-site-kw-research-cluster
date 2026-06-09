@@ -188,13 +188,19 @@ def _resolve_peer_terms(session: dict, body) -> tuple[list[str], list[str]]:
     return seed_terms, list(peers)
 
 
-def _estimate_for_session(session: dict, gated_count: int | None) -> dict:
+def _estimate_for_session(
+    session: dict, gated_count: int | None, *, topics: list | None = None
+) -> dict:
     """Cost estimate + approval-gate decision for a session (PRD §8.1 / §8.4).
     `gated_count` lets the wizard preview a not-yet-persisted deep-mine selection;
-    when None, the persisted gated-topic count is used. Approval is needed for a VA
-    when the estimate exceeds the workspace soft cap OR recursive fanout is on."""
+    when None, the persisted gated-topic count is used. `topics` lets a caller that
+    already fetched the silos pass them in to avoid a redundant read (e.g. /expand);
+    omit it to fetch. Approval is needed for a VA when the estimate exceeds the
+    workspace soft cap OR recursive fanout is on."""
     settings = session.get("settings") or {}
-    silo_count = len(store.list_topics(session["id"]))
+    if topics is None:
+        topics = store.list_topics(session["id"])
+    silo_count = len(topics)
     gated = (
         gated_count
         if gated_count is not None
@@ -461,14 +467,16 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
     double-submit (409)."""
     session = _require_session(user, session_id)
     bind_session_id(session_id)
-    if not store.list_topics(session_id):
+    topics = store.list_topics(session_id)
+    if not topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No silos to expand. Finalize at least one silo first.",
         )
     # Cost estimate (PRD §8.1), computed for every run path: it both enforces the
-    # VA approval gate (below) and is persisted for the §8.4 cost banner.
-    est = _estimate_for_session(session, None)
+    # VA approval gate (below) and is persisted for the §8.4 cost banner. Reuse the
+    # silos we just fetched so the estimate doesn't re-read them.
+    est = _estimate_for_session(session, None, topics=topics)
     # Approval gate, enforced server-side (PRD §8.4 / §11.3): a VA cannot start a
     # run that exceeds the workspace cost cap by calling /expand directly — it must
     # go through the approval workflow. The Owner's approve action kicks the run
@@ -985,7 +993,7 @@ _INTENT_RE = "^(informational|commercial|transactional|comparison|navigational)$
 class ClusterEditBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=300)
     intent: str | None = Field(default=None, pattern=_INTENT_RE)
-    suggested_h2s: list[str] | None = None
+    # H2 outlines are owned by the writer module — not editable here (2026-06-09).
 
 
 class PromotePrimaryBody(BaseModel):
@@ -1060,22 +1068,20 @@ def get_clusters(session_id: str, user: AuthedUser = Depends(require_user)) -> d
 def edit_cluster(
     cluster_id: str, body: ClusterEditBody, user: AuthedUser = Depends(require_user)
 ) -> dict:
-    """Rename an article, change its intent, or edit its H2 outline (§9.2). VAs may
-    only rename — intent and H2 edits are owner-only (§10.2: VA cluster actions are
-    limited to Rename + Move keyword in/out)."""
+    """Rename an article or change its intent (§9.2). VAs may only rename — intent
+    is owner-only (§10.2: VA cluster actions are limited to Rename + Move keyword
+    in/out). H2 outlines are not editable here — the writer module owns them."""
     _require_cluster(user, cluster_id)
-    if (body.intent is not None or body.suggested_h2s is not None) and get_role(user) != "owner":
+    if body.intent is not None and get_role(user) != "owner":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="VA mode can only rename an article, not edit its intent or outline.",
+            detail="VA mode can only rename an article, not edit its intent.",
         )
     fields: dict = {}
     if body.name is not None:
         fields["name"] = body.name.strip()
     if body.intent is not None:
         fields["intent"] = body.intent
-    if body.suggested_h2s is not None:
-        fields["suggested_h2s"] = [h.strip() for h in body.suggested_h2s if h.strip()]
     if not fields:
         return store.get_cluster(cluster_id)
     return store.update_cluster(cluster_id, fields)
