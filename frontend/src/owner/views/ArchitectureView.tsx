@@ -68,6 +68,21 @@ export function ArchitectureView() {
           Generated {new Date(arch.data.generated_at).toLocaleString()}
           {arch.data.is_user_edited && " · edited"}
         </span>
+        {a.link_health && (() => {
+          const lh = a.link_health;
+          const ok = lh.orphan_articles === 0 && lh.orphan_pillars === 0 && lh.dangling_links === 0;
+          return (
+            <span
+              className="muted"
+              style={{ color: ok ? "inherit" : "#c0392b" }}
+              title="No-orphan / no-dangling audit (§15.2 #3). Each page links to ≤5 others; every article has ≥1 inbound link."
+            >
+              {ok
+                ? "· ✓ no orphans, no dangling links"
+                : `· ⚠ ${lh.orphan_articles} orphan articles, ${lh.dangling_links} dangling links`}
+            </span>
+          );
+        })()}
         {!isVA && (
           <button className="btn btn-ghost" style={{ width: "auto" }} disabled={busy || regen.isPending} onClick={() => regen.mutate()}>
             {busy || regen.isPending ? <><span className="spinner-sm" />Regenerating…</> : "Regenerate architecture"}
@@ -140,8 +155,8 @@ function ArchPanels({
               <DetailLine label="Target keyword">{p.target_keyword}</DetailLine>
               <DetailLine label="Summary">{p.summary}</DetailLine>
               {p.h2_outline.length > 0 && <DetailLine label="H2 outline">{p.h2_outline.join(" · ")}</DetailLine>}
-              <DetailLine label="Links down to">
-                {articlesForPillar(p.topic_id).map((x) => x.name).join(", ") || "—"}
+              <DetailLine label={`Links down to (${p.supporting_article_ids.length})`}>
+                {p.supporting_article_ids.map((id) => articleById.get(id)?.name ?? id).join(", ") || "—"}
               </DetailLine>
               <DetailLine label="Lateral pillar links">
                 {p.lateral_pillar_links.map((tid) => pillarByTopic.get(tid)?.title ?? tid).join(", ") || "—"}
