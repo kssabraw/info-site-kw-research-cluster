@@ -2,6 +2,20 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
+_2026-06-09 (migration sweep): **All 14 `fanout` migrations are applied to prod —
+no further gaps** (read-only existence check of each migration's key object against
+the live DB, since migration tracking uses apply-time timestamps not repo prefixes,
+so version numbers can't be compared directly). After today's `filtered_language`
+fix the `fanout` schema is fully in sync. The enum-drift failure mode specifically
+(`ALTER TYPE … ADD VALUE`) appears in only **one** repo migration — the
+`filtered_language` one, now applied; every other enum is created complete in its
+`CREATE TYPE`, so that class of bug is closed. (The live DB also carries `public`-
+schema migrations from the shared AR-Internal-Tools app — `sie_cache`, `clients_*`,
+`local_seo_pages`, etc. — which are not this app's and are expected.) Reusable sweep
+query is a `with checks(migration, kind, present) as (values …)` of `to_regclass` /
+`information_schema.columns` / `pg_enum` existence tests — re-run it after any deploy
+that ships a new migration._
+
 _2026-06-09 (writer ownership): **H2 outlines moved out of the pipeline — the
 writer owns them** (owner decision; resolves §9.9 #3, extended to pillars). Commit
 `67c1c2c` on `claude/wonderful-cray-wo84am`. The M5 orchestrator no longer emits
