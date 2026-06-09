@@ -66,6 +66,30 @@ export function DebugView() {
             </section>
 
             <section className="card">
+              <h2 className="section-title">Architecture link health (§15.2 #3)</h2>
+              {debug.data.architecture_link_health ? (
+                (() => {
+                  const lh = debug.data.architecture_link_health;
+                  const ok =
+                    lh.orphan_articles === 0 &&
+                    lh.orphan_pillars === 0 &&
+                    lh.dangling_links === 0;
+                  return (
+                    <p className="muted" style={{ marginTop: 0 }}>
+                      <strong style={{ color: ok ? "inherit" : "#c0392b" }}>
+                        {ok ? "✓ Healthy" : "⚠ Issues found"}
+                      </strong>{" "}
+                      · orphan articles: {lh.orphan_articles} · orphan pillars:{" "}
+                      {lh.orphan_pillars} · dangling links: {lh.dangling_links}
+                    </p>
+                  );
+                })()
+              ) : (
+                <p className="muted">No architecture generated yet.</p>
+              )}
+            </section>
+
+            <section className="card">
               <h2 className="section-title">Orchestrator log</h2>
               <p className="field-hint" style={{ marginTop: 0 }}>
                 Per-topic merge / split / drop rationales and cross-topic dedup

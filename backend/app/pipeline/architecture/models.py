@@ -100,6 +100,8 @@ class ArchitectureResult:
             "pillars": [p.to_json() for p in self.pillars],
             "supporting_articles": [a.to_json() for a in self.supporting_articles],
             "skipped_silos": self.skipped_silos,
+            # Persisted so the owner Debug view can show it without recomputing.
+            "link_health": self.link_health(),
         }
 
     def counts(self) -> dict[str, int]:
@@ -108,6 +110,48 @@ class ArchitectureResult:
             "supporting_articles": len(self.supporting_articles),
             "degraded_pillars": sum(1 for p in self.pillars if p.degraded),
             "skipped_silos": len(self.skipped_silos),
+        }
+
+    def link_health(self) -> dict[str, int]:
+        """Audit the assembled link graph (§15.2 #3), so the no-orphan / no-dangling
+        invariants are checked on every live run rather than only by the unit tests
+        + the "by construction" argument:
+
+        - `orphan_articles` — supporting articles with NO inbound link. Should be 0:
+          the within-silo article cycle gives every article an inbound (its
+          predecessor's successor edge), and small silos also get a pillar down-link.
+        - `orphan_pillars` — pillars with no inbound. Should be 0: a pillar always
+          receives up-links from its (≥1) articles.
+        - `dangling_links` — link targets that aren't real nodes (e.g. a cross-silo
+          `peer_article_link` pointing at a dropped/skipped cluster). Should be 0.
+
+        A non-zero count is a regression signal — the caller logs a warning."""
+        article_ids = {a.article_id for a in self.supporting_articles}
+        pillar_ids = {p.topic_id for p in self.pillars}
+        nodes = article_ids | pillar_ids
+        inbound: set[str] = set()
+        dangling = 0
+        for p in self.pillars:
+            for aid in p.supporting_article_ids:  # pillar -> article down-links
+                inbound.add(aid)
+                if aid not in nodes:
+                    dangling += 1
+            for tid in p.lateral_pillar_links:  # pillar -> pillar laterals
+                inbound.add(tid)
+                if tid not in nodes:
+                    dangling += 1
+        for a in self.supporting_articles:
+            inbound.add(a.parent_pillar_topic_id)  # article -> pillar up-link
+            if a.parent_pillar_topic_id not in nodes:
+                dangling += 1
+            for lid in a.lateral_article_links:  # article -> article laterals
+                inbound.add(lid)
+                if lid not in nodes:
+                    dangling += 1
+        return {
+            "orphan_articles": sum(1 for aid in article_ids if aid not in inbound),
+            "orphan_pillars": sum(1 for pid in pillar_ids if pid not in inbound),
+            "dangling_links": dangling,
         }
 
     def all_degraded(self) -> bool:

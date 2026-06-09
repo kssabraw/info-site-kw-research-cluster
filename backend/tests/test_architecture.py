@@ -15,6 +15,11 @@ from app.pipeline.architecture.generate import (
     _lateral_article_links,
     _lateral_pillar_links,
 )
+from app.pipeline.architecture.models import (
+    ArchitectureResult,
+    Pillar,
+    SupportingArticle,
+)
 
 
 class FakeArchitect:
@@ -279,3 +284,42 @@ def test_lateral_article_links_capped_and_self_excluded():
         a, same_silo_ids={"c1"}, cluster_centroids={}, max_links=3
     )
     assert out == ["c2", "c3", "c4"]   # capped at max_links, in priority order
+
+
+# ---- link_health: runtime no-orphan / no-dangling audit (§15.2 #3) ----------
+def test_link_health_clean_on_a_normal_graph():
+    # A real generation (multi-silo, 6-article silo) must report a perfectly
+    # healthy graph: zero orphans, zero dangling links.
+    pillars_in = [
+        _pillar("t1", "Big", [_article(f"c{i}", f"art {i}") for i in range(6)]),
+        _pillar("t2", "Small", [_article("d1", "solo")]),
+    ]
+    result = run_architecture_generation(
+        seed="x", audience="", pillars_input=pillars_in,
+        architect=FakeArchitect(), topic_embeddings={}, cluster_centroids={},
+    )
+    assert result.link_health() == {
+        "orphan_articles": 0, "orphan_pillars": 0, "dangling_links": 0,
+    }
+
+
+def test_link_health_detects_orphan_and_dangling():
+    # Hand-built broken graph: the pillar links only a1; a2 has no inbound at all
+    # (orphan); a1's lateral points at a non-existent node (dangling).
+    result = ArchitectureResult(seed_keyword="x", detected_audience="")
+    result.pillars.append(Pillar(
+        topic_id="t1", silo_name="S", title="T", target_keyword="k", summary="",
+        h2_outline=[], supporting_article_ids=["a1"], lateral_pillar_links=[],
+    ))
+    result.supporting_articles.append(SupportingArticle(
+        article_id="a1", name="A1", intent="informational",
+        parent_pillar_topic_id="t1", lateral_article_links=["ghost"],
+    ))
+    result.supporting_articles.append(SupportingArticle(
+        article_id="a2", name="A2", intent="informational",
+        parent_pillar_topic_id="t1", lateral_article_links=[],
+    ))
+    health = result.link_health()
+    assert health["orphan_articles"] == 1   # a2 has no inbound link
+    assert health["dangling_links"] == 1    # a1 -> "ghost" targets a non-node
+    assert health["orphan_pillars"] == 0    # t1 gets up-links from a1 + a2

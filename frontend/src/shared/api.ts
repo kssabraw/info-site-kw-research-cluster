@@ -385,6 +385,12 @@ export const getSummary = (id: string) =>
 
 // Owner debug view (PRD §15.3 #8): raw clustering + orchestrator logs + cost.
 // Owner-only on the backend (require_owner) — a VA gets 403.
+export interface ArchitectureLinkHealth {
+  orphan_articles: number;
+  orphan_pillars: number;
+  dangling_links: number;
+}
+
 export interface SessionDebug {
   status: string | null;
   seed_keyword: string | null;
@@ -393,6 +399,8 @@ export interface SessionDebug {
   cost_breakdown: Record<string, number>;
   statistical_clustering_log: unknown;
   orchestrator_log: unknown;
+  // §15.2 #3 no-orphan / no-dangling audit; null until architecture is generated.
+  architecture_link_health: ArchitectureLinkHealth | null;
 }
 
 export const getSessionDebug = (id: string) =>
