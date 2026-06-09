@@ -2,6 +2,12 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
+> **▶ Resume here (dead-simple):** the immediate next action is still finishing the
+> **M11 / M8–M10 live-validation checklist** in **§2** (deployed-stack browser + DB
+> checks the sandbox can't run). All of the 2026-06-09 work below — writer-owned
+> titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
+> and deployed; nothing is mid-flight.
+
 _2026-06-09 (architecture is now LLM-free; writer owns pillar editorial):
 **Removed the per-pillar architect Opus call entirely** (owner decision, merged to
 `main` `713da24`). Site-architecture generation is now **fully deterministic** — the
