@@ -2,6 +2,27 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
+_2026-06-09 (validation run): **Applied a missed migration to prod — language
+filter enum (`filtered_language`).** The first deployed validation run (session
+`727b253a`, seed "how to rank a plumber in chatgpt") failed mid-expand with
+`invalid input value for enum keyword_status: "filtered_language"`. **Root cause: a
+code-before-migration deploy gap.** The pre-embedding language filter (commit
+`ad17a54`, on `main` since 2026-06-04) tags non-English keywords with a new
+`keyword_status` value, but its migration `20260604000001_keyword_status_filtered_
+language.sql` had **never been applied to the live DB** — the live enum had only the
+6 original values. The `/summary` read path was guarded against this (safe-count
+helper), but the **gate's keyword-write path was not**, so it hard-errored when
+persisting a `filtered_language` keyword. **Fix: applied `20260604000001` to the
+live DB via Supabase MCP** (enum now has 7 values incl. `filtered_language`); no
+code change, and **no language-picker is needed** — the filter is automatic. The
+failed run spent **~$3.94** (real DataForSEO, metered correctly on failure — a live
+confirmation of §16.4 "partial cost persists on failure") but persisted **0
+keywords** (the write rolled back), so it can't be cleanly resumed — recover by
+starting a fresh session (same DataForSEO re-spend either way, cleaner cost number).
+**Lesson: when deploying a branch that adds a migration, apply the migration to prod
+via MCP as part of the deploy** — the repo file alone doesn't touch the live DB.
+Validation continues on a fresh run._
+
 _2026-06-09 (later): **Two post-M11 cost fixes during live validation (Track A,
 items 1–4).** Both on `claude/wonderful-cray-wo84am`; backend tests pass (52 run:
 approvals + cost_meter + roles + cost), ruff clean. **(1) Opus LLM rate
