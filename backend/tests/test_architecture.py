@@ -101,7 +101,8 @@ def test_pillar_editorial_fields_come_from_the_llm():
         "title": "The Complete Guide to Triple Agonists",
         "target_keyword": "triple agonist drugs",
         "summary": "What they are.",
-        "h2_outline": ["Mechanism", "Comparisons", ""],  # blank dropped
+        # Any h2_outline the model emits is ignored — the writer owns the outline.
+        "h2_outline": ["Mechanism", "Comparisons"],
     }
     result = run_architecture_generation(
         seed="x", audience="", pillars_input=[_pillar("t1", "Drugs", [_article("c1", "a")])],
@@ -110,7 +111,7 @@ def test_pillar_editorial_fields_come_from_the_llm():
     p = result.pillars[0]
     assert p.title == "The Complete Guide to Triple Agonists"
     assert p.target_keyword == "triple agonist drugs"
-    assert p.h2_outline == ["Mechanism", "Comparisons"]
+    assert p.h2_outline == []  # writer module generates pillar headings at write time
     assert p.degraded is False
 
 
@@ -128,7 +129,7 @@ def test_pillar_degrades_to_stub_when_architect_fails(monkeypatch):
     p = result.pillars[0]
     assert p.degraded is True
     assert p.title == "Dosage"               # stub title = silo name
-    assert p.h2_outline == ["low dose"]       # stub outline = article names
+    assert p.h2_outline == []                 # writer owns the outline (even on the stub)
     assert arch.calls == 3                    # all attempts exhausted before degrading
     assert result.all_degraded() is True
 
