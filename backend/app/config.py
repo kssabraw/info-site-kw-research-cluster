@@ -229,16 +229,24 @@ class Settings(BaseSettings):
     architect_max_workers: int = 2
     # Pillars link laterally only above this topic-embedding cosine (§15.2 #4).
     architecture_pillar_lateral_cosine: float = 0.55
-    # Cap a pillar's outbound lateral links (pillar -> peer pillar) at top-N
-    # by cosine. Keeps "no page > 5 outbound internal links" honest for pillars
-    # in seeds with many tightly-related silos (where the cosine threshold
-    # alone could leave 6+ peers above the bar). Structural links (pillar ->
-    # its supporting articles) are NOT capped here — those are the §15.2 #3
-    # no-orphan guarantee.
-    architecture_pillar_lateral_links_max: int = 5
-    # Lateral peer links per supporting article (§7.11 "2-3 lateral links";
-    # owner-requested ≤5 outbound rule applies here too — 3 stays under 5).
-    architecture_lateral_article_links_max: int = 3
+    # Per-page internal-link budget (owner rule, 2026-06-09): NO page emits more
+    # than 5 outbound internal links. A pillar's 5 = up to `pillar_down_links_max`
+    # children + up to `pillar_lateral_links_max` peer pillars; an article's 5 =
+    # 1 up-link to its pillar + up to `lateral_article_links_max` laterals. The
+    # §15.2 #3 no-orphan guarantee no longer comes from "pillar links to ALL its
+    # articles" (that produced 60+ links on big silos) — it now comes from a
+    # within-silo article cycle: each article links to a successor, so every
+    # article receives ≥1 inbound link by construction even though the pillar
+    # links to only a few children.
+    architecture_pillar_lateral_links_max: int = 2
+    # The pillar links down to its most-central children (nearest the silo mean
+    # centroid); the rest stay reachable via the article cycle. Small silos
+    # (≤ this many articles) link to all their children.
+    architecture_pillar_down_links_max: int = 3
+    # Lateral peer links per supporting article. One slot is the within-silo cycle
+    # successor (the no-orphan edge); the rest are nearest peers. 4 laterals + the
+    # 1 up-link = the 5-link ceiling.
+    architecture_lateral_article_links_max: int = 4
 
     # M8 VA mode (PRD §10.2 / §15.2 §7.2 #3). A VA may deep-mine at most the seed
     # + this many additional silos; the seed is always mined and never counts.

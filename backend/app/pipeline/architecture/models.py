@@ -33,8 +33,11 @@ class PillarInput:
 @dataclass
 class Pillar:
     """A pillar overview page (PRD §7.11). Editorial fields come from the LLM;
-    `supporting_article_ids` and `lateral_pillar_links` are assembled
-    deterministically so the §15.2 acceptance rules hold by construction."""
+    the links are assembled deterministically so the §15.2 acceptance rules hold by
+    construction. `supporting_article_ids` are the pillar's outbound DOWN-LINKS
+    (capped at the most-central children — NOT the full child set, which is
+    recoverable from each article's `parent_pillar_topic_id`); `lateral_pillar_links`
+    are peer pillars. Down + lateral ≤ 5 (the per-page internal-link budget)."""
     topic_id: str
     silo_name: str
     title: str

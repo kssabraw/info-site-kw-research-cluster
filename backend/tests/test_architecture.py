@@ -72,7 +72,7 @@ def test_one_pillar_per_silo_with_uplinks_and_no_orphans():
     )
     # #1: one pillar per accepted silo.
     assert {p.topic_id for p in result.pillars} == {"t1", "t2"}
-    # Pillar links DOWN to all its supporting articles.
+    # Small silos (≤ the down-links cap of 3) still link DOWN to all their children.
     by_topic = {p.topic_id: p for p in result.pillars}
     assert set(by_topic["t1"].supporting_article_ids) == {"c1", "c2"}
     assert by_topic["t2"].supporting_article_ids == ["c3"]
@@ -80,9 +80,37 @@ def test_one_pillar_per_silo_with_uplinks_and_no_orphans():
     assert all(a.parent_pillar_topic_id for a in result.supporting_articles)
     parents = {a.article_id: a.parent_pillar_topic_id for a in result.supporting_articles}
     assert parents == {"c1": "t1", "c2": "t1", "c3": "t2"}
-    # #3: no orphans — every supporting article is in its pillar's down-links.
+    # #3: no orphans — here every article is in its pillar's down-links (small silos).
     for a in result.supporting_articles:
         assert a.article_id in by_topic[a.parent_pillar_topic_id].supporting_article_ids
+
+
+def test_large_silo_caps_pillar_links_and_keeps_no_orphans_via_cycle():
+    # 6 articles > the pillar down-links cap (3), so the pillar can NOT link to all.
+    arts = [_article(f"c{i}", f"art {i}") for i in range(6)]
+    centroids = {
+        "c0": [1.0, 0.0], "c1": [0.95, 0.05], "c2": [0.9, 0.1],
+        "c3": [0.0, 1.0], "c4": [0.05, 0.95], "c5": [0.1, 0.9],
+    }
+    result = run_architecture_generation(
+        seed="x", audience="", pillars_input=[_pillar("t1", "Big Silo", arts)],
+        architect=FakeArchitect(), topic_embeddings={}, cluster_centroids=centroids,
+    )
+    pillar = result.pillars[0]
+    # Pillar links down to only 3 children (capped), not all 6.
+    assert len(pillar.supporting_article_ids) == 3
+    assert set(pillar.supporting_article_ids) <= {a.id for a in arts}  # no dangling
+    # Per-page ≤5-link budget holds on every page.
+    assert len(pillar.supporting_article_ids) + len(pillar.lateral_pillar_links) <= 5
+    for a in result.supporting_articles:
+        assert 1 + len(a.lateral_article_links) <= 5  # 1 up-link + laterals
+    # No orphans: every article receives ≥1 inbound link (from the pillar's
+    # down-links OR another article's lateral cycle edge). The cycle guarantees the
+    # latter for the children the pillar didn't link to.
+    inbound: set[str] = set(pillar.supporting_article_ids)
+    for a in result.supporting_articles:
+        inbound.update(a.lateral_article_links)
+    assert {a.article_id for a in result.supporting_articles} <= inbound
 
 
 def test_silo_without_articles_is_skipped_not_a_childless_pillar():
