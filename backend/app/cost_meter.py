@@ -21,9 +21,15 @@ from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
 
-# USD per 1,000,000 tokens, (input, output). ESTIMATES — calibrate per §8.1.
+# USD per 1,000,000 tokens, (input, output).
+# Anthropic rates are the published Opus 4.7/4.8 list price ($5 in / $25 out per
+# 1M tok); calibrated 2026-06-09 against live metered sessions, which surfaced the
+# prior (15/75) estimate overcharging Opus LLM cost by 3x. The gpt-5.4 rate remains
+# an estimate (OpenAI list price not re-verified here) but silo_discovery meters
+# within a few cents of the §8.1 estimate, so it is in the right range.
 _LLM_RATES: dict[str, tuple[float, float]] = {
-    "claude-opus-4-7": (15.0, 75.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0),
     "gpt-5.4": (5.0, 15.0),
 }
 _DEFAULT_LLM_RATE = (5.0, 15.0)
