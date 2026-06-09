@@ -220,13 +220,9 @@ class Settings(BaseSettings):
     fanout_cost_multiplier_low: float = 5.0
     fanout_cost_multiplier_high: float = 8.0
 
-    # M6 site architecture (PRD §7.11). Reuses the orchestrator's Anthropic client
-    # (§7.11: "share the same LLM client and credentials"); one editorial call per
-    # pillar, run in parallel. The linking matrix is assembled deterministically.
-    # Kept low: live validation showed ~5 simultaneous pillar calls burst Anthropic
-    # rate limits and degraded most pillars to stubs; 2-at-a-time + per-call backoff
-    # cleared it (pillars are few, so throughput isn't the constraint).
-    architect_max_workers: int = 2
+    # M6 site architecture (PRD §7.11). Fully deterministic — no LLM (the writer
+    # module owns pillar editorial as of 2026-06-09); only the linking matrix +
+    # placeholder editorial fields are produced here.
     # Pillars link laterally only above this topic-embedding cosine (§15.2 #4).
     architecture_pillar_lateral_cosine: float = 0.55
     # Per-page internal-link budget (owner rule, 2026-06-09): NO page emits more

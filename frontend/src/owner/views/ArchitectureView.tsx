@@ -153,7 +153,9 @@ function ArchPanels({
               <h2 className="arch-detail-title">{p.title}</h2>
               <DetailLine label="Type">Pillar · {p.silo_name}</DetailLine>
               <DetailLine label="Target keyword">{p.target_keyword}</DetailLine>
-              <DetailLine label="Summary">{p.summary}</DetailLine>
+              {p.summary
+                ? <DetailLine label="Summary">{p.summary}</DetailLine>
+                : <DetailLine label="Title & summary"><span className="muted">written by the writer module</span></DetailLine>}
               {p.h2_outline.length > 0 && <DetailLine label="H2 outline">{p.h2_outline.join(" · ")}</DetailLine>}
               <DetailLine label={`Links down to (${p.supporting_article_ids.length})`}>
                 {p.supporting_article_ids.map((id) => articleById.get(id)?.name ?? id).join(", ") || "—"}

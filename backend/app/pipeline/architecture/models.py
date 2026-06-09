@@ -153,9 +153,3 @@ class ArchitectureResult:
             "orphan_pillars": sum(1 for pid in pillar_ids if pid not in inbound),
             "dangling_links": dangling,
         }
-
-    def all_degraded(self) -> bool:
-        """True if every pillar fell back to the deterministic stub — the LLM is
-        unavailable, so the caller surfaces an error rather than shipping titles
-        that are just silo names (mirrors the orchestrator's all_degraded)."""
-        return bool(self.pillars) and all(p.degraded for p in self.pillars)

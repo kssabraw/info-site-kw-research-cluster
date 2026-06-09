@@ -1,11 +1,8 @@
-"""M6 site architecture tests (PRD §7.11): per-pillar editorial content via the
-LLM, deterministic linking-matrix assembly, degraded fallback, and the §15.2
-acceptance rules (one pillar per silo, up-links, no orphans, pillar lateral links
-only above the cosine threshold)."""
+"""M6 site architecture tests (PRD §7.11): deterministic pillar editorial fields
+(no LLM — the writer owns title/summary) + deterministic linking-matrix assembly +
+the §15.2 acceptance rules (one pillar per silo, up-links, no orphans, ≤5
+links/page, link-health audit)."""
 
-import threading
-
-from app.llm import AnthropicError
 from app.pipeline.architecture import (
     ArticleInput,
     PillarInput,
@@ -20,29 +17,6 @@ from app.pipeline.architecture.models import (
     Pillar,
     SupportingArticle,
 )
-
-
-class FakeArchitect:
-    """Returns a preset submit_pillar payload, or raises to exercise the
-    reprompt/degrade path. Thread-safe (pillars are written in parallel)."""
-
-    def __init__(self, payload=None, raises=False):
-        self.payload = payload or {
-            "title": "The Complete Guide",
-            "target_keyword": "guide",
-            "summary": "An overview.",
-            "h2_outline": ["H2 one", "H2 two"],
-        }
-        self.raises = raises
-        self.calls = 0
-        self._lock = threading.Lock()
-
-    def call_tool(self, **kwargs):
-        with self._lock:
-            self.calls += 1
-        if self.raises:
-            raise AnthropicError("boom")
-        return self.payload
 
 
 def _article(aid: str, name: str, peers=None) -> ArticleInput:
@@ -71,7 +45,6 @@ def test_one_pillar_per_silo_with_uplinks_and_no_orphans():
         seed="retatrutide",
         audience="patients",
         pillars_input=pillars_in,
-        architect=FakeArchitect(),
         topic_embeddings={"t1": [1.0, 0.0], "t2": [0.0, 1.0]},  # orthogonal -> no link
         cluster_centroids={},
     )
@@ -99,7 +72,7 @@ def test_large_silo_caps_pillar_links_and_keeps_no_orphans_via_cycle():
     }
     result = run_architecture_generation(
         seed="x", audience="", pillars_input=[_pillar("t1", "Big Silo", arts)],
-        architect=FakeArchitect(), topic_embeddings={}, cluster_centroids=centroids,
+        topic_embeddings={}, cluster_centroids=centroids,
     )
     pillar = result.pillars[0]
     # Pillar links down to only 3 children (capped), not all 6.
@@ -122,74 +95,27 @@ def test_silo_without_articles_is_skipped_not_a_childless_pillar():
     pillars_in = [_pillar("t1", "Dosage", [_article("c1", "low dose")])]
     result = run_architecture_generation(
         seed="x", audience="", pillars_input=pillars_in,
-        architect=FakeArchitect(), topic_embeddings={}, cluster_centroids={},
+        topic_embeddings={}, cluster_centroids={},
         skipped_silos=["Empty Silo"],
     )
     assert [p.topic_id for p in result.pillars] == ["t1"]
     assert result.skipped_silos == ["Empty Silo"]
 
 
-def test_pillar_editorial_fields_come_from_the_llm():
-    payload = {
-        "title": "The Complete Guide to Triple Agonists",
-        "target_keyword": "triple agonist drugs",
-        "summary": "What they are.",
-        # Any h2_outline the model emits is ignored — the writer owns the outline.
-        "h2_outline": ["Mechanism", "Comparisons"],
-    }
+def test_pillar_editorial_is_a_deterministic_placeholder():
+    # No LLM: the writer owns the pillar title + summary, so the pipeline leaves a
+    # placeholder (title = silo name, empty summary) + a deterministic target keyword.
     result = run_architecture_generation(
-        seed="x", audience="", pillars_input=[_pillar("t1", "Drugs", [_article("c1", "a")])],
-        architect=FakeArchitect(payload=payload), topic_embeddings={}, cluster_centroids={},
+        seed="x", audience="",
+        pillars_input=[_pillar("t1", "Triple Agonist Drugs", [_article("c1", "a")])],
+        topic_embeddings={}, cluster_centroids={},
     )
     p = result.pillars[0]
-    assert p.title == "The Complete Guide to Triple Agonists"
-    assert p.target_keyword == "triple agonist drugs"
-    assert p.h2_outline == []  # writer module generates pillar headings at write time
+    assert p.title == "Triple Agonist Drugs"           # placeholder = silo name
+    assert p.target_keyword == "triple agonist drugs"  # deterministic head term
+    assert p.summary == ""                             # writer owns the summary
+    assert p.h2_outline == []                          # writer owns the outline
     assert p.degraded is False
-
-
-# ---- degraded fallback -----------------------------------------------------
-
-
-def test_pillar_degrades_to_stub_when_architect_fails(monkeypatch):
-    # No real backoff sleeps in the test; just assert the retry-then-degrade path.
-    monkeypatch.setattr("app.pipeline.architecture.generate.time.sleep", lambda *_: None)
-    arch = FakeArchitect(raises=True)
-    result = run_architecture_generation(
-        seed="x", audience="", pillars_input=[_pillar("t1", "Dosage", [_article("c1", "low dose")])],
-        architect=arch, topic_embeddings={}, cluster_centroids={},
-    )
-    p = result.pillars[0]
-    assert p.degraded is True
-    assert p.title == "Dosage"               # stub title = silo name
-    assert p.h2_outline == []                 # writer owns the outline (even on the stub)
-    assert arch.calls == 3                    # all attempts exhausted before degrading
-    assert result.all_degraded() is True
-
-
-def test_transient_failure_backs_off_between_attempts(monkeypatch):
-    sleeps: list[float] = []
-    monkeypatch.setattr("app.pipeline.architecture.generate.time.sleep", lambda s: sleeps.append(s))
-    arch = FakeArchitect(raises=True)
-    run_architecture_generation(
-        seed="x", audience="", pillars_input=[_pillar("t1", "Dosage", [_article("c1", "a")])],
-        architect=arch, topic_embeddings={}, cluster_centroids={},
-    )
-    # Backoff happens between attempts but not after the final one.
-    assert len(sleeps) == 2
-    assert all(s > 0 for s in sleeps)
-
-
-def test_blank_title_triggers_reprompt_then_stub():
-    # Shape failures reprompt immediately (no backoff sleep), so no monkeypatch.
-    arch = FakeArchitect(payload={"title": "", "target_keyword": "", "summary": "",
-                                  "h2_outline": []})
-    result = run_architecture_generation(
-        seed="x", audience="", pillars_input=[_pillar("t1", "Dosage", [_article("c1", "a")])],
-        architect=arch, topic_embeddings={}, cluster_centroids={},
-    )
-    assert result.pillars[0].degraded is True
-    assert arch.calls == 3
 
 
 # ---- lateral pillar links (#4): cosine > threshold -------------------------
@@ -296,7 +222,7 @@ def test_link_health_clean_on_a_normal_graph():
     ]
     result = run_architecture_generation(
         seed="x", audience="", pillars_input=pillars_in,
-        architect=FakeArchitect(), topic_embeddings={}, cluster_centroids={},
+        topic_embeddings={}, cluster_centroids={},
     )
     assert result.link_health() == {
         "orphan_articles": 0, "orphan_pillars": 0, "dangling_links": 0,
