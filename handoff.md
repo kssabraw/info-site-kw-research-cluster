@@ -2,6 +2,21 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
+_2026-06-09 (writer ownership): **H2 outlines moved out of the pipeline — the
+writer owns them** (owner decision; resolves §9.9 #3, extended to pillars). Commit
+`67c1c2c` on `claude/wonderful-cray-wo84am`. The M5 orchestrator no longer emits
+`suggested_h2s` and the M6 architect no longer emits `h2_outline` (both dropped from
+the LLM tool schema + prompt — also trims output tokens); every article/pillar is
+persisted with an **empty** outline. The `clusters.h2_outline` column and the
+`suggested_h2s`/`h2_outline` model fields are **kept** (always empty for now) so
+storage, API models, frontend types and the architecture CSV all keep working and
+the writer module (M12+) has a destination to fill at write time. **Until the writer
+ships, the Architecture view + architecture-CSV `outline_h2s` are blank** — intended.
+Flagged divergence from PRD §7.10/§7.11. Tests: 296 pass (2 `test_architecture`
+assertions updated to expect empty outlines), ruff clean; the only failures are 5
+pre-existing `test_health` auth artifacts (401 vs 403) from the sandbox auth config,
+unrelated to this change._
+
 _2026-06-09 (validation run): **Applied a missed migration to prod — language
 filter enum (`filtered_language`).** The first deployed validation run (session
 `727b253a`, seed "how to rank a plumber in chatgpt") failed mid-expand with
@@ -334,7 +349,7 @@ Three apps could serve as the content writer:
 
 1. **Informational writer:** use AR-Internal-Tools `runs` pipeline, or build a duplicated standalone writer? AR-Internal-Tools = deeper app-to-app coupling but skips duplication + yields higher-quality writer (research + sources cited out of the gate).
 2. **Local SEO writer:** keep ShowUP Local (cross-Supabase, HTTP coordination) or port into AR-Internal-Tools `local_seo_pages` (single-Supabase, queue coordination)?
-3. **H2 outline preservation:** pass M5/M6 H2 outlines as constraints to AR-Internal-Tools' `brief` module, or let it produce its own outline from scratch? M5/M6 outlines are reasoned over carefully but may conflict with the brief module's opinions.
+3. **H2 outline preservation:** ~~pass M5/M6 H2 outlines as constraints to the `brief` module, or let it produce its own outline from scratch?~~ **RESOLVED 2026-06-09: the writer owns H2 generation; the pipeline no longer produces outlines.** Commit `67c1c2c` dropped H2 generation from both the M5 orchestrator (`suggested_h2s`) and the M6 architect (`h2_outline`) — schema + prompt removed, every article/pillar persisted with an empty outline. The `clusters.h2_outline` column + the model fields are kept (always empty) as the destination the writer fills at write time. The §9.2 adapter therefore does **not** pass a `heading_structure` from the pipeline — the writer generates it. Consequence until M12+ ships: Architecture view + architecture CSV `outline_h2s` are blank. Flagged divergence from PRD §7.10/§7.11.
 4. **Repo + CF Pages provisioning:** orchestrator owns it (recommended; provisions at site-create time), or owner provisions manually (faster to ship the first version)?
 5. **Owner review step:** required before publish (safer; recommended), or auto-publish on generation complete (faster; per-site toggle later)?
 6. **One writer with template modes vs. two writers per template** — depends on how much the two templates' generation pipelines actually share. Currently leaning two (different shape: local SEO needs business context + schema.org + images; informational needs internal-linking-heavy editorial with no images).
