@@ -2,6 +2,29 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
+_2026-06-09 (≤5 links/page): **Capped internal links at 5 per page; re-based the
+no-orphan guarantee on a within-silo article cycle** (owner rule). Commit `78b403c`
+on `claude/wonderful-cray-wo84am`. Pillars were linking DOWN to **every** child
+article (60+ links on big silos) — and that was *also* the §15.2 #3 no-orphan
+mechanism, so capping it naively would orphan the unlinked children. New topology
+(all deterministic, acceptance rules hold by construction): **pillar page** = up to
+3 down-links to the silo's **most-central children** (nearest the silo mean centroid)
++ up to 2 peer-pillar laterals = ≤5 (small silos ≤3 articles still link to all
+children); **article page** = 1 up-link + up to 4 laterals = ≤5, where **one lateral
+slot is the within-silo cycle successor** (article i→i+1, last→first) so every
+article is some peer's successor and gets ≥1 inbound link — the new no-orphan
+guarantee, independent of the pillar's link count. `supporting_article_ids` is now
+the pillar's **capped down-LINK list**, not full membership (membership is
+recoverable from each article's `parent_pillar_topic_id`, which the frontend already
+uses to build the site map — so **no UI change**; the cap flows straight into the
+architecture CSV `internal_links_out`). New config: `architecture_pillar_down_links_max=3`,
+`pillar_lateral_links_max` 5→2, `lateral_article_links_max` 3→4 (`generate.py`
+`_pillar_down_links` + a `successor` arg on `_lateral_article_links`). 297 backend
+tests pass (1 new `test_large_silo_caps_pillar_links_and_keeps_no_orphans_via_cycle`),
+ruff clean. **Applies to newly-generated architectures** — regenerate an existing
+session's architecture to apply the cap retroactively. Flagged divergence from PRD
+§7.11/§15.2 #3 (the no-orphan mechanism changed, the property is preserved)._
+
 _2026-06-09 (migration sweep): **All 14 `fanout` migrations are applied to prod —
 no further gaps** (read-only existence check of each migration's key object against
 the live DB, since migration tracking uses apply-time timestamps not repo prefixes,

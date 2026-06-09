@@ -601,6 +601,7 @@ def run_architecture_job(session_id: str) -> None:
             skipped_silos=skipped,
             pillar_lateral_cosine_threshold=s.architecture_pillar_lateral_cosine,
             pillar_lateral_links_max=s.architecture_pillar_lateral_links_max,
+            pillar_down_links_max=s.architecture_pillar_down_links_max,
             lateral_article_links_max=s.architecture_lateral_article_links_max,
             max_workers=s.architect_max_workers,
         )

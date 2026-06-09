@@ -206,18 +206,70 @@ def _lateral_pillar_links(
     return links
 
 
+def _pillar_down_links(
+    articles: list[ArticleInput],
+    cluster_centroids: dict[str, list[float] | None],
+    *,
+    max_links: int,
+) -> list[str]:
+    """The pillar's outbound down-links: up to `max_links` of the silo's most
+    central articles (nearest the silo's mean cluster centroid), so a big silo no
+    longer emits 60+ links. A silo with ≤ max_links articles links to all of them.
+    Falls back to article order when centroids are unavailable.
+
+    NOTE: this is the pillar's *link* list, not its membership — the full child set
+    is recoverable from each article's `parent_pillar_topic_id`. The articles the
+    pillar does not link to still receive an inbound link via the within-silo
+    article cycle (see `_lateral_article_links` `successor`), so none are orphaned."""
+    ids = [a.id for a in articles]
+    if max_links <= 0:
+        return []
+    if len(ids) <= max_links:
+        return ids
+    vecs = [
+        np.asarray(cluster_centroids[a.id], dtype=np.float32)
+        for a in articles
+        if cluster_centroids.get(a.id) is not None
+    ]
+    if not vecs:
+        return ids[:max_links]
+    mean = np.mean(np.stack(vecs), axis=0)
+    scored: list[tuple[float, str]] = []
+    for a in articles:
+        v = cluster_centroids.get(a.id)
+        if v is not None:
+            scored.append((_cosine(mean, np.asarray(v, dtype=np.float32)), a.id))
+    scored.sort(reverse=True)
+    chosen = [aid for _, aid in scored[:max_links]]
+    # Articles without a centroid couldn't be scored — pad by order if there's room.
+    for aid in ids:
+        if len(chosen) >= max_links:
+            break
+        if aid not in chosen:
+            chosen.append(aid)
+    return chosen
+
+
 def _lateral_article_links(
     article: ArticleInput,
     same_silo_ids: set[str],
     cluster_centroids: dict[str, list[float] | None],
     *,
     max_links: int,
+    successor: str | None = None,
 ) -> list[str]:
-    """2-3 lateral links to peer supporting articles (PRD §7.11), prioritizing the
-    `peer_article_links` already set by the orchestrator / dedup, then topping up
-    with the nearest same-silo peers by centroid cosine. Capped at `max_links`."""
+    """Lateral links to peer supporting articles (PRD §7.11). `successor` is the
+    article's within-silo cycle edge: prepended first so every article is some
+    peer's successor and therefore receives ≥1 inbound link — the no-orphan
+    guarantee now that the pillar links to only a few children. Then the
+    orchestrator/dedup `peer_article_links`, then nearest same-silo peers by
+    centroid cosine. Capped at `max_links`."""
     chosen: list[str] = []
     seen = {article.id}
+    # Coverage edge first: the within-silo successor (the no-orphan guarantee).
+    if successor and successor not in seen:
+        chosen.append(successor)
+        seen.add(successor)
     # Priority: existing peer links (may cross silos — from cross-topic dedup).
     for pid in article.peer_article_links:
         if pid not in seen and len(chosen) < max_links:
@@ -256,8 +308,9 @@ def run_architecture_generation(
     cluster_centroids: dict[str, list[float] | None],
     skipped_silos: list[str] | None = None,
     pillar_lateral_cosine_threshold: float = 0.55,
-    pillar_lateral_links_max: int = 5,
-    lateral_article_links_max: int = 3,
+    pillar_lateral_links_max: int = 2,
+    pillar_down_links_max: int = 3,
+    lateral_article_links_max: int = 4,
     max_workers: int = 5,
 ) -> ArchitectureResult:
     """Full §7.11 pass: write each pillar's editorial fields (LLM, parallel per
@@ -292,6 +345,7 @@ def run_architecture_generation(
     for p in pillars_input:
         c = content[p.topic_id]
         article_ids = [a.id for a in p.articles]
+        n = len(article_ids)
         result.pillars.append(
             Pillar(
                 topic_id=p.topic_id,
@@ -300,13 +354,21 @@ def run_architecture_generation(
                 target_keyword=c["target_keyword"],
                 summary=c["summary"],
                 h2_outline=c["h2_outline"],
-                supporting_article_ids=article_ids,  # pillar links DOWN to all (#2/#3)
+                # Pillar links DOWN to its most-central children only (capped); the
+                # rest stay reachable via the article cycle below (≤5-link rule).
+                supporting_article_ids=_pillar_down_links(
+                    p.articles, cluster_centroids, max_links=pillar_down_links_max,
+                ),
                 lateral_pillar_links=lateral_pillars.get(p.topic_id, []),
                 degraded=c["degraded"],
             )
         )
         same_silo_ids = set(article_ids)
-        for a in p.articles:
+        for i, a in enumerate(p.articles):
+            # Within-silo cycle: each article links to the next (last -> first), so
+            # every article is some peer's successor => receives ≥1 inbound link.
+            # The no-orphan guarantee (§15.2 #3), independent of the pillar's links.
+            successor = article_ids[(i + 1) % n] if n >= 2 else None
             result.supporting_articles.append(
                 SupportingArticle(
                     article_id=a.id,
@@ -316,6 +378,7 @@ def run_architecture_generation(
                     lateral_article_links=_lateral_article_links(
                         a, same_silo_ids, cluster_centroids,
                         max_links=lateral_article_links_max,
+                        successor=successor,
                     ),
                 )
             )
