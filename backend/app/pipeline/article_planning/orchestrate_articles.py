@@ -343,7 +343,7 @@ def direct_plan_topic(topic: TopicInput) -> TopicPlan:
     primary, the rest as supporting keywords. Singletons are included as
     one-keyword articles (deliberate; the user opted to keep the long tail). Not
     degraded — this is an intentional path, not a fallback. Intent defaults to
-    informational; H2 outlines are left to the downstream Brief Generator."""
+    informational; H2 outlines are not produced here — the writer module owns them."""
     plan = TopicPlan(topic_id=topic.id, degraded=False)
     for g in topic.groupings:
         supporting = [k for k in g.keywords if _norm(k) != _norm(g.representative)]

@@ -487,7 +487,19 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
     # Persist the §8.1 estimate so the cost banner (§8.4) can compare estimate vs
     # the live actual on owner and under-cap VA runs — not only the approval path
     # (submit-for-approval persists its own; an owner-approved run keeps that one).
-    store.update_session(session_id, {"estimated_cost_usd": est["estimated_cost_usd"]})
+    # Best-effort: the run is already claimed (try_mark_running set status=running),
+    # so a failed estimate write must NOT prevent submit_expand — otherwise the
+    # session would strand as `running` with no job. The estimate is cosmetic (the
+    # banner just loses its comparison line); the run itself is unaffected.
+    try:
+        store.update_session(
+            session_id, {"estimated_cost_usd": est["estimated_cost_usd"]}
+        )
+    except Exception as exc:  # noqa: BLE001 — never strand the claimed run
+        logger.warning(
+            "estimate_persist_failed",
+            extra={"event": "estimate_persist_failed", "reason": repr(exc)},
+        )
     jobs.submit_expand(session_id)
     return {"status": "running", "session_id": session_id}
 

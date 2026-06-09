@@ -1,26 +1,29 @@
 """Site architecture generation (PRD §7.11, prompt B.3).
 
 The final pipeline step. Each accepted silo (that produced at least one article)
-becomes a pillar: a higher-level overview page that links down to its supporting
-articles. Opus 4.7 writes the pillar's *editorial* fields (title, target keyword,
-summary, H2 outline) — the "structured editorial reasoning" §7.11 wants the LLM
-for — while the *linking matrix* is assembled deterministically so the §15.2
-acceptance rules hold by construction rather than by trusting the model:
+becomes a pillar: a higher-level overview page that links down to a few of its
+supporting articles. Opus 4.7 writes the pillar's *editorial* fields (title,
+target keyword, summary) — the "structured editorial reasoning" §7.11 wants the
+LLM for; H2 outlines are NOT produced here — they belong to the writer module.
+The *linking matrix* is assembled deterministically so the §15.2 acceptance rules
+hold by construction rather than by trusting the model:
 
   1. one pillar per accepted (article-bearing) silo;
   2. every supporting article links up to its pillar (mandatory);
-  3. no orphans — every supporting article is reachable from its pillar's
-     down-links, so the graph has no orphan node;
-  4. pillars link laterally only where topic-embedding cosine > the threshold.
+  3. no orphans — every supporting article receives ≥1 inbound link via the
+     within-silo article cycle (each article links to a successor), independent of
+     how few children the pillar links down to;
+  4. pillars link laterally only where topic-embedding cosine > the threshold;
+  5. ≤5 outbound internal links per page (owner rule): pillar = ≤3 down-links +
+     ≤2 peer pillars; article = 1 up-link + ≤4 laterals.
 
 This mirrors M5's cross-topic dedup, which was likewise made deterministic
 (reproducible + testable) rather than a single LLM call. Divergence from B.3
 (which has the model emit the link structure too) is intentional and flagged.
 
 A per-pillar LLM failure degrades that pillar to a deterministic stub (title =
-silo name, outline from its article names) without sinking the run; if *every*
-pillar degrades the caller treats it as an error (the architecture would just be
-silo names relabeled).
+silo name, empty outline) without sinking the run; if *every* pillar degrades the
+caller treats it as an error (the architecture would just be silo names relabeled).
 """
 
 import logging
