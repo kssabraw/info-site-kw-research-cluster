@@ -8,6 +8,21 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
 > and deployed; nothing is mid-flight.
 
+_2026-06-09 (§9.9 Writer-integration decisions locked): **All six §9.9
+open decisions resolved.** (1) Worker concurrency cap = **3** in-flight (M6
+default; revisit after first batch). (2) Re-plan cascade = **warn +
+cascade-drop** queued schedules (FK already cascades). (3) Dangling-link
+policy = **leave + report** (link_injector keeps the URL; link-health flags
+it; not auto-pruned, not batch-blocking). (4) VA scope = **VA full access
+on own sessions** (schedule + view + regenerate, RLS-scoped). (5) VA cost
+gate (new, derived from #4) = **`Schedule all` > $90 → owner approval** via
+the existing M9 `/approvals` queue (new threshold
+`writer_schedule_approval_threshold_usd = 90.0`, independent of M9's $5
+`va_soft_cap_usd`; per-article `Generate now` not gated). (6) Writer model =
+**Sonnet 4.6** for all section calls (PRD §17 lock; ~$0.20–$0.40/article).
+§9.11 locked-decisions table updated. M12 (Writer foundation) is now
+unblocked — sketch in §9.10._
+
 _2026-06-09 (architecture is now LLM-free; writer owns pillar editorial):
 **Removed the per-pillar architect Opus call entirely** (owner decision, merged to
 `main` `713da24`). Site-architecture generation is now **fully deterministic** — the
@@ -684,20 +699,36 @@ Concurrency cap: **3 in-flight** (LLM rate-limit guard). So "all at once" on
 5. **Review** (new): Article view / Schedule overview. Owner can regenerate or
    pause/cancel the batch. Link-health report flags dangling targets.
 
-### 9.9 Open decisions (resolve before drafting M12)
+### 9.9 Open decisions — **RESOLVED 2026-06-09**
 
-1. **Concurrency cap default** (3?) — fine-tune against Anthropic rate limits
-   on first live run.
-2. **Re-plan cascade** — M5/M7's `reset_article_planning` deletes clusters →
-   FK cascade drops pending schedules. UI should warn before re-plan;
-   alternative is to re-target by `cluster.name` match (more complex).
-3. **Dangling-link policy** when a child article is cancelled/failed —
-   leave + report (default), auto-prune, or block.
-4. **VA scope** — can a VA schedule + view articles, or owner-only? Wizard
-   surface implications.
-5. **Anthropic model tier for Writer section calls** — PRD §17 locks Sonnet;
-   this repo's M5/M6 orchestrator uses Opus 4.7. Confirm: Sonnet for
-   cost/budget vs. Opus on pillars only (cf. §8.3 "two-pass" cost note).
+All six items resolved in conversation; see §9.11 for the locked decisions
+table.
+
+1. **Concurrency cap default** — **3** (the proposed default; revisit after
+   first live batch against real Anthropic Sonnet rate limits).
+2. **Re-plan cascade** — **Warn + cascade-drop.** UI warns "this will cancel
+   N pending schedules"; on confirm, the existing FK cascade drops them.
+   Matches the existing pattern where re-plan/regate already discards manual
+   edits. Re-target-by-name rejected as too brittle.
+3. **Dangling-link policy** — **Leave + report.** Link stays in prose; the
+   link-health report (§9.5) flags it; owner can retry the failed article or
+   accept the broken link. Auto-prune hides info; blocking the batch on a
+   single transient 529 is too fragile.
+4. **VA scope** — **VA full access on own sessions** (RLS-scoped to sessions
+   they own). VA can schedule, view, regenerate. *But*: see #5 — material
+   spend (>$90 per `Schedule all` batch) routes through the approval queue.
+5. **VA cost gate (new, derived from #4)** — **`Schedule all` > $90 → owner
+   approval required.** New threshold `writer_schedule_approval_threshold_usd
+   = 90.0` (independent of the M9 `va_soft_cap_usd = 5.0` which gates
+   `/expand`). When a VA's `Schedule all` estimate exceeds the threshold the
+   modal shows **Submit for approval** instead of **Schedule now** and reuses
+   the M9 `/approvals` queue + decision modal. Per-article `Generate now` for
+   a single article is well under any reasonable cap; gate only the batch.
+   Owner/admin runs are never gated.
+6. **Writer model tier** — **Sonnet 4.6 for all section calls** (PRD §17
+   lock). ~$0.20–$0.40/article per §9.1. Predictable cost, easiest to ship.
+   §8.3's Opus-on-pillars / Haiku+Opus variants flagged for revisit if Sonnet
+   quality disappoints on the first live batch.
 
 ### 9.10 Likely milestone sequence
 
@@ -726,6 +757,12 @@ Concurrency cap: **3 in-flight** (LLM rate-limit guard). So "all at once" on
 | Internal-link anchors | **Deterministic injection** (code-finds keyword + wraps; "Related articles" fallback). |
 | Internal-link URLs | **Absolute** (`sessions.site_base_url` required to schedule). |
 | Cron mechanism | **In-process asyncio loop** (matches M5 `app/jobs.py`). |
+| Worker concurrency cap | **3 in-flight** (revisit after first live batch). |
+| Re-plan cascade | **Warn + cascade-drop** queued schedules (FK already cascades; UI shows the count). |
+| Dangling-link policy | **Leave + report.** link_injector keeps the URL; link-health report flags it. |
+| VA scope | **Full access on own sessions** (RLS-scoped). VA can schedule + view + regenerate. |
+| VA cost gate (Writer) | **`Schedule all` > $90 → owner approval** via existing M9 `/approvals` queue. New `writer_schedule_approval_threshold_usd = 90.0` (independent of M9's $5 `va_soft_cap_usd`). Per-article `Generate now` not gated. |
+| Writer model tier | **Sonnet 4.6 for all section calls** (PRD §17). ~$0.20–$0.40/article. Opus/Haiku variants flagged for revisit if Sonnet quality disappoints. |
 
 ### 9.12 Relationship to §8
 
