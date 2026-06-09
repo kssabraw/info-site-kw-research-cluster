@@ -532,6 +532,8 @@ export interface ArchitectureJson {
   pillars: ArchitecturePillar[];
   supporting_articles: ArchitectureSupportingArticle[];
   skipped_silos: string[];
+  // §15.2 #3 audit (present on architectures generated 2026-06-09+).
+  link_health?: ArchitectureLinkHealth;
 }
 
 export interface SiteArchitecture {
