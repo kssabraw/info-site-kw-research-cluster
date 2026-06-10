@@ -151,11 +151,28 @@ the sandbox can't exercise (no Supabase/Railway/OpenAI/DataForSEO egress) — i.
 browser/deployed-stack validation of M8 (VA routing + wizard), M9 (approval
 round-trip), M10 (Storage upload + signed-URL download), and M11 (live cost
 numbers within ±25% of §8.1, the cost banner, the debug view). The full checklist
-is in `handoff.md §2`. There is no "next milestone" to build; the owner decides
-when to merge M11 and run the live validation.
+is in `handoff.md §2`. There is no "next milestone" to build.
 
-**M11 — Cost confirmation + observability (PRD §15.1 / §16): complete, pending
-review + live validation.** Built on `claude/exciting-davinci-tZGwH` (this
+> **Reconciliation note (2026-06-10, see v1.11 below):** M11 is now **merged to
+> `main` and deployed** (meter confirmed working in prod 2026-06-09) — earlier text
+> in this section and the M11 summary below that frames the merge as still pending is
+> point-in-time history. Several **post-M11 refinements** have since landed on `main`
+> and **supersede the M6/M11 descriptions in the historical summaries below** — they
+> are logged in `handoff.md`'s dated entries (2026-06-09): (1) **§7.8 metrics
+> enrichment is now BUILT** (migration `keyword_metrics`, 2026-05-29) — every "metrics
+> unbuilt / can't be exercised" note below is stale; (2) **site-architecture
+> generation is now fully LLM-free** — the per-pillar Opus call was removed (the M6
+> summary's "Opus writes the editorial fields" no longer holds); (3) **H2 outlines are
+> now writer-owned** — the M5 orchestrator + M6 architect emit empty outlines; (4)
+> **internal links capped at ≤5/page** with a within-silo article-cycle no-orphan
+> guarantee; (5) the **Opus cost rate was corrected 15/75 → 5/25 per 1M tok** in
+> `cost_meter.py`; (6) **`estimated_cost_usd` is now persisted on every run path** (was
+> NULL on owner + under-cap VA runs). Next planned feature work is **M12 (Writer
+> module)**, blocked on fetching the Blog Writer PRDs into `docs/` (`handoff.md §9.13`).
+
+**M11 — Cost confirmation + observability (PRD §15.1 / §16): complete, merged to
+`main` & deployed (2026-06-09); §15.3 live-validation remains.** Built on
+`claude/exciting-davinci-tZGwH` (this
 session's pinned branch, off `main` at the M10 merge `4b10ed2`). Backend **176
 tests pass** (165 prior + 11 new in `tests/test_cost_meter.py` + the owner-only
 `/debug` role test), ruff clean, import smoke OK; frontend builds strict-clean
@@ -169,7 +186,9 @@ sandbox-validated** (egress blocked) — validate on the deployed stack.
   the real per-call charge** from its task envelope (`task["cost"]`); **LLM cost is
   derived from real response token usage** via a rate table (Opus 15/75, gpt-5.4
   5/15 per 1M tok — *rates are estimates, flagged for calibration*; embeddings
-  0.02/1M). The background jobs (`app/cost_attribution.py::metered_run`) bind the
+  0.02/1M). **[Superseded 2026-06-09: the Opus rate was corrected to 5/25 per 1M tok
+  — the 15/75 figure was ~3× too high — and `claude-opus-4-8` added at the same rate;
+  see `handoff.md`.]** The background jobs (`app/cost_attribution.py::metered_run`) bind the
   meter, spawn a daemon that flushes `actual_cost_usd` + `cost_breakdown` every
   `cost_flush_interval_s` (=10s, §16.4), and do a final lock-serialized flush on
   exit (incl. on failure → partial cost persists). Silo discovery (synchronous in
@@ -214,9 +233,11 @@ sandbox-validated** (egress blocked) — validate on the deployed stack.
   "±25% of §8.1" check is honest on the DataForSEO-dominated total but carries LLM
   estimation error until the rates are calibrated against real OpenAI/Anthropic
   invoices after the first ~10 production runs (same caveat as `cost.py`).
-- **§7.8 metrics enrichment is still unbuilt**, so §15.3 #7's literal "standard +
-  metrics **on**" scenario can't be exercised as written; validate at metrics-off
-  and treat the +metrics line as estimate-only. Flagged.
+- **§7.8 metrics enrichment** was unbuilt at M11 sign-off, so §15.3 #7's literal
+  "standard + metrics **on**" scenario couldn't be exercised. **[Superseded
+  2026-06-09: metrics enrichment is now BUILT — migration `keyword_metrics` shipped
+  2026-05-29 — so the "+metrics" line can now be exercised; the cost meter still
+  reads the actual `enrich_with_metrics` flag, false for VAs.]**
 - **`cost_breakdown` is keyed by pipeline *phase* (job)** — `silo_discovery`,
   `expand`, `article_planning`, `architecture`, `regate`, `recursive_fanout` — not
   by §8.1 line item. Finer per-endpoint cost lives in the per-call structured logs
@@ -873,3 +894,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.8 | 2026-05-26 | M9 (approval workflow, §11.3) **complete & merged to `main`** (per owner instruction; merged `--no-ff`, remote `main` was at `27f5731`, conflict-free; still pending live validation). No schema/migration (all approval columns + the `pending_approval`/`rejected` statuses exist from M1). New pure cost model `backend/app/cost.py` (§8.1-derived; standard/comprehensive+metrics stay under the $5 VA cap, oversized + recursive runs exceed it). Gate placed at the cost-bearing `/expand` (the conservative read of §11.3's whole-run framing, since silo discovery already runs at `POST /sessions`). New endpoints: `GET /workspace-settings`, `GET /sessions/{id}/cost-estimate`, `POST /sessions/{id}/submit-for-approval` + `/cancel-approval` (VA), `GET /approvals` + `POST /sessions/{id}/approve` + `/reject` (owner-only); `/summary` gained an `approval` block. Frontend: wizard CostStep fetches the real estimate + branches Run-now vs Submit-for-approval → new WaitingStep (30s poll, cancel, adjust-&-resubmit on reject); Owner Approvals page (`/approvals`) + decision modal; AppShell owner-only Approvals nav badge. Built on `claude/jolly-heisenberg-Z06PH`; 139 backend tests (9 cost + 14 approvals new) + ruff clean, frontend builds; not browser-validated. Flagged: gate at `/expand`; reject reuses the same session (no clone); queue "submitted at" = `created_at`; estimate reads actual (false) metrics flag; owner-offline approval keeps M8's client-driven expand→plan chain; `recursive_fanout` still not a VA wizard control. **M10 (CSV export, §12) is next.** |
 | 1.10 | 2026-05-29 | M11 (cost + observability, §16) **complete, pending review + live validation** — the final milestone; M1–M11 now all built. Real-metered per-step cost attribution: a `CostMeter` (`app/cost_meter.py`) accumulates DataForSEO's real per-call charge + token-derived LLM cost, flushed live to `sessions.actual_cost_usd` + a new `cost_breakdown` jsonb every 10s from the background jobs (`app/cost_attribution.py`), cumulative across a session's runs. A `ContextThreadPoolExecutor` (`app/concurrency.py`) propagates the meter + `session_id`/`correlation_id` into the pipeline's nested API-call threads (also closing a latent §16.3 logging gap). The four external-call sites now populate the `cost_usd` log field. `GET /summary` carries a live `cost` block → a `CostBanner` on the Owner workspace + VA progress screen (§8.4). Owner-only `GET /sessions/{id}/debug` (require_owner) + `owner/DebugView.tsx` expose `statistical_clustering_log` + `orchestrator_log` + cost (§15.3 #8). Migration `20260529000000_session_cost_breakdown.sql` applied live via MCP. Built on `claude/exciting-davinci-tZGwH` (off `main` `4b10ed2`); 176 backend tests (11 new) + ruff clean, frontend builds. **Not sandbox-validated** (egress). Flagged: LLM $/token rates are estimates (DataForSEO cost is real); breakdown keyed by pipeline phase not §8.1 line item; cost cumulative across re-runs; §7.8 metrics still unbuilt so §15.3 #7 "+metrics" can't be exercised. Active milestone → v1 MVP feature-complete; remaining = the §15.3 live-validation checklist. |
 | 1.9 | 2026-05-28 | M10 (CSV export, §12) **complete & merged to `main`** (per owner instruction; merged `--no-ff`, remote `main` was at the M9 merge `1e0db30`, conflict-free; still pending live validation; built on `claude/wonderful-allen-oTKaO`). Three formats from current Postgres state via **pure, unit-tested** builders (`backend/app/csv_export.py`): flat (one row/keyword, §9.1 columns, Volume/KD/CPC blank), topic_grouped (one CSV/topic delivered as a single `.zip`), architecture (one row/page — pillar or supporting article — name-resolved links; 400 if no architecture). Backend uploads snapshots to the new private **`csv-snapshots`** Storage bucket under `{user_id}/{session_id}/{ts}-{rand8}.{ext}` via the service client and serves a **time-limited signed URL** (`csv_signed_url_ttl_s`=3600); re-download re-signs fresh. New router `backend/app/api/exports.py`: `POST /sessions/{id}/export?format=…` (sync, both roles, RLS-scoped), `GET /sessions/{id}/exports`, `GET /exports/{id}/download`. Migration `20260528000000_csv_exports.sql` (`fanout.csv_exports` + real RLS via a sessions-join) **applied live via MCP**; the private bucket **created via MCP**. Frontend: new **Exports tab** (`owner/views/ExportsView.tsx`) on both Owner + VA workspaces; `shared/api.ts` `createExport`/`listExports`/`downloadExport`. 165 backend tests (14 csv-builder + 12 export-API new) + ruff clean; frontend builds strict-clean. **CSV formula-injection hardening** on every text cell; signed URLs carry a server-side `Content-Disposition` attachment name; a failed export removes its orphan Storage object. **Storage upload / signed URLs / live download round-trip NOT sandbox-validated — deploy-only.** Flagged: sync generation; flat/topic_grouped use the surviving pool (active/excluded/covered); topic_grouped = one zip; "export selected" (§9.1) deferred. **M11 (cost + observability) is next.** |
+| 1.11 | 2026-06-10 | **Reconciliation pass — no code change; doc sync only.** Brought the "Active milestone" current-state block in line with post-M11 work already shipped to `main` (logged in `handoff.md`'s 2026-06-09/10 dated entries). Reconciled: **M11 is merged & deployed** (meter live in prod; earlier "pending merge / pending validation" framing is now point-in-time history); **§7.8 metrics enrichment is BUILT** (migration `keyword_metrics`, 2026-05-29 — every "metrics unbuilt / +metrics can't be exercised" note is stale); **site-architecture generation is now fully LLM-free** (per-pillar Opus call removed — supersedes the M6 "Opus writes the editorial fields" description); **H2 outlines are writer-owned** (M5 orchestrator + M6 architect emit empty outlines); **internal links capped ≤5/page** (within-silo article-cycle no-orphan guarantee); **Opus cost rate corrected 15/75 → 5/25 per 1M tok**; **`estimated_cost_usd` persisted on every run path**. Historical per-milestone summaries left intact as record; superseded current-state claims marked inline. Remaining: §15.3 live-validation checklist (`handoff.md §2`); next feature work M12 (Writer), blocked on the Blog Writer PRD fetch (`handoff.md §9.13`). |
