@@ -7,6 +7,63 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > checks the sandbox can't run). All of the 2026-06-09 work below — writer-owned
 > titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
 > and deployed; nothing is mid-flight.
+>
+> **Separately, M12 (Writer foundation) is now unblocked in terms of design
+> decisions** (§9.9 / §9.11 — all six items locked 2026-06-09) **but blocked on
+> source PRDs.** The AR Tools Blog Writer bundle isn't in `docs/`; §9 was built
+> from a conversation summary. Before M12 drafting starts, fetch the Tier-1/2
+> artifacts listed in **§9.13** — the owner is running this fetch in a separate
+> chat (2026-06-10) and will paste results back. When that lands, drop the docs
+> into `docs/`, reference them from CLAUDE.md, then draft M12. Until then,
+> anything written for M12 is a sketch with `# TODO: real PRD says…` markers.
+
+_2026-06-10 (M12 prerequisites identified — fetch needed before drafting):
+**Cannot draft M12 from this repo alone.** §9 references the AR Tools Blog
+Writer bundle by step number (Steps 3.5a / 3.5b / 3.6 / 3.8 / 4F / §5.8.8 /
+§17 Call Inventory) without ever defining the steps — the source PRDs aren't
+in `docs/`. The only Blog Writer artifact in the repo is the §9 summary
+itself. Tier-1 fetch list (must have before M12 drafting):
+**(1.1) Writer PRD #1 v1.7** — verbatim, with full step list (1→10),
+section-call prompts, Brief/SIE input schemas, `article_json` output schema,
+§17 Call Inventory, exact behavior of `schema_version_effective:
+"1.7-no-context"` and `no_citations: true`, topic-adherence filter mechanic
++ threshold, Agree/Promise/Preview template, CTA template, paragraph-cap +
+per-H2-floor numeric values. **(1.2) Engineering Spec PRD** — JSON Schemas
++ module-to-module contracts. Tier-2 (workable but risky without):
+**(2.3)** Brief Gen v2.3's `intent_format_template` table (8 rows,
+intent_type → format directives); **(2.4)** Content Quality threshold values
+if not in 1.1; **(2.5)** 3–5 sample Writer outputs from AR-Internal-Tools
+`public.module_outputs` (with matching brief + sie rows by `run_id`) —
+ground truth for adapter shape. Tier-3 (huge accelerator): pointer to
+AR-Internal-Tools Writer source + production model IDs. **Not needed**
+(skipped modules): SIE / Brief Gen full PRDs / Research / Sources Cited /
+Content Quality (beyond thresholds) / Suite Architecture PRDs.
+**Out-of-band action:** owner is starting a separate chat with access to the
+Blog Writer bundle (AR-Internal-Tools repo / Drive folder / AR-Internal-Tools
+Supabase `module_outputs`) to fetch these. A self-contained fetch prompt was
+drafted in-session — has tier-tagged shopping list + verbatim-not-summarized
+rule + per-section output-format spec. When the fetch returns, drop the
+artifacts into `docs/blog-writer-prd-v1_7.md` etc. and reference them from
+this file + CLAUDE.md before M12 drafting starts. Also flagged: with H2s now
+empty at cluster level (2026-06-09 writer-ownership decision), `brief.
+heading_structure[]` is much thinner than the external Writer PRD assumes —
+the Writer will have to generate body H2s itself, possibly via a new step
+the external PRD didn't include. Worth surfacing during M12 design._
+
+_2026-06-09 (§9.9 Writer-integration decisions locked): **All six §9.9
+open decisions resolved.** (1) Worker concurrency cap = **3** in-flight (M6
+default; revisit after first batch). (2) Re-plan cascade = **warn +
+cascade-drop** queued schedules (FK already cascades). (3) Dangling-link
+policy = **leave + report** (link_injector keeps the URL; link-health flags
+it; not auto-pruned, not batch-blocking). (4) VA scope = **VA full access
+on own sessions** (schedule + view + regenerate, RLS-scoped). (5) VA cost
+gate (new, derived from #4) = **`Schedule all` > $90 → owner approval** via
+the existing M9 `/approvals` queue (new threshold
+`writer_schedule_approval_threshold_usd = 90.0`, independent of M9's $5
+`va_soft_cap_usd`; per-article `Generate now` not gated). (6) Writer model =
+**Sonnet 4.6** for all section calls (PRD §17 lock; ~$0.20–$0.40/article).
+§9.11 locked-decisions table updated. M12 (Writer foundation) is now
+unblocked — sketch in §9.10._
 
 _2026-06-09 (architecture is now LLM-free; writer owns pillar editorial):
 **Removed the per-pillar architect Opus call entirely** (owner decision, merged to
@@ -684,20 +741,36 @@ Concurrency cap: **3 in-flight** (LLM rate-limit guard). So "all at once" on
 5. **Review** (new): Article view / Schedule overview. Owner can regenerate or
    pause/cancel the batch. Link-health report flags dangling targets.
 
-### 9.9 Open decisions (resolve before drafting M12)
+### 9.9 Open decisions — **RESOLVED 2026-06-09**
 
-1. **Concurrency cap default** (3?) — fine-tune against Anthropic rate limits
-   on first live run.
-2. **Re-plan cascade** — M5/M7's `reset_article_planning` deletes clusters →
-   FK cascade drops pending schedules. UI should warn before re-plan;
-   alternative is to re-target by `cluster.name` match (more complex).
-3. **Dangling-link policy** when a child article is cancelled/failed —
-   leave + report (default), auto-prune, or block.
-4. **VA scope** — can a VA schedule + view articles, or owner-only? Wizard
-   surface implications.
-5. **Anthropic model tier for Writer section calls** — PRD §17 locks Sonnet;
-   this repo's M5/M6 orchestrator uses Opus 4.7. Confirm: Sonnet for
-   cost/budget vs. Opus on pillars only (cf. §8.3 "two-pass" cost note).
+All six items resolved in conversation; see §9.11 for the locked decisions
+table.
+
+1. **Concurrency cap default** — **3** (the proposed default; revisit after
+   first live batch against real Anthropic Sonnet rate limits).
+2. **Re-plan cascade** — **Warn + cascade-drop.** UI warns "this will cancel
+   N pending schedules"; on confirm, the existing FK cascade drops them.
+   Matches the existing pattern where re-plan/regate already discards manual
+   edits. Re-target-by-name rejected as too brittle.
+3. **Dangling-link policy** — **Leave + report.** Link stays in prose; the
+   link-health report (§9.5) flags it; owner can retry the failed article or
+   accept the broken link. Auto-prune hides info; blocking the batch on a
+   single transient 529 is too fragile.
+4. **VA scope** — **VA full access on own sessions** (RLS-scoped to sessions
+   they own). VA can schedule, view, regenerate. *But*: see #5 — material
+   spend (>$90 per `Schedule all` batch) routes through the approval queue.
+5. **VA cost gate (new, derived from #4)** — **`Schedule all` > $90 → owner
+   approval required.** New threshold `writer_schedule_approval_threshold_usd
+   = 90.0` (independent of the M9 `va_soft_cap_usd = 5.0` which gates
+   `/expand`). When a VA's `Schedule all` estimate exceeds the threshold the
+   modal shows **Submit for approval** instead of **Schedule now** and reuses
+   the M9 `/approvals` queue + decision modal. Per-article `Generate now` for
+   a single article is well under any reasonable cap; gate only the batch.
+   Owner/admin runs are never gated.
+6. **Writer model tier** — **Sonnet 4.6 for all section calls** (PRD §17
+   lock). ~$0.20–$0.40/article per §9.1. Predictable cost, easiest to ship.
+   §8.3's Opus-on-pillars / Haiku+Opus variants flagged for revisit if Sonnet
+   quality disappoints on the first live batch.
 
 ### 9.10 Likely milestone sequence
 
@@ -726,6 +799,12 @@ Concurrency cap: **3 in-flight** (LLM rate-limit guard). So "all at once" on
 | Internal-link anchors | **Deterministic injection** (code-finds keyword + wraps; "Related articles" fallback). |
 | Internal-link URLs | **Absolute** (`sessions.site_base_url` required to schedule). |
 | Cron mechanism | **In-process asyncio loop** (matches M5 `app/jobs.py`). |
+| Worker concurrency cap | **3 in-flight** (revisit after first live batch). |
+| Re-plan cascade | **Warn + cascade-drop** queued schedules (FK already cascades; UI shows the count). |
+| Dangling-link policy | **Leave + report.** link_injector keeps the URL; link-health report flags it. |
+| VA scope | **Full access on own sessions** (RLS-scoped). VA can schedule + view + regenerate. |
+| VA cost gate (Writer) | **`Schedule all` > $90 → owner approval** via existing M9 `/approvals` queue. New `writer_schedule_approval_threshold_usd = 90.0` (independent of M9's $5 `va_soft_cap_usd`). Per-article `Generate now` not gated. |
+| Writer model tier | **Sonnet 4.6 for all section calls** (PRD §17). ~$0.20–$0.40/article. Opus/Haiku variants flagged for revisit if Sonnet quality disappoints. |
 
 ### 9.12 Relationship to §8
 
@@ -741,3 +820,83 @@ neither of the two paths §8.5 #1 originally framed.
 If §8's publish layer ships later, it reads `fanout.article_outputs`
 (Markdown + HTML already serialized + internally linked) and pushes them
 into the repo. No further generation step required.
+
+### 9.13 M12 prerequisites — artifact fetch (2026-06-10)
+
+§9 was designed from a **conversation summary** of the AR Tools Blog Writer
+PRD bundle, not from the PRDs themselves. The source artifacts are NOT in
+`docs/`. Before M12 drafting can produce more than a sketch, fetch:
+
+**Tier 1 (blockers — required to start drafting M12):**
+1. **Writer PRD #1, v1.7** verbatim. Must include:
+   - Complete ordered step list (Step 1 → Step 10) with full descriptions
+   - All section-call prompts (verbatim, not paraphrased)
+   - JSON schema for Brief input
+   - JSON schema for SIE input
+   - JSON schema for `article_json` output
+   - **§17 Call Inventory** (which step → Sonnet vs Haiku, max-tokens, retries)
+   - Exact behavior of `schema_version_effective: "1.7-no-context"`
+     (specifically what Steps 3.5a / 3.5b / 3.6 / 3.8 do when flipped off)
+   - Exact behavior of `no_citations: true` (specifically Step 4F + §5.8.8)
+   - Topic-adherence filter mechanic (LLM judge vs cosine vs both) + threshold
+   - Agree / Promise / Preview intro template (verbatim)
+   - CTA template / options
+   - Paragraph-length cap (units + value)
+   - Per-H2 body-length floor (units + value)
+   - Banned-term regex hook spec
+2. **Engineering Spec PRD** — JSON Schemas + module-to-module contracts.
+
+**Tier 2 (gap-fillers — workable but risky without):**
+3. **Brief Generator v2.3 `intent_format_template` table** — 8 rows
+   (`intent_type` → `format_directives`). The adapter (§9.2) populates
+   `brief.format_directives` from this lookup.
+4. **Content Quality threshold values** if not already in 1.1.
+5. **3–5 sample Writer outputs from AR-Internal-Tools Supabase** with
+   matching Brief + SIE inputs (same `run_id`). SQL sketch:
+   ```sql
+   select r.id as run_id, r.keyword, r.intent_override,
+          mo.module_name, mo.output_json, mo.cost_usd, mo.duration_ms, mo.attempt
+     from public.runs r
+     join public.module_outputs mo on mo.run_id = r.id
+    where mo.status = 'complete'
+      and r.id in (
+        select run_id from public.module_outputs
+         where module_name = 'writer' and status = 'complete'
+         order by created_at desc limit 3
+      )
+    order by r.id, mo.module_name;
+   ```
+   These are ground truth — they win over the documented schemas if the two
+   disagree (and they usually disagree).
+
+**Tier 3 (huge accelerator):**
+6. **AR-Internal-Tools Writer source code pointer** — repo URL + file paths
+   + the entry function + Anthropic wrapper + prompt-template files. With
+   these we port instead of re-implement.
+7. **Anthropic model IDs in production** — exact `claude-sonnet-*` and
+   `claude-haiku-*` strings used by the Writer service. Lets the M11 cost
+   meter's `_LLM_RATES` reconcile.
+
+**NOT needed** (modules skipped in v1):
+- SIE PRD — flat `sie.terms.required[]` from supporting keywords; no
+  entity extraction in v1 (deliberate; see handoff exchange 2026-06-10).
+- Brief Generator full PRD beyond the `intent_format_template` table —
+  we adapt at runtime, not port.
+- Research & Citations PRD — `no_citations: true` short-circuits.
+- Sources Cited PRD — same.
+- Suite Architecture PRD — irrelevant when we run standalone.
+
+**Procedure:** owner runs a separate chat with access to the bundle (likely
+the AR-Internal-Tools repo / a Google Drive folder / the AR-Internal-Tools
+Supabase). A self-contained fetch prompt was drafted in-session (2026-06-10);
+the next session should expect the owner to paste back artifacts, then:
+1. Drop them into `docs/` (e.g. `docs/blog-writer-prd-v1_7.md`,
+   `docs/blog-writer-engineering-spec.md`, `docs/blog-writer-samples.md`).
+2. Reference them from `CLAUDE.md` "Key file locations" + this file's §9.
+3. Then start M12 drafting.
+
+**One issue worth raising during M12 design:** with `clusters.h2_outline`
+now empty at cluster level (2026-06-09 writer-ownership decision), the
+adapter's `brief.heading_structure[]` will be thinner than the external
+Writer PRD assumes — the Writer will have to generate body H2s itself,
+possibly via a new step the external PRD didn't originally include.
