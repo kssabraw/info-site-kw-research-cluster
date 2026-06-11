@@ -860,6 +860,19 @@ into the repo. No further generation step required.
 PRD bundle, not from the PRDs themselves. The source artifacts are NOT in
 `docs/`. Before M12 drafting can produce more than a sketch, fetch:
 
+_2026-06-11 update: **owner chose to wait for the PRD fetch before building M12**
+(no M12 code yet). In the meantime the live writer's **I/O contract + observable
+behaviors** were recovered directly from the AR-Internal-Tools prod DB via MCP and
+captured in **`docs/blog-writer-live-contract.md`** — this is Tier-2 item #5
+(sample outputs), partially obtained. Key corrections it records: real schema names
+are `module`/`input_payload`/`output_payload` (not `module_name`/`output_json`, so
+the SQL sketch below needs `module` not `module_name`); **brief is v2.6**, not v2.3
+(re-pull `format_directives`/`intent_format_template` from a v2.6 brief); the writer
+`article` is a **Markdown section array**, not an HTML blob; writer is **v1.7** as
+assumed. Still missing (Tier-1, blocks a faithful port): the verbatim prompts / step
+list / §17 Call Inventory and the production model IDs — those live in the writer
+service source, not the DB._
+
 **Tier 1 (blockers — required to start drafting M12):**
 1. **Writer PRD #1, v1.7** verbatim. Must include:
    - Complete ordered step list (Step 1 → Step 10) with full descriptions
