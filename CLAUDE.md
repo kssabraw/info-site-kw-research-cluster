@@ -103,6 +103,8 @@ The active milestone is tracked at the bottom of this file (`## Active milestone
 |---|---|
 | `docs/topic-fanout-prd-v1_7.md` | The PRD (current version). Always read before significant work. |
 | `handoff.md` | Session-continuity doc: live state, the §2 live-validation checklist, deploy/infra gotchas (§3), and the post-v1 plans (§8 site creation, §9 Writer integration). **Its dated entries are newer than the milestone history below — where they conflict, `handoff.md` wins.** |
+| `docs/blog-writer-prd-bundle.md` | The full AR Tools **Blog Writer 8-PRD bundle** (landed 2026-06-11) — the M12 source of truth: Content Writer v1.7 (§17 call inventory, §18 prompts, §20 golden example), Brief Gen v2.3, SIE, Research/Citations, Sources Cited, Content Quality, Suite Architecture, Engineering Spec. M12 ports **only the Writer** (in-process; not the 2-service topology the Eng Spec describes). |
+| `docs/blog-writer-live-contract.md` | Ground-truth writer **I/O contract** recovered from the AR-Internal-Tools prod DB. Reconciles against the bundle; **where the two disagree, the live contract wins** (e.g. brief runs v2.6 in prod vs v2.3 in the PRD). |
 | `docs/` | Historical PRD versions and supplementary design docs. |
 | `backend/app/main.py` | FastAPI entry point. |
 | `backend/app/pipeline/` | Pipeline orchestration (silo discovery → architecture). |

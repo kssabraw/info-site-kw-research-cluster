@@ -856,9 +856,52 @@ into the repo. No further generation step required.
 
 ### 9.13 M12 prerequisites — artifact fetch (2026-06-10)
 
+> **▶ RESOLVED 2026-06-11 — the bundle has landed; M12 is UNBLOCKED.** The owner
+> dropped the full 8-PRD bundle into **`docs/blog-writer-prd-bundle.md`** (8,867
+> lines, one concatenated file with `<!-- SOURCE FILE: … -->` markers per PRD):
+> **(1)** Content Writer v1.7 — incl. **§17 LLM Call Inventory** (exact model IDs,
+> max-tokens, temps, retries per call), **§18 Prompt Scaffolds** (verbatim),
+> **§19 Closures**, **§20 Golden Example**, the Step 1→12 flow, the
+> topic-adherence filter (cosine **0.62** to title), Agree/Promise/Preview + CTA
+> templates, paragraph cap (`max_sentences_per_paragraph`, default 4),
+> `min_h2_body_words` floors, and the 4 `schema_version_effective` values
+> (`1.7` / `1.7-no-context` / `1.7-degraded` / `1.7-legacy-h1`); **(2)** Brief
+> Generator **v2.3**; **(3)** SIE; **(4)** Research & Citations v1.1.1; **(5)**
+> Sources Cited v1.1; **(6)** Content Quality v1.0 (R1–R7); **(7)** Suite
+> Architecture v1.0; **(8)** Engineering Implementation Spec v1.1. The Tier-1/2/3
+> "still missing" list below is now SATISFIED, with these reconciliations to fold
+> into §9 before/while drafting M12:
+> - **Writer model split is MIXED, not all-Sonnet** (corrects §9.11): per §17,
+>   Title-gen + CTA + ICP-callout-judge use **`claude-haiku-4-5`**; section /
+>   intro / FAQ / conclusion / Key-Takeaways / brand-distillation+reconciliation
+>   use **`claude-sonnet-4-6`**. Degraded mode (`no_citations` + no `client_context`)
+>   skips the brand calls (2,3) and the ICP judge (10), so our port's hot calls are
+>   section(5)/intro(4)/FAQ(6)/conclusion(7)/takeaways(9) on Sonnet + title(1)/CTA(8)
+>   on Haiku.
+> - **Brief in the PRD is v2.3, but PRODUCTION runs v2.6** (see
+>   `blog-writer-live-contract.md`). The bundle's `intent_format_template` /
+>   `format_directives` are the v2.3 spec; the live v2.6 brief output is ground
+>   truth where they differ. Our adapter still synthesizes the brief, so this is a
+>   reference-reconciliation, not a blocker.
+> - **The Engineering Spec describes a 2-service topology** (platform-api
+>   orchestrator + pipeline-api with 5 sibling modules, FastAPI `BackgroundTasks`,
+>   `EXPECTED_MODULE_VERSIONS` validation). **We are NOT adopting that** — M12 ports
+>   ONLY the Writer module in-process into our existing backend (handoff §9.1 /
+>   §9.6 decision stands). The spec is informational for the I/O contracts, not the
+>   infra.
+> - **`no_citations` degraded path is first-class in v1.7** (`research.citations`
+>   empty → continue, `no_citations: true`, sections written without grounding —
+>   not an abort), exactly as §9.1 assumed.
+>
+> Cross-check the verbatim PRD against `docs/blog-writer-live-contract.md` (the
+> live I/O); where they disagree, the live contract wins (§9.13 ground-truth rule).
+> Next: draft M12 (port `backend/app/writer/` + adapter + `Generate now`), then
+> reference the bundle from CLAUDE.md "Key file locations" (done 2026-06-11).
+
 §9 was designed from a **conversation summary** of the AR Tools Blog Writer
-PRD bundle, not from the PRDs themselves. The source artifacts are NOT in
-`docs/`. Before M12 drafting can produce more than a sketch, fetch:
+PRD bundle, not from the PRDs themselves. ~~The source artifacts are NOT in
+`docs/`.~~ **[Now in `docs/blog-writer-prd-bundle.md` — see the resolved banner
+above.]** The original fetch list, kept for reference:
 
 _2026-06-11 update: **owner chose to wait for the PRD fetch before building M12**
 (no M12 code yet). In the meantime the live writer's **I/O contract + observable
