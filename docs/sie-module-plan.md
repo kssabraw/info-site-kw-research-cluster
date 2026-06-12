@@ -15,10 +15,13 @@
    options (DataForSEO content parsing / Claude-based extraction) remain
    declined. This retires handoff §9.1's "no new third-party deps" line
    (owner decision).
-3. **Sequencing = SIE first:** **M12 = SIE**, **M13 = Writer**
-   (`docs/writer-module-plan.md`, re-numbered from M12), **M14 = scheduling +
-   link injection**. The first articles ever generated are born term/entity-
-   enriched.
+3. **Sequencing = SIE first:** **M12 = SIE**, then *(amended later same
+   day — the full Brief Generator was pulled into scope at write time)*
+   **M13 = Brief Generator** (`docs/brief-generator-module-plan.md`),
+   **M14 = Writer** (`docs/writer-module-plan.md`), **M15 = scheduling +
+   link injection**. At write time Brief Gen and SIE are independent and run
+   in parallel as stage 1 of `run_article_job`; the Writer is stage 2. The
+   first articles ever generated are born term/entity-enriched.
 4. **Trigger timing (locked 2026-06-12): SIE runs lazily, at write time
    only.** It executes solely as the first stage of generating a specific
    article — M13's `run_article_job` (cache check → run if missing/stale →

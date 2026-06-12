@@ -10,8 +10,11 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 >
 > **Separately, the post-v1 sequence was re-set on 2026-06-12 (owner
 > decisions; see that day's dated entries): M12 = SIE Term & Entity module
-> (`docs/sie-module-plan.md`), M13 = Writer (`docs/writer-module-plan.md`),
-> M14 = scheduling + link injection.** The AR Tools Blog Writer bundle is in
+> (`docs/sie-module-plan.md`), M13 = Brief Generator
+> (`docs/brief-generator-module-plan.md`), M14 = Writer
+> (`docs/writer-module-plan.md`), M15 = scheduling + link injection.
+> Both Brief Gen and SIE run lazily at write time only (parallel stage 1 of
+> `run_article_job`) — never during keyword research.** The AR Tools Blog Writer bundle is in
 > the repo (`docs/blog-writer-pipeline-bundle.md`, all 8 PRDs verbatim — the
 > §9.13 fetch is satisfied), both build plans are drafted and reconciled
 > against it, and SIE runs **ScrapeOwl + TextRazor as newly provisioned
@@ -20,6 +23,35 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > **Before M12 live-validation: owner provisions `SCRAPEOWL_API_KEY` +
 > `TEXTRAZOR_API_KEY` at the Railway project level.** Plan-level flags
 > awaiting sign-off: writer plan §8 (six items) + SIE plan §9 (five items).
+
+_2026-06-12 (sixth pass — full Brief Generator pulled into scope, write-time
+only): **The complete Brief Generator pipeline (PRD #2 v2.3, Steps 0–11) now
+runs for every article at write time** (owner decision; rationale: the process
+must be identical for every article). Same lazy rule as SIE: it executes only
+as a stage of generating a specific article, never during keyword
+research/planning, never bulk-prefetched. **Sequence re-set again: M12 = SIE →
+M13 = Brief Generator (new `docs/brief-generator-module-plan.md`) → M14 =
+Writer → M15 = scheduling + link injection.** Provider audit (from the PRD's
+own cost model): **zero new services** — Reddit search AND the 4-LLM fan-out
+(ChatGPT/Claude/Gemini/Perplexity) are DataForSEO endpoints (Reddit search +
+"LLM Responses"; verify the latter is enabled on our plan), alongside SERP /
+PAA / autocomplete / suggestions we already use; embeddings are OpenAI
+`text-embedding-3-large` **inside Brief Gen only** (PRD-calibrated gates
+0.55/0.78/0.65/0.75 — flagged scoped exception to the app's 3-small lock).
+Step 12 (silo identification) is **skipped** (this app owns silos;
+`discarded_headings` persisted for future spin-off intel — flagged). New
+`fanout.briefs` cache mirrors `keyword_analyses` (keyword+location, 7-day,
+RLS on day one); new `brief_generation` meter phase. **Writer-plan impact:**
+adapter calls A1–A4 dissolve (Brief Gen output IS Writer Input A), deltas
+Δ1/Δ2 dissolve, H3s + authority-gap sections return, `clusters.adapter_cache`
+dropped, the stub fallback demoted to test fixture (a Brief Gen abort fails
+the run — no thinner-brief fallback in prod). Cost per brief $0.37–$0.91
+(ceiling $1.00); per-article totals now ≈ **$0.92–$1.96 and ~3–5 min**
+(brief ∥ SIE, then Writer); a 315-article session ≈ $290–620 spread across
+the drip window. Six flags await sign-off in the brief-gen plan §7 (incl. the
+v1.7-§5 Step-2 spec gap — sub-source mechanics reconstructed from the v2.x
+doc; fetch v1.7 §5 or sample `briefs_cache` rows if ambiguity bites). Docs
+only; nothing built._
 
 _2026-06-12 (fifth pass — SIE NER provider amended): **Google Cloud NLP →
 TextRazor** for SIE Module-11 entity extraction (owner decision, amending the
@@ -914,27 +946,33 @@ table.
    §8.3's Opus-on-pillars / Haiku+Opus variants flagged for revisit if Sonnet
    quality disappoints on the first live batch.
 
-### 9.10 Likely milestone sequence — **RE-SET 2026-06-12 (owner): SIE first**
+### 9.10 Likely milestone sequence — **RE-SET 2026-06-12 (owner; revised twice same day)**
 
 - **M12 — SIE Term & Entity module** (pulled into scope 2026-06-12, reopening
   the §9.11 "skip SIE" lock): full 14-module port per the SIE PRD's MVP list,
   providers **ScrapeOwl + TextRazor, newly provisioned** (NER provider
   amended from Google NLP, 2026-06-12 fifth pass),
   `fanout.keyword_analyses` 7-day cache, owner-only `Term analysis`
-  report surface. **→ Build plan: `docs/sie-module-plan.md`** (5 flagged
-  decisions in its §9).
-- **M13 — Writer foundation** (was M12): port Writer module + adapter +
-  degraded-mode contract; manual **`Generate now`** button (owner-only) on the
-  Architecture view; adapter consumes the real SIE output (flat-keyword stub
-  = fallback). No scheduling, no link injection yet.
-  **→ Build plan (reconciled against the real PRD bundle, 2026-06-12):
-  `docs/writer-module-plan.md`** — incl. the four sketch-vs-PRD deltas
-  and six flagged decisions awaiting owner sign-off (its §8).
-- **M14 — Scheduling + internal linking** (was M13): asyncio worker loop,
+  report surface. Runs lazily at write time only.
+  **→ Build plan: `docs/sie-module-plan.md`** (flagged decisions in its §9).
+- **M13 — Brief Generator** (pulled into scope later 2026-06-12, sixth pass):
+  full PRD #2 v2.3 pipeline (Steps 0–11; Step 12 silo-identification skipped —
+  this app owns silos), write-time only, **zero new services** (all candidate
+  sources are DataForSEO incl. Reddit search + the 4-LLM "LLM Responses"
+  fan-out; embeddings `text-embedding-3-large` inside the module).
+  `fanout.briefs` 7-day cache; `brief_generation` meter phase.
+  **→ Build plan: `docs/brief-generator-module-plan.md`** (6 flags in its §7).
+- **M14 — Writer foundation** (was M12, then M13): port Writer module + thin
+  field-mapper (Brief Gen output IS Writer Input A) + degraded-mode contract
+  (`1.7-no-context`, `no_citations`); manual **`Generate now`** (owner-only).
+  At write time: Brief Gen ∥ SIE (stage 1, parallel) → Writer.
+  **→ Build plan: `docs/writer-module-plan.md`** (see its banner — adapter
+  A1–A4 + deltas Δ1/Δ2 dissolved by M13).
+- **M15 — Scheduling + internal linking** (was M13/M14): asyncio worker loop,
   **`Schedule all`** modal (all-at-once + drip), `link_injector`, article
-  view, schedule overview, link-health report. Cost preview must include SIE
-  spend for uncached keywords.
-- **M15 (optional, was M14) — Brand voice + citations:** add `fanout.clients`
+  view, schedule overview, link-health report. Cost preview must include
+  Brief Gen + SIE + Writer (≈$0.92–$1.96/article) for uncached keywords.
+- **M16 (optional) — Brand voice + citations:** add `fanout.clients`
   layer + bolt in Research module + Sources Cited renderer. Deferred until
   v1 quality is judged insufficient.
 
@@ -942,9 +980,9 @@ table.
 
 | Topic | Decision |
 |---|---|
-| Integration depth | ~~**Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited.~~ **[Amended 2026-06-12: SIE is IN scope and builds first (M12, `docs/sie-module-plan.md`, with ScrapeOwl + TextRazor as new services).** Brief Generator, Research, Sources Cited remain skipped.] |
+| Integration depth | ~~**Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited.~~ **[Amended twice 2026-06-12: SIE is IN scope (M12, `docs/sie-module-plan.md`, ScrapeOwl + TextRazor) AND the full Brief Generator is IN scope (M13, `docs/brief-generator-module-plan.md`, all-DataForSEO sources, write-time only).** Research + Sources Cited remain skipped (`no_citations: true`).] |
 | SIE providers (2026-06-12) | **ScrapeOwl** (scraping, PRD-exact) + **TextRazor** (NER — amended same day from the initially chosen Google Cloud NLP; Module-11 grounded-NER design preserved, Google-specific thresholds become calibration items) provisioned as new services; DataForSEO/Claude substitutions declined. Retires §9.1's "no new third-party deps" line. |
-| SIE trigger timing (2026-06-12) | **Write-time only, lazy.** SIE runs solely as stage 1 of generating a specific article (cache check → run on miss/stale); never during research/planning (`/expand`, `/plan-articles`, `/regate`, `/fanout`, `/architecture`); never bulk-prefetched at `Schedule all`. Unwritten articles incur no SIE spend. M12's `Term analysis` endpoint = single-cluster validation surface only. |
+| SIE + Brief Gen trigger timing (2026-06-12) | **Write-time only, lazy — both modules, run in parallel** as stage 1 of generating a specific article (cache check → run on miss/stale); never during research/planning (`/expand`, `/plan-articles`, `/regate`, `/fanout`, `/architecture`); never bulk-prefetched at `Schedule all`. Unwritten articles incur no SIE spend. M12's `Term analysis` endpoint = single-cluster validation surface only. |
 | Brand voice | **Skip in v1** (`1.7-no-context`). `clients` layer deferred to v2 (M14). |
 | Citations | **Skip in v1** (`no_citations: true`). Research module bolted on later without schema changes. |
 | Cadence semantics | **Per-article one-shot publish date.** Recurring refresh deferred. |

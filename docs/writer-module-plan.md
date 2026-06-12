@@ -1,7 +1,21 @@
-# M13 — Writer Foundation: Build Plan
+# M14 — Writer Foundation: Build Plan
 
-> **Re-sequenced 2026-06-12 (owner decision, same day this was drafted as
-> "M12"):** the **SIE Term & Entity module now builds first as M12**
+> **Re-sequenced again 2026-06-12 (owner decision, third revision of the day):
+> the full Brief Generator also runs at write time — it builds as M13
+> (`docs/brief-generator-module-plan.md`) and the Writer is now M14;
+> scheduling shifts to M15.** Consequences for this plan: the §3 adapter's
+> LLM calls **A1–A4 are superseded** by real Brief Gen output (Steps 3 /
+> 3.5 / 4–8.7 / 10) — the adapter shrinks to a thin field-mapper, since Brief
+> Gen output IS the Writer's Input A; **deltas Δ1 and Δ2 below dissolve**
+> (they approximated what Brief Gen now actually does); H3s + authority-gap
+> sections return (the Writer's dormant H3 handling is exercised from day
+> one); `clusters.adapter_cache` is dropped from the migration (superseded by
+> `fanout.briefs`); the flat-keyword/stub fallback is demoted to a test
+> fixture (a Brief Gen abort fails the run — process-identical articles per
+> owner rule). At write time, Brief Gen and SIE run in parallel as stage 1,
+> then the Writer. Earlier banner notes below remain for history.
+
+> **[Earlier same-day banner]** the **SIE Term & Entity module builds first as M12**
 > (`docs/sie-module-plan.md`) — the Writer is **M13**, and scheduling + link
 > injection shift to **M14**. Two consequences for this plan: **(a)** the §3
 > adapter consumes the **real SIE output** (`fanout.keyword_analyses`),
