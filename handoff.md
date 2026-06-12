@@ -19,6 +19,26 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > empty-`h2_outline` gap called out in §9.13's closing note. The
 > `# TODO: real PRD says…` markers can now be resolved from the bundle.
 
+_2026-06-12 (later — M12 plan drafted): **Reconciled the §9 sketch against the
+real Writer PRD and drafted the M12 build plan** at
+**`docs/m12-writer-foundation-plan.md`** (docs only, nothing built). The sketch
+held up; four deltas found and resolved in the plan: **(Δ1)** the adapter gains a
+**4th cached LLM call — heading-structure generation** (the predicted H2 gap;
+guided by Brief Gen v2.3's `intent_format_template` registry, transcribed
+verbatim into `writer/templates.py`; H2-only in v1); **(Δ2)** title + scope are
+one call with Brief Gen Step 3.5's real contract (50–80-char title, ≤500-char
+scope with a "does not cover" clause), not a derivation; **(Δ3)** §5.8.8
+citable-claim coverage should NOT be fully skipped in no-citations mode — its
+rewrite-to-remove retry + C7–C9 auto-soften is an anti-fabrication guard
+(recommended keep, config-flagged; diverges from §9.1's "skip" — flagged);
+**(Δ4)** two degraded-mode relaxations the PRD doesn't define (lede entity rule
+→ top supporting keyword; flat term-zone defaults). Also: PRD §17 model tiers
+adopted exactly (Sonnet 4.6 prose / Haiku 4.5 short calls, no Opus);
+`output.title` collapsed onto `brief.title` (flagged); pillar generation
+deferred to M13; M12 migration = `clusters.adapter_cache` + `fanout.
+article_outputs` only (slug / site_base_url / schedules are M13-owned). Six
+flagged decisions for owner sign-off in the plan's §8._
+
 _2026-06-12 (M12 unblocked — Blog Writer PRD bundle landed): **The AR Tools Blog
 Writer PRD bundle is now in the repo** at `docs/blog-writer-pipeline-bundle.md`
 (468 KB / 8,867 lines — all 8 PRDs concatenated verbatim: Content Writer
@@ -831,6 +851,9 @@ table.
   contract; manual **`Generate now`** button (owner-only) on the Architecture
   view. No scheduling, no link injection yet. Validates the Writer contract
   on real clusters; cost + quality observed before scheduling logic.
+  **→ Concrete build plan (reconciled against the real PRD bundle, 2026-06-12):
+  `docs/m12-writer-foundation-plan.md`** — incl. the four sketch-vs-PRD deltas
+  and six flagged decisions awaiting owner sign-off (its §8).
 - **M13 — Scheduling + internal linking:** asyncio worker loop, **`Schedule
   all`** modal (all-at-once + drip), `link_injector`, article view, schedule
   overview, link-health report.
