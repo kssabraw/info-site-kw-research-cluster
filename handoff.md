@@ -8,20 +8,45 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
 > and deployed; nothing is mid-flight.
 >
-> **Separately, M12 (Writer foundation) is now unblocked — design decisions AND
-> source PRD both in hand.** Design locked 2026-06-09 (§9.9 / §9.11 — all six
-> items). The AR Tools Blog Writer bundle **landed 2026-06-12** at
-> **`docs/blog-writer-pipeline-bundle.md`** (all 8 PRDs verbatim — the §9.13
-> Tier-1/2 fetch is satisfied). §9 was originally built from a conversation
-> summary, so the next step before writing code is to **reconcile the §9 sketch
-> against the real Writer PRD** (#1 v1.7 — §17 Call Inventory, §18 Prompt
-> Scaffolds, §20 golden example — and PRD #8 Engineering Spec). Watch the
-> empty-`h2_outline` gap called out in §9.13's closing note. The
-> `# TODO: real PRD says…` markers can now be resolved from the bundle.
+> **Separately, the post-v1 sequence was re-set on 2026-06-12 (owner
+> decisions; see that day's dated entries): M12 = SIE Term & Entity module
+> (`docs/sie-module-plan.md`), M13 = Writer (`docs/writer-module-plan.md`),
+> M14 = scheduling + link injection.** The AR Tools Blog Writer bundle is in
+> the repo (`docs/blog-writer-pipeline-bundle.md`, all 8 PRDs verbatim — the
+> §9.13 fetch is satisfied), both build plans are drafted and reconciled
+> against it, and SIE runs **ScrapeOwl + Google NLP as newly provisioned
+> services** (PRD-exact; retires §9.1's "no new third-party deps" line).
+> **Before M12 live-validation: owner provisions `SCRAPEOWL_API_KEY` +
+> `GOOGLE_NLP_API_KEY` at the Railway project level.** Plan-level flags
+> awaiting sign-off: writer plan §8 (six items) + SIE plan §9 (five items).
 
-_2026-06-12 (later — M12 plan drafted): **Reconciled the §9 sketch against the
-real Writer PRD and drafted the M12 build plan** at
-**`docs/m12-writer-foundation-plan.md`** (docs only, nothing built). The sketch
+_2026-06-12 (third pass — SIE pulled into scope; sequence re-set): **Three
+owner decisions in-session.** **(1) SIE is IN scope** — reopens §9.11's "Skip
+SIE in v1" lock; on-page term/entity intelligence (SurferSEO/Clearscope-style)
+is required for SEO-competitive output. **(2) Match the SIE PRD exactly on
+providers:** **ScrapeOwl** (scraping) + **Google Cloud NLP** (`analyzeEntities`
+NER) become **newly provisioned services** (substitutions via DataForSEO
+content-parsing / Claude extraction were offered and declined). This retires
+§9.1's "no new third-party deps" line. **Owner prerequisite before M12 live
+validation: provision `SCRAPEOWL_API_KEY` + `GOOGLE_NLP_API_KEY` (Railway
+project level).** **(3) Sequencing = SIE first:** **M12 = SIE → M13 = Writer →
+M14 = scheduling + link injection** (first articles are born enriched; Writer
+contract validates in M13). Artifacts: new **`docs/sie-module-plan.md`** (full
+14-module port per the PRD's MVP list; `fanout.keyword_analyses` 7-day cache
+with RLS ON from day one — the §8.7 `sie_cache` lesson; new `sie_analysis`
+meter phase; ~$0.30–$0.60 + 1–3 min per keyword, ≈+$100–190 on a 315-article
+session — must be included in M14's `Schedule all` cost preview); the Writer
+plan **renamed `m12-writer-foundation-plan.md` → `docs/writer-module-plan.md`**
+with a re-sequence banner (adapter now consumes real `keyword_analyses`; flat
+stub demoted to fallback; Δ4 relaxations largely fall away; C6 claim pattern
+activates). Flags awaiting owner sign-off: SIE plan §9 (5 items, incl.
+lemmatizer choice — shared with the Writer's future term audit) + writer plan
+§8 (6 items). Docs only; nothing built._
+
+_2026-06-12 (later — M13 Writer plan drafted; was "M12" at drafting time,
+re-sequenced same day — see the entry above): **Reconciled the §9 sketch
+against the real Writer PRD and drafted the Writer build plan** at
+**`docs/writer-module-plan.md`** (docs only, nothing built). The sketch
 held up; four deltas found and resolved in the plan: **(Δ1)** the adapter gains a
 **4th cached LLM call — heading-structure generation** (the predicted H2 gap;
 guided by Brief Gen v2.3's `intent_format_template` registry, transcribed
@@ -595,6 +620,16 @@ coupling, no full duplicate).
 
 ### 9.1 Scope (v1)
 
+> **[Amended 2026-06-12, owner decisions — see that day's dated entries:
+> (a) SIE is no longer skipped — it builds FIRST as M12 (`docs/sie-module-plan.md`),
+> PRD-exact with ScrapeOwl + Google NLP as newly provisioned services, so the
+> "no new third-party deps" line below no longer holds; (b) the Writer's
+> `sie` input is the real `keyword_analyses` output, with the flat-keyword
+> stub (§9.2) demoted to fallback; (c) §5.8.8 is not fully skipped — its
+> rewrite/soften arm is kept as an anti-fabrication guard (writer plan Δ3).
+> Brief Generator / Research / Sources Cited remain skipped; `no_citations:
+> true` and `1.7-no-context` still apply.]**
+
 Port the **Writer module** (PRD #1, v1.7) into `backend/app/writer/` as an
 in-process Python package. **Skip** the other 4 modules. Degraded mode:
 - `schema_version_effective: "1.7-no-context"` — no brand voice / ICP / client
@@ -845,27 +880,35 @@ table.
    §8.3's Opus-on-pillars / Haiku+Opus variants flagged for revisit if Sonnet
    quality disappoints on the first live batch.
 
-### 9.10 Likely milestone sequence
+### 9.10 Likely milestone sequence — **RE-SET 2026-06-12 (owner): SIE first**
 
-- **M12 — Writer foundation:** port Writer module + adapter + degraded-mode
-  contract; manual **`Generate now`** button (owner-only) on the Architecture
-  view. No scheduling, no link injection yet. Validates the Writer contract
-  on real clusters; cost + quality observed before scheduling logic.
-  **→ Concrete build plan (reconciled against the real PRD bundle, 2026-06-12):
-  `docs/m12-writer-foundation-plan.md`** — incl. the four sketch-vs-PRD deltas
+- **M12 — SIE Term & Entity module** (pulled into scope 2026-06-12, reopening
+  the §9.11 "skip SIE" lock): full 14-module port per the SIE PRD's MVP list,
+  PRD-exact providers (**ScrapeOwl + Google NLP, newly provisioned**),
+  `fanout.keyword_analyses` 7-day cache, owner-only `Term analysis`
+  report surface. **→ Build plan: `docs/sie-module-plan.md`** (5 flagged
+  decisions in its §9).
+- **M13 — Writer foundation** (was M12): port Writer module + adapter +
+  degraded-mode contract; manual **`Generate now`** button (owner-only) on the
+  Architecture view; adapter consumes the real SIE output (flat-keyword stub
+  = fallback). No scheduling, no link injection yet.
+  **→ Build plan (reconciled against the real PRD bundle, 2026-06-12):
+  `docs/writer-module-plan.md`** — incl. the four sketch-vs-PRD deltas
   and six flagged decisions awaiting owner sign-off (its §8).
-- **M13 — Scheduling + internal linking:** asyncio worker loop, **`Schedule
-  all`** modal (all-at-once + drip), `link_injector`, article view, schedule
-  overview, link-health report.
-- **M14 (optional) — Brand voice + citations:** add `fanout.clients` layer +
-  bolt in Research module + Sources Cited renderer. Deferred until v1 quality
-  is judged insufficient.
+- **M14 — Scheduling + internal linking** (was M13): asyncio worker loop,
+  **`Schedule all`** modal (all-at-once + drip), `link_injector`, article
+  view, schedule overview, link-health report. Cost preview must include SIE
+  spend for uncached keywords.
+- **M15 (optional, was M14) — Brand voice + citations:** add `fanout.clients`
+  layer + bolt in Research module + Sources Cited renderer. Deferred until
+  v1 quality is judged insufficient.
 
 ### 9.11 Locked decisions (2026-06-09)
 
 | Topic | Decision |
 |---|---|
-| Integration depth | **Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited. |
+| Integration depth | ~~**Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited.~~ **[Amended 2026-06-12: SIE is IN scope and builds first (M12, `docs/sie-module-plan.md`, PRD-exact with ScrapeOwl + Google NLP as new services).** Brief Generator, Research, Sources Cited remain skipped.] |
+| SIE providers (2026-06-12) | **Match the SIE PRD exactly:** ScrapeOwl (scraping) + Google Cloud NLP (NER) provisioned as new services; DataForSEO/Claude substitutions declined. Retires §9.1's "no new third-party deps" line. |
 | Brand voice | **Skip in v1** (`1.7-no-context`). `clients` layer deferred to v2 (M14). |
 | Citations | **Skip in v1** (`no_citations: true`). Research module bolted on later without schema changes. |
 | Cadence semantics | **Per-article one-shot publish date.** Recurring refresh deferred. |
