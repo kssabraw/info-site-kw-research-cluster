@@ -12,7 +12,8 @@
 > with real SIE data, per-zone term targets are real, the C6 citable-claim
 > pattern activates (`is_entity` exists), and the Δ4 relaxations below
 > largely fall away. **(b)** Providers were re-decided: SIE runs
-> ScrapeOwl + Google NLP as provisioned services (PRD-exact), which retires
+> ScrapeOwl + TextRazor as provisioned services (NER provider amended
+> Google NLP → TextRazor later the same day), which retires
 > the "no new third-party services" framing in §1 — for the *Writer's own
 > calls* nothing changes (Anthropic + OpenAI only). Milestone numbers in the
 > body below were written before the re-sequence; read M12→M13 and M13→M14.

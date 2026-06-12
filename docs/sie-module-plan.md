@@ -5,11 +5,16 @@
 1. **SIE is in scope** — reopens the §9.11 "Skip SIE in v1" lock. On-page term/
    entity intelligence is required for SEO-competitive output (SurferSEO /
    Clearscope-style modeling of what ranking pages actually use).
-2. **Match the PRD exactly on providers** — **ScrapeOwl** (page scraping) and
-   **Google Cloud Natural Language** (`analyzeEntities`, NER pass) are
-   provisioned as **new services**. The substitution options (DataForSEO
-   content parsing / Claude-based extraction) were offered and declined. This
-   retires handoff §9.1's "no new third-party deps" line (owner decision).
+2. **Providers:** **ScrapeOwl** (page scraping, PRD-exact) and **TextRazor**
+   (entity extraction, NER pass) are provisioned as **new services**.
+   *(Amended later same day: originally locked as Google Cloud NLP
+   "PRD-exact"; owner swapped the NER provider to **TextRazor**. The PRD's
+   Module-11 design is preserved — a grounded NER pass 1 the LLM pass 2 may
+   not add to — with TextRazor supplying pass 1; the Google-specific
+   parameters become calibration items, §9 #6.)* The earlier substitution
+   options (DataForSEO content parsing / Claude-based extraction) remain
+   declined. This retires handoff §9.1's "no new third-party deps" line
+   (owner decision).
 3. **Sequencing = SIE first:** **M12 = SIE**, **M13 = Writer**
    (`docs/writer-module-plan.md`, re-numbered from M12), **M14 = scheduling +
    link injection**. The first articles ever generated are born term/entity-
@@ -63,31 +68,34 @@ a report view (§6), which is also how SIE quality gets judged at review.
 | 8 | Term aggregation + subsumption + coverage gate (3-of-top-10; exceptions: quadgrams-in-headings, rank-1–3 multi-domain, high-confidence entities) | — | Pure; never subsume target-keyword sub-phrases |
 | 9 | TF-IDF pre-filter (corpus TF-IDF, threshold 0.005, doubles as scoring input) | — | Pure |
 | 10 | Semantic filtering (cosine to keyword, 0.65 with dynamic 0.60/0.70 adjustment; heading-term preservation) | OpenAI embeddings (ours) | Reuse `openai_client.embed`, batched |
-| 11 | Entity extraction: **Google NLP** pass 1 (salience ≥0.40, 100KB cap, no batch endpoint) + LLM pass 2 (dedupe/categorize/filter; **may not invent**) | **Google NLP** (new) + LLM | New `app/sie/google_nlp_client.py` (rate-limited, per-page); pass 2 = one **Sonnet** tool-use call |
+| 11 | Entity extraction: **TextRazor** pass 1 (grounded NER; one document per request) + LLM pass 2 (dedupe/categorize/filter; **may not invent**) | **TextRazor** (new) + LLM | New `app/sie/textrazor_client.py` (httpx REST, `extractors=entities`, rate-limited, per-page; body capped per the PRD's truncation rule). PRD's Google-specific params map to TextRazor: salience ≥0.40 → `relevanceScore` threshold (start 0.40, calibrate); Google entity-type list → DBpedia-type mapping (§9 #6). Pass 2 = one **Sonnet** tool-use call |
 | 12 | Word-count analysis (p25/p50/p75 over 800–5,000-word eligible pages) | — | Pure |
 | 13 | Scoring engine (6 weighted signals, min-max normalized; Required/Avoid only; target-kw auto-include @1.00; quadgram zone multipliers 1.5/1.4/1.2×) | — | Pure |
 | 14 | Usage recommendations (per-zone p25/50/75 per 1,000 words → counts at target length; **safe** [3× median outlier exclusion] / aggressive modes; 10-per-1,000 hard cap) | — | Pure |
 
 The heart of the pipeline (modules 5–9, 12–14) is **pure and fully
 unit-testable in the sandbox**; egress is confined to four thin clients
-(DataForSEO, ScrapeOwl, Google NLP, LLM/embeddings) — same testability shape
+(DataForSEO, ScrapeOwl, TextRazor, LLM/embeddings) — same testability shape
 as the rest of this app.
 
 ## 3. Repo integration
 
 - **Package layout:** `sie/models.py` (Final Output Model, pydantic),
-  `sie/serp.py` (M2–M3), `sie/scrapeowl_client.py` + `sie/google_nlp_client.py`
+  `sie/serp.py` (M2–M3), `sie/scrapeowl_client.py` + `sie/textrazor_client.py`
   (new clients, §16.3-logged), `sie/extract.py` (M5–M6), `sie/ngrams.py`
   (M7–M8), `sie/filters.py` (M9–M10), `sie/entities.py` (M11),
   `sie/scoring.py` (M12–M14), `sie/pipeline.py` (orchestration + cache check),
   `sie/cache.py`.
 - **Concurrency:** scrape + NLP calls fan out per page via the existing
-  `ContextThreadPoolExecutor` (meter + session_id propagate); Google NLP is
-  one-document-per-request (PRD constraint) → bounded workers + backoff.
+  `ContextThreadPoolExecutor` (meter + session_id propagate); TextRazor is
+  one-document-per-request → bounded workers + backoff (respect the plan's
+  daily-request quota).
 - **Cost metering:** new phase **`sie_analysis`** in the M11 `CostMeter`.
-  DataForSEO cost stays real (task envelope); ScrapeOwl per-scrape and Google
-  NLP per-unit rates added to the meter as configured estimates (calibrate
-  against first invoices, same convention as the LLM rates).
+  DataForSEO cost stays real (task envelope); ScrapeOwl per-scrape and
+  TextRazor per-request rates added to the meter as configured estimates
+  (TextRazor bills by subscription/daily-quota, so its per-request figure is
+  an amortized estimate; calibrate against first invoices, same convention
+  as the LLM rates).
 - **Run shape:** background job (`run_sie_job`, `@_metered("sie_analysis")`,
   `raise_if_cancelled` between pages), 202 + poll — house pattern.
 - **Locale:** `location_code 2840` / `language_code "en"` constants (the app
@@ -100,7 +108,7 @@ as the rest of this app.
 | Service | Env var (Railway project level) | Used by | Billing shape |
 |---|---|---|---|
 | ScrapeOwl | `SCRAPEOWL_API_KEY` | Module 4 | per-scrape credits |
-| Google Cloud NL | `GOOGLE_NLP_API_KEY` | Module 11 pass 1 | per 1,000-char unit |
+| TextRazor | `TEXTRAZOR_API_KEY` | Module 11 pass 1 | subscription w/ daily request quota |
 
 Provision both before M12's live-validation step (the sandbox can't reach any
 egress, so as always the pipeline is validated on the deployed stack). New
@@ -156,8 +164,8 @@ normal invocation path is inside `run_article_job`.
 ## 7. Cost + latency (per analysis; verify rates at provisioning)
 
 ~1 DataForSEO SERP call + 1 Haiku classification + ~10–20 ScrapeOwl scrapes +
-Google NLP per eligible page (per-1,000-char billing) + 1 Sonnet entity pass +
-1 batched embedding call ≈ **$0.30–$0.60 and ~1–3 min**, then cached 7 days.
+1 TextRazor call per eligible page (amortized subscription cost) + 1 Sonnet
+entity pass + 1 batched embedding call ≈ **$0.30–$0.60 and ~1–3 min**, then cached 7 days.
 Because SIE runs at write time (decision #4), this spend is incurred **only
 for articles actually generated, when they're generated** — a 315-article
 session that schedules everything spends ≈ **+$100–$190 spread across the
@@ -192,8 +200,17 @@ clients mocked; one end-to-end pipeline test over fixture pages.
    `fanout` tables — confirm.
 3. **M12 UI minimalism:** report view only, owner-only trigger. VA exposure
    arrives implicitly in M13 via generated articles.
-4. **Meter rates for ScrapeOwl/Google NLP are estimates** until first
-   invoices (same calibration convention as the LLM rates).
+4. **Meter rates for ScrapeOwl/TextRazor are estimates** until first
+   invoices (same calibration convention as the LLM rates; TextRazor's is an
+   amortized subscription figure, not metered billing).
+6. **TextRazor calibration (NER provider swap, 2026-06-12):** the PRD's
+   Google-NLP-specific retention criteria need mapping — salience ≥ 0.40 →
+   TextRazor `relevanceScore` ≥ 0.40 (starting point; calibrate on first live
+   runs), the Google entity-type whitelist (PERSON/LOCATION/ORGANIZATION/
+   EVENT/WORK_OF_ART/CONSUMER_GOOD/OTHER) → an equivalent DBpedia-type
+   whitelist, and the 100KB input cap → keep the same truncation rule
+   (TextRazor accepts larger bodies, so it is non-binding). Verify exact
+   request/response field names against TextRazor's docs at build time.
 5. **Intent-alignment scoring input** uses the PRD's fallback (inferred from
    Module 3 page-category distribution) — we have no dedicated intent module
    at SIE time. (The Writer-side intent classification happens later, in the

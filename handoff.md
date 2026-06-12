@@ -14,11 +14,29 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > M14 = scheduling + link injection.** The AR Tools Blog Writer bundle is in
 > the repo (`docs/blog-writer-pipeline-bundle.md`, all 8 PRDs verbatim — the
 > §9.13 fetch is satisfied), both build plans are drafted and reconciled
-> against it, and SIE runs **ScrapeOwl + Google NLP as newly provisioned
-> services** (PRD-exact; retires §9.1's "no new third-party deps" line).
+> against it, and SIE runs **ScrapeOwl + TextRazor as newly provisioned
+> services** (NER provider amended Google NLP → TextRazor, 2026-06-12 fifth
+> pass; retires §9.1's "no new third-party deps" line).
 > **Before M12 live-validation: owner provisions `SCRAPEOWL_API_KEY` +
-> `GOOGLE_NLP_API_KEY` at the Railway project level.** Plan-level flags
+> `TEXTRAZOR_API_KEY` at the Railway project level.** Plan-level flags
 > awaiting sign-off: writer plan §8 (six items) + SIE plan §9 (five items).
+
+_2026-06-12 (fifth pass — SIE NER provider amended): **Google Cloud NLP →
+TextRazor** for SIE Module-11 entity extraction (owner decision, amending the
+third-pass "match PRD exactly" provider lock; ScrapeOwl unchanged). The PRD's
+Module-11 *design* is preserved — a grounded NER pass 1 whose output the LLM
+pass 2 may dedupe/categorize/filter but never add to — with TextRazor
+supplying pass 1 (`app/sie/textrazor_client.py`, httpx REST,
+`extractors=entities`, one document per request). Google-specific parameters
+become calibration items (SIE plan §9 #6): salience ≥ 0.40 → TextRazor
+`relevanceScore` ≥ 0.40 (starting point), the Google entity-type whitelist →
+an equivalent DBpedia-type whitelist, the 100KB input cap kept as our
+truncation rule (non-binding for TextRazor). Billing is subscription/daily-
+quota, so the meter carries an amortized per-request estimate. **Env var
+change: `TEXTRAZOR_API_KEY` replaces `GOOGLE_NLP_API_KEY`** in the owner
+provisioning prerequisite (ScrapeOwl's key unchanged). Updated: SIE plan
+(decision #2 + module table + §3/§4/§7/§9 #6), writer-plan banner, the §9.11
+provider row, CLAUDE.md locked-decisions row. Docs only; nothing built._
 
 _2026-06-12 (fourth pass — SIE trigger timing locked): **SIE runs lazily, at
 write time only** (owner decision). It executes solely as **stage 1 of
@@ -637,7 +655,8 @@ coupling, no full duplicate).
 
 > **[Amended 2026-06-12, owner decisions — see that day's dated entries:
 > (a) SIE is no longer skipped — it builds FIRST as M12 (`docs/sie-module-plan.md`),
-> PRD-exact with ScrapeOwl + Google NLP as newly provisioned services, so the
+> with ScrapeOwl + TextRazor as newly provisioned services (NER provider
+> amended from Google NLP same day), so the
 > "no new third-party deps" line below no longer holds; (b) the Writer's
 > `sie` input is the real `keyword_analyses` output, with the flat-keyword
 > stub (§9.2) demoted to fallback; (c) §5.8.8 is not fully skipped — its
@@ -899,7 +918,8 @@ table.
 
 - **M12 — SIE Term & Entity module** (pulled into scope 2026-06-12, reopening
   the §9.11 "skip SIE" lock): full 14-module port per the SIE PRD's MVP list,
-  PRD-exact providers (**ScrapeOwl + Google NLP, newly provisioned**),
+  providers **ScrapeOwl + TextRazor, newly provisioned** (NER provider
+  amended from Google NLP, 2026-06-12 fifth pass),
   `fanout.keyword_analyses` 7-day cache, owner-only `Term analysis`
   report surface. **→ Build plan: `docs/sie-module-plan.md`** (5 flagged
   decisions in its §9).
@@ -922,8 +942,8 @@ table.
 
 | Topic | Decision |
 |---|---|
-| Integration depth | ~~**Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited.~~ **[Amended 2026-06-12: SIE is IN scope and builds first (M12, `docs/sie-module-plan.md`, PRD-exact with ScrapeOwl + Google NLP as new services).** Brief Generator, Research, Sources Cited remain skipped.] |
-| SIE providers (2026-06-12) | **Match the SIE PRD exactly:** ScrapeOwl (scraping) + Google Cloud NLP (NER) provisioned as new services; DataForSEO/Claude substitutions declined. Retires §9.1's "no new third-party deps" line. |
+| Integration depth | ~~**Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited.~~ **[Amended 2026-06-12: SIE is IN scope and builds first (M12, `docs/sie-module-plan.md`, with ScrapeOwl + TextRazor as new services).** Brief Generator, Research, Sources Cited remain skipped.] |
+| SIE providers (2026-06-12) | **ScrapeOwl** (scraping, PRD-exact) + **TextRazor** (NER — amended same day from the initially chosen Google Cloud NLP; Module-11 grounded-NER design preserved, Google-specific thresholds become calibration items) provisioned as new services; DataForSEO/Claude substitutions declined. Retires §9.1's "no new third-party deps" line. |
 | SIE trigger timing (2026-06-12) | **Write-time only, lazy.** SIE runs solely as stage 1 of generating a specific article (cache check → run on miss/stale); never during research/planning (`/expand`, `/plan-articles`, `/regate`, `/fanout`, `/architecture`); never bulk-prefetched at `Schedule all`. Unwritten articles incur no SIE spend. M12's `Term analysis` endpoint = single-cluster validation surface only. |
 | Brand voice | **Skip in v1** (`1.7-no-context`). `clients` layer deferred to v2 (M14). |
 | Citations | **Skip in v1** (`no_citations: true`). Research module bolted on later without schema changes. |

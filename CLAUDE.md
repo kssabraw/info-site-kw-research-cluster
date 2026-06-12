@@ -39,7 +39,7 @@ These don't change session-to-session. Don't propose alternatives.
 | LLM (writer module, M13+) | Anthropic `claude-sonnet-4-6` for prose calls + `claude-haiku-4-5` for short/classification calls (locked 2026-06-09 §9.11; tiering per Writer PRD §17, 2026-06-12) |
 | Embeddings | OpenAI `text-embedding-3-small` |
 | External data | DataForSEO (Labs + SERP + Keyword Data) |
-| SIE module (M12) | **ScrapeOwl** (page scraping) + **Google Cloud NLP** (`analyzeEntities` NER) — PRD-exact, newly provisioned services (owner decision 2026-06-12; substitutions declined). **Runs lazily at write time only** — stage 1 of generating a specific article; never during keyword research/planning, never bulk-prefetched (owner decision 2026-06-12) |
+| SIE module (M12) | **ScrapeOwl** (page scraping, PRD-exact) + **TextRazor** (entity-extraction NER pass — owner amendment 2026-06-12, replacing the initially chosen Google Cloud NLP; the PRD's grounded-NER Module-11 design is preserved) — newly provisioned services (substitutions declined). **Runs lazily at write time only** — stage 1 of generating a specific article; never during keyword research/planning, never bulk-prefetched (owner decision 2026-06-12) |
 | Clustering | NetworkX + python-louvain |
 
 API keys (DataForSEO, OpenAI, Anthropic, Supabase) are already configured at the Railway project level and inherited by this service. No new keys need provisioning.
@@ -199,14 +199,15 @@ decisions; nothing mid-flight):**
    (2026-06-12, all 8 PRDs verbatim — the §9.13 fetch is satisfied); both
    build plans are drafted and reconciled against it:
    **`docs/sie-module-plan.md`** (M12 — full 14-module SIE port; **PRD-exact
-   providers: ScrapeOwl + Google Cloud NLP, newly provisioned services**
-   (owner decision, overriding the earlier "no new third-party deps" framing);
+   providers: ScrapeOwl + TextRazor, newly provisioned services** (owner
+   decision, overriding the earlier "no new third-party deps" framing; NER
+   provider amended Google NLP → TextRazor same day);
    `fanout.keyword_analyses` 7-day cache with RLS on from day one) and
    **`docs/writer-module-plan.md`** (M13 — Writer in `1.7-no-context` +
    `no_citations` degraded mode; Sonnet 4.6 prose / Haiku 4.5 short calls;
    adapter consumes the real SIE output and generates the heading structure
    itself per the empty-`h2_outline` decision). **Owner prerequisite before
-   M12 live validation: provision `SCRAPEOWL_API_KEY` + `GOOGLE_NLP_API_KEY`
+   M12 live validation: provision `SCRAPEOWL_API_KEY` + `TEXTRAZOR_API_KEY`
    at the Railway project level.** Open: plan-level flags awaiting sign-off
    (SIE plan §9 — incl. the lemmatizer choice, shared with the Writer's
    future term audit; writer plan §8).
