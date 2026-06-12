@@ -8,14 +8,34 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
 > and deployed; nothing is mid-flight.
 >
-> **Separately, M12 (Writer foundation) is now unblocked in terms of design
-> decisions** (§9.9 / §9.11 — all six items locked 2026-06-09) **but blocked on
-> source PRDs.** The AR Tools Blog Writer bundle isn't in `docs/`; §9 was built
-> from a conversation summary. Before M12 drafting starts, fetch the Tier-1/2
-> artifacts listed in **§9.13** — the owner is running this fetch in a separate
-> chat (2026-06-10) and will paste results back. When that lands, drop the docs
-> into `docs/`, reference them from CLAUDE.md, then draft M12. Until then,
-> anything written for M12 is a sketch with `# TODO: real PRD says…` markers.
+> **Separately, M12 (Writer foundation) is now unblocked — design decisions AND
+> source PRD both in hand.** Design locked 2026-06-09 (§9.9 / §9.11 — all six
+> items). The AR Tools Blog Writer bundle **landed 2026-06-12** at
+> **`docs/blog-writer-pipeline-bundle.md`** (all 8 PRDs verbatim — the §9.13
+> Tier-1/2 fetch is satisfied). §9 was originally built from a conversation
+> summary, so the next step before writing code is to **reconcile the §9 sketch
+> against the real Writer PRD** (#1 v1.7 — §17 Call Inventory, §18 Prompt
+> Scaffolds, §20 golden example — and PRD #8 Engineering Spec). Watch the
+> empty-`h2_outline` gap called out in §9.13's closing note. The
+> `# TODO: real PRD says…` markers can now be resolved from the bundle.
+
+_2026-06-12 (M12 unblocked — Blog Writer PRD bundle landed): **The AR Tools Blog
+Writer PRD bundle is now in the repo** at `docs/blog-writer-pipeline-bundle.md`
+(468 KB / 8,867 lines — all 8 PRDs concatenated verbatim: Content Writer
+consolidated v1.7 [incl. §17 LLM Call Inventory, §18 Prompt Scaffolds, §19
+Closures, §20 golden example] + Brief Generator v2.3 + SIE Term & Entity +
+Research & Citations v1.1.1 + Sources Cited v1.1 + Content Quality v1.0 + Suite
+Architecture & Roadmap v1.0 + Engineering Implementation Spec v1.1). This
+**satisfies the §9.13 Tier-1/2 fetch** that blocked M12 — owner uploaded it
+out-of-band (originally in a separate chat) and it was committed here so it
+survives container resets. Referenced from CLAUDE.md "Key file locations". Kept
+as **one verbatim file** (not split, not folded into the topic-fanout PRD — it's
+a different product's spec this app consumes). **Next before any Writer code:**
+read the Writer Module PRD (#1) + Engineering Spec (#8) and reconcile the §9
+sketch (built from a summary) against them — flagged delta is the empty
+`clusters.h2_outline` (the Writer PRD assumes a rich `brief.heading_structure[]`;
+the adapter/Writer must now generate body H2s itself — §9.13 closing note). No
+code changes in this entry; docs only._
 
 _2026-06-11 (doc sync, no code changes): **CLAUDE.md synced to v1.11** — it had
 fallen behind this file (M11 merge/deploy, §7.8 metrics built, writer-owned
@@ -854,11 +874,25 @@ If §8's publish layer ships later, it reads `fanout.article_outputs`
 (Markdown + HTML already serialized + internally linked) and pushes them
 into the repo. No further generation step required.
 
-### 9.13 M12 prerequisites — artifact fetch (2026-06-10)
+### 9.13 M12 prerequisites — artifact fetch (2026-06-10) — ✅ SATISFIED 2026-06-12
+
+> **STATUS (2026-06-12): the fetch landed.** The full bundle is committed at
+> **`docs/blog-writer-pipeline-bundle.md`** (all 8 PRDs verbatim). This covers
+> Tier 1 (Writer PRD #1 v1.7 with §17 Call Inventory + §18 Prompt Scaffolds +
+> §20 golden example; Engineering Spec #8) **and** Tier 2 #3 (Brief Generator
+> v2.3 — its `intent_format_template` table) + #4 (Content Quality thresholds,
+> PRD #6). **Still NOT in the repo:** Tier 2 #5 (3–5 real Writer outputs from
+> AR-Internal-Tools `public.module_outputs` — ground-truth shapes) and Tier 3
+> #6/#7 (Writer source-code pointer + production Anthropic model IDs). Those are
+> accelerators, not blockers — M12 drafting can proceed from the bundle now;
+> grab the sample outputs if the documented `article_json` schema proves
+> ambiguous against real rows. The original (now-satisfied) fetch list is
+> retained below for reference.
 
 §9 was designed from a **conversation summary** of the AR Tools Blog Writer
-PRD bundle, not from the PRDs themselves. The source artifacts are NOT in
-`docs/`. Before M12 drafting can produce more than a sketch, fetch:
+PRD bundle, not from the PRDs themselves. ~~The source artifacts are NOT in
+`docs/`.~~ **[Resolved 2026-06-12 — see status box above.]** Before M12 drafting
+can produce more than a sketch, fetch:
 
 **Tier 1 (blockers — required to start drafting M12):**
 1. **Writer PRD #1, v1.7** verbatim. Must include:
