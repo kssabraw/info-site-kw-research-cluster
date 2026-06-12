@@ -20,6 +20,21 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `GOOGLE_NLP_API_KEY` at the Railway project level.** Plan-level flags
 > awaiting sign-off: writer plan §8 (six items) + SIE plan §9 (five items).
 
+_2026-06-12 (fourth pass — SIE trigger timing locked): **SIE runs lazily, at
+write time only** (owner decision). It executes solely as **stage 1 of
+generating a specific article** (M13 `run_article_job`: `keyword_analyses`
+cache check → run on miss/stale → adapt → write; M14 scheduled runs do the
+same at their scheduled time). It is **never** invoked during keyword
+research/planning — no SIE hooks in `/expand`, `/plan-articles`, `/regate`,
+`/fanout`, or `/architecture` — and it is **not bulk-prefetched** at
+`Schedule all` time, so an article that is never written never incurs SIE
+spend (a 315-article session's ≈$100–190 of SIE cost is spread across the
+drip window, not paid up front; per-article worker time ≈ 2–4 min incl. the
+write). The M12 `Term analysis` endpoint stays single-cluster, owner-only —
+a validation surface, not an eager-analysis pathway. Encoded in
+`docs/sie-module-plan.md` (decision #4 + §6/§7/§11), the writer plan banner,
+and the §9.11 table._
+
 _2026-06-12 (third pass — SIE pulled into scope; sequence re-set): **Three
 owner decisions in-session.** **(1) SIE is IN scope** — reopens §9.11's "Skip
 SIE in v1" lock; on-page term/entity intelligence (SurferSEO/Clearscope-style)
@@ -909,6 +924,7 @@ table.
 |---|---|
 | Integration depth | ~~**Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited.~~ **[Amended 2026-06-12: SIE is IN scope and builds first (M12, `docs/sie-module-plan.md`, PRD-exact with ScrapeOwl + Google NLP as new services).** Brief Generator, Research, Sources Cited remain skipped.] |
 | SIE providers (2026-06-12) | **Match the SIE PRD exactly:** ScrapeOwl (scraping) + Google Cloud NLP (NER) provisioned as new services; DataForSEO/Claude substitutions declined. Retires §9.1's "no new third-party deps" line. |
+| SIE trigger timing (2026-06-12) | **Write-time only, lazy.** SIE runs solely as stage 1 of generating a specific article (cache check → run on miss/stale); never during research/planning (`/expand`, `/plan-articles`, `/regate`, `/fanout`, `/architecture`); never bulk-prefetched at `Schedule all`. Unwritten articles incur no SIE spend. M12's `Term analysis` endpoint = single-cluster validation surface only. |
 | Brand voice | **Skip in v1** (`1.7-no-context`). `clients` layer deferred to v2 (M14). |
 | Citations | **Skip in v1** (`no_citations: true`). Research module bolted on later without schema changes. |
 | Cadence semantics | **Per-article one-shot publish date.** Recurring refresh deferred. |

@@ -39,7 +39,7 @@ These don't change session-to-session. Don't propose alternatives.
 | LLM (writer module, M13+) | Anthropic `claude-sonnet-4-6` for prose calls + `claude-haiku-4-5` for short/classification calls (locked 2026-06-09 §9.11; tiering per Writer PRD §17, 2026-06-12) |
 | Embeddings | OpenAI `text-embedding-3-small` |
 | External data | DataForSEO (Labs + SERP + Keyword Data) |
-| SIE module (M12) | **ScrapeOwl** (page scraping) + **Google Cloud NLP** (`analyzeEntities` NER) — PRD-exact, newly provisioned services (owner decision 2026-06-12; substitutions declined) |
+| SIE module (M12) | **ScrapeOwl** (page scraping) + **Google Cloud NLP** (`analyzeEntities` NER) — PRD-exact, newly provisioned services (owner decision 2026-06-12; substitutions declined). **Runs lazily at write time only** — stage 1 of generating a specific article; never during keyword research/planning, never bulk-prefetched (owner decision 2026-06-12) |
 | Clustering | NetworkX + python-louvain |
 
 API keys (DataForSEO, OpenAI, Anthropic, Supabase) are already configured at the Railway project level and inherited by this service. No new keys need provisioning.

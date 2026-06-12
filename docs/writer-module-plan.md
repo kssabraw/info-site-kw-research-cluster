@@ -4,11 +4,14 @@
 > "M12"):** the **SIE Term & Entity module now builds first as M12**
 > (`docs/sie-module-plan.md`) — the Writer is **M13**, and scheduling + link
 > injection shift to **M14**. Two consequences for this plan: **(a)** the §3
-> adapter consumes the **real SIE output** (`fanout.keyword_analyses`) instead
-> of the flat-keyword stub — the stub remains the documented fallback when no
-> analysis exists; with real SIE data, per-zone term targets are real, the C6
-> citable-claim pattern activates (`is_entity` exists), and the Δ4 relaxations
-> below largely fall away. **(b)** Providers were re-decided: SIE runs
+> adapter consumes the **real SIE output** (`fanout.keyword_analyses`),
+> **invoking SIE lazily as stage 1 of `run_article_job`** (cache check → run
+> on miss/stale → adapt → write; SIE is write-time-only by owner decision —
+> never triggered by the research pipeline, never bulk-prefetched) — the
+> flat-keyword stub remains the documented fallback when an analysis fails;
+> with real SIE data, per-zone term targets are real, the C6 citable-claim
+> pattern activates (`is_entity` exists), and the Δ4 relaxations below
+> largely fall away. **(b)** Providers were re-decided: SIE runs
 > ScrapeOwl + Google NLP as provisioned services (PRD-exact), which retires
 > the "no new third-party services" framing in §1 — for the *Writer's own
 > calls* nothing changes (Anthropic + OpenAI only). Milestone numbers in the

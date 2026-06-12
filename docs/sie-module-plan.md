@@ -14,6 +14,17 @@
    (`docs/writer-module-plan.md`, re-numbered from M12), **M14 = scheduling +
    link injection**. The first articles ever generated are born term/entity-
    enriched.
+4. **Trigger timing (locked 2026-06-12): SIE runs lazily, at write time
+   only.** It executes solely as the first stage of generating a specific
+   article — M13's `run_article_job` (cache check → run if missing/stale →
+   adapt → write), and in M14 each scheduled run does the same at its
+   scheduled time. SIE is **never** invoked by the research pipeline
+   (`/expand`, `/plan-articles`, `/regate`, `/fanout`, `/architecture` add no
+   SIE hooks) and is **not bulk-prefetched** at `Schedule all` time — a
+   keyword whose article is never written never incurs SIE spend. The M12
+   manual `Term analysis` endpoint (§6) is the **validation surface only**
+   (owner-triggered, one cluster at a time), needed because no Writer exists
+   yet in M12; it is not an eager-analysis pathway.
 
 **Source of truth:** the SIE PRD — PRD #3 in
 `docs/blog-writer-pipeline-bundle.md` (lines ~4236–5820): Modules 1–14, Data
@@ -25,7 +36,9 @@ items are in scope here; the 4 "MVP Can Exclude" items are excluded).
 ## 1. What M12 ships
 
 `backend/app/sie/` — the full 14-module pipeline, run **per article keyword**
-(a cluster's primary keyword), producing the PRD's Final Output Model
+(a cluster's primary keyword), **lazily at write time** (owner decision #4
+above — never during keyword research/planning), producing the PRD's Final
+Output Model
 (`terms.required[]` with per-zone usage recommendations, `terms.avoid[]`,
 `entities` merged with `is_entity`/`recommendation_score`, `word_count`
 min/target/max, `target_keyword.minimum_usage`, warnings) — persisted with
@@ -125,6 +138,11 @@ create index on fanout.keyword_analyses (keyword, location_code, run_date desc);
 
 ## 6. API + UI (M12 slice, minimal)
 
+Per owner decision #4, this endpoint exists for **M12 validation only** —
+single-cluster, owner-triggered. There is deliberately **no** bulk-analyze
+action, and no SIE call sites in any research-pipeline job. From M13 on, the
+normal invocation path is inside `run_article_job`.
+
 - `POST /sessions/{id}/clusters/{cluster_id}/term-analysis` — **owner-only**
   in M12 (`require_owner`); body `{force_refresh?, outlier_mode?}`; cache hit
   returns 200 with the stored report, miss starts the job (202 + poll).
@@ -140,9 +158,14 @@ create index on fanout.keyword_analyses (keyword, location_code, run_date desc);
 ~1 DataForSEO SERP call + 1 Haiku classification + ~10–20 ScrapeOwl scrapes +
 Google NLP per eligible page (per-1,000-char billing) + 1 Sonnet entity pass +
 1 batched embedding call ≈ **$0.30–$0.60 and ~1–3 min**, then cached 7 days.
-Session-scale: a 315-article session ≈ **+$100–$190** first pass. Implication
-flagged: M14's `Schedule all` cost preview must include SIE cost for uncached
-keywords (the $90 VA approval threshold will trip on much smaller batches —
+Because SIE runs at write time (decision #4), this spend is incurred **only
+for articles actually generated, when they're generated** — a 315-article
+session that schedules everything spends ≈ **+$100–$190 spread across the
+drip window**, not up front; unwritten articles cost nothing. Per-article
+worker time becomes SIE (~1–3 min, cache-miss case) + Writer (~30–45s) ≈
+**2–4 min/article** — fine under the M14 concurrency cap of 3. M14's
+`Schedule all` cost preview must include projected SIE cost for uncached
+keywords (the $90 VA approval threshold will trip on smaller batches —
 arguably correct behavior).
 
 ## 8. Tests (sandbox-runnable)
@@ -192,7 +215,9 @@ fresh row, old row preserved. (4) `sie_analysis` phase appears in
 
 The Writer plan (`docs/writer-module-plan.md`) already builds against the
 full SIE input schema; its M13 adapter swaps the flat-keyword stub for this
-module's output: `terms.required[]` (+ real per-zone `usage_recommendations`,
+module's output, **invoking SIE lazily as stage 1 of `run_article_job`**
+(cache check on `keyword_analyses` → run on miss/stale → adapt → write —
+decision #4): `terms.required[]` (+ real per-zone `usage_recommendations`,
 `is_entity` → the C6 citable-claim pattern activates), `terms.avoid[]`,
 `word_count.target` (cross-validated against the brief budget), entities →
 the enrichment lede's entity rule works as written (removing flagged
