@@ -216,9 +216,9 @@ decisions; nothing mid-flight):**
    `1.7-no-context` + `no_citations` degraded mode; Sonnet 4.6 prose /
    Haiku 4.5 short calls; Brief Gen output IS Writer Input A, so the heading
    structure comes from the real Brief Gen — resolving the empty-`h2_outline`
-   gap). **Owner prerequisite before M12 live validation: provision
-   `SCRAPEOWL_API_KEY` + `TEXTRAZOR_API_KEY` at the Railway project
-   level.** Open: plan-level flags awaiting sign-off (SIE plan §9 — incl.
+   gap). **Owner prerequisite before M12 live validation: ✅ DONE 2026-06-15 —
+   `SCRAPEOWL_API_KEY` + `TEXTRAZOR_API_KEY` provisioned on the
+   `info-site-kw-research-cluster` Railway service.** Open: plan-level flags awaiting sign-off (SIE plan §9 — incl.
    the lemmatizer choice, shared with the Writer's future term audit;
    brief-gen plan §7 — incl. the v1.7-§5 Step-2 spec gap and the DataForSEO
    "LLM Responses" availability check; writer plan §8).

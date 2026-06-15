@@ -106,15 +106,16 @@ as the rest of this app.
 - **Minimum-page threshold:** <5 content-eligible pages → continue with
   degraded confidence + warning (PRD guardrail), surfaced in the report.
 
-## 4. New services + env (OWNER PREREQUISITE — blocks live validation)
+## 4. New services + env (✅ PROVISIONED 2026-06-15 on the `info-site-kw-research-cluster` service)
 
-| Service | Env var (Railway project level) | Used by | Billing shape |
+| Service | Env var | Used by | Billing shape |
 |---|---|---|---|
 | ScrapeOwl | `SCRAPEOWL_API_KEY` | Module 4 | per-scrape credits |
 | TextRazor | `TEXTRAZOR_API_KEY` | Module 11 pass 1 | subscription w/ daily request quota |
 
-Provision both before M12's live-validation step (the sandbox can't reach any
-egress, so as always the pipeline is validated on the deployed stack). New
+**✅ Both keys provisioned 2026-06-15** directly on the `info-site-kw-research-cluster`
+Railway service (the SIE consumer). The sandbox can't reach any egress, so as always
+the pipeline is validated on the deployed stack. New
 **Python libs** (not services): `beautifulsoup4` + `lxml`, a lemmatizer (§9),
 a stopword list.
 
