@@ -8,14 +8,208 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
 > and deployed; nothing is mid-flight.
 >
-> **Separately, M12 (Writer foundation) is now unblocked in terms of design
-> decisions** (§9.9 / §9.11 — all six items locked 2026-06-09) **but blocked on
-> source PRDs.** The AR Tools Blog Writer bundle isn't in `docs/`; §9 was built
-> from a conversation summary. Before M12 drafting starts, fetch the Tier-1/2
-> artifacts listed in **§9.13** — the owner is running this fetch in a separate
-> chat (2026-06-10) and will paste results back. When that lands, drop the docs
-> into `docs/`, reference them from CLAUDE.md, then draft M12. Until then,
-> anything written for M12 is a sketch with `# TODO: real PRD says…` markers.
+> **Separately, the post-v1 sequence was re-set on 2026-06-12 (owner
+> decisions; see that day's dated entries): M12 = SIE Term & Entity module
+> (`docs/sie-module-plan.md`), M13 = Brief Generator
+> (`docs/brief-generator-module-plan.md`), M14 = Writer
+> (`docs/writer-module-plan.md`), M15 = scheduling + link injection.
+> Both Brief Gen and SIE run lazily at write time only (parallel stage 1 of
+> `run_article_job`) — never during keyword research.** The AR Tools Blog Writer bundle is in
+> the repo (`docs/blog-writer-pipeline-bundle.md`, all 8 PRDs verbatim — the
+> §9.13 fetch is satisfied), both build plans are drafted and reconciled
+> against it, and SIE runs **ScrapeOwl + TextRazor as newly provisioned
+> services** (NER provider amended Google NLP → TextRazor, 2026-06-12 fifth
+> pass; retires §9.1's "no new third-party deps" line).
+> **M12/M13 prerequisites are DONE (2026-06-15):** `SCRAPEOWL_API_KEY` +
+> `TEXTRAZOR_API_KEY` are provisioned on the `info-site-kw-research-cluster`
+> Railway **service**, DataForSEO "LLM Responses" is enabled on our account, and
+> **all 18 plan sign-off flags are resolved** (SIE §9 / Brief Gen §7 / Writer §8).
+> **Also in-flight (see the 2026-06-15 entry below): a whole-app embeddings
+> provider swap OpenAI → Gemini, shipped DORMANT** on
+> `claude/focused-wright-kj3gyr` — code + the prod migration are done; cutover
+> (deploy, flip `EMBEDDING_PROVIDER=gemini`, recalibrate thresholds) is pending.
+> Consolidated planning lives on that branch (not yet merged to `main`).
+
+_2026-06-15 — planning consolidation + sign-offs + embeddings provider swap (this
+session; all on `claude/focused-wright-kj3gyr`, NOT yet merged to `main`):_
+
+- **Consolidated the two divergent Blog-Writer planning branches**
+  (`claude/peaceful-mayer-iho6m4` + `claude/wizardly-clarke-3zxvh4`) into one set:
+  the 8-PRD bundle (deduped — kept `blog-writer-pipeline-bundle.md`), the live I/O
+  contract (`blog-writer-live-contract.md`), and the SIE/Brief-Gen/Writer module
+  plans, with `CLAUDE.md` + this file reconciled to the M12=SIE / M13=BriefGen /
+  M14=Writer / M15=scheduling sequence (CLAUDE.md v1.12). Both source branches
+  stay on `origin` for provenance.
+- **Owner sign-off recorded on all 18 flagged plan decisions** (+ one surfaced H3
+  conflict). Highlights: SIE lemmatizer = **spaCy `en_core_web_sm`** (shared lock
+  w/ the Writer term audit); `fanout.keyword_analyses` RLS = match the other
+  fanout tables; Brief Gen **fails the run on abort** (no degraded fallback);
+  **low-intent (<0.75) articles BLOCK** until a manual owner intent-override
+  (needs a parked state + an override affordance — more build than proceed+warn);
+  Writer keeps citable-claim detection in no-citations mode, collapses the title
+  to `brief.title`, **builds the pillar path in M14** (scope expanded), and
+  **emits H3s from day one** (Brief Gen sources them — supersedes the stale
+  "H2-only"). Full text in the SIE §9 / Brief Gen §7 / Writer §8 sign-off blocks.
+- **DataForSEO "LLM Responses" confirmed enabled** on our account → M13's Step-2D
+  4-LLM fan-out runs at full quality (the `llm_fanout_unavailable` degradation
+  stays a runtime safety net only).
+- **Embeddings provider swap — locked-decision override (owner): OpenAI
+  `text-embedding-3-small` → Google `gemini-embedding-001` @ 1536-dim (Matryoshka),
+  whole-app, quality/consistency.** Shipped **DORMANT** (`embedding_provider`
+  defaults to `openai`, so prod is untouched until cutover). Code: provider-pluggable
+  `backend/app/llm/embeddings.py` (`OpenAIEmbedder` + `GeminiEmbedder` — REST
+  `:batchEmbedContents`, `x-goog-api-key` header auth, `outputDimensionality=1536`
+  + L2-normalize, 100/req chunks run **concurrently** via `ContextThreadPoolExecutor`,
+  cap `gemini_embedding_max_workers=8`); `OpenAILLM.embed` delegates (the LLMError
+  contract preserved); per-session `embedding_model` tag + a **freeze-old-sessions
+  409 guard** on expand/regate/fanout/plan-articles/architecture (never mixes
+  OpenAI/Gemini vector spaces — both are 1536-dim but different spaces); owner-only
+  `GET /debug/embedding-health` probe. **Migration
+  `20260615000000_session_embedding_model.sql` APPLIED TO PROD** (AR-Internal-Tools
+  `wvcthtmmcmhkybcesirb`, `fanout.sessions`, via Supabase MCP). `GEMINI_API_KEY`
+  provisioned. CLAUDE.md v1.13 + the locked-decisions table updated; Brief Gen
+  §7.3's `text-embedding-3-large` exception is **superseded** by this.
+- **Adversarial self-review of the swap → 6 items, all fixed:** (1) `GeminiEmbedder`
+  wraps every malformed-response failure as `EmbeddingError` (it was leaking raw
+  `KeyError`/`ValueError` past the `LLMError` contract → unhandled 500s at finalize
+  + disambiguation, which catch `LLMError` only); (2) parallel chunking (above);
+  (3) `split.py` degrades on an embed failure instead of aborting the plan job;
+  (4) `OpenAIEmbedder` orders results by the response `index` (Gemini has no index
+  field — documented, count-checked); (5) per-chunk cost metering so a partial
+  batch failure still attributes the completed chunks. ruff + py_compile clean;
+  logic validated against the real `CostMeter` (full pytest runs in CI — no deps
+  in the sandbox).
+- **Remaining to cut the swap over (ops + live):** deploy this branch (merge to
+  `main`), smoke-test `GET /debug/embedding-health` (expect `ok:true`,
+  `returned_dim:1536`), set `EMBEDDING_PROVIDER=gemini` + redeploy, then
+  **recalibrate the 8 cosine thresholds** on live Gemini runs (relevance 0.65 /
+  clustering 0.55 / dedup 0.85 / lateral 0.55 / orphan 0.65 / split 0.55 /
+  ambiguity 0.5 / routing-margin 0.04 — all env-overridable + `/regate`-tunable, no
+  per-tweak redeploy). Brief Gen's gates (0.55/0.78/0.65/0.75) recalibrate too. If
+  Gemini 429s on big runs, lower `GEMINI_EMBEDDING_MAX_WORKERS`.
+
+_2026-06-12 (sixth pass — full Brief Generator pulled into scope, write-time
+only): **The complete Brief Generator pipeline (PRD #2 v2.3, Steps 0–11) now
+runs for every article at write time** (owner decision; rationale: the process
+must be identical for every article). Same lazy rule as SIE: it executes only
+as a stage of generating a specific article, never during keyword
+research/planning, never bulk-prefetched. **Sequence re-set again: M12 = SIE →
+M13 = Brief Generator (new `docs/brief-generator-module-plan.md`) → M14 =
+Writer → M15 = scheduling + link injection.** Provider audit (from the PRD's
+own cost model): **zero new services** — Reddit search AND the 4-LLM fan-out
+(ChatGPT/Claude/Gemini/Perplexity) are DataForSEO endpoints (Reddit search +
+"LLM Responses"; verify the latter is enabled on our plan), alongside SERP /
+PAA / autocomplete / suggestions we already use; embeddings are OpenAI
+`text-embedding-3-large` **inside Brief Gen only** (PRD-calibrated gates
+0.55/0.78/0.65/0.75 — flagged scoped exception to the app's 3-small lock).
+Step 12 (silo identification) is **skipped** (this app owns silos;
+`discarded_headings` persisted for future spin-off intel — flagged). New
+`fanout.briefs` cache mirrors `keyword_analyses` (keyword+location, 7-day,
+RLS on day one); new `brief_generation` meter phase. **Writer-plan impact:**
+adapter calls A1–A4 dissolve (Brief Gen output IS Writer Input A), deltas
+Δ1/Δ2 dissolve, H3s + authority-gap sections return, `clusters.adapter_cache`
+dropped, the stub fallback demoted to test fixture (a Brief Gen abort fails
+the run — no thinner-brief fallback in prod). Cost per brief $0.37–$0.91
+(ceiling $1.00); per-article totals now ≈ **$0.92–$1.96 and ~3–5 min**
+(brief ∥ SIE, then Writer); a 315-article session ≈ $290–620 spread across
+the drip window. Six flags await sign-off in the brief-gen plan §7 (incl. the
+v1.7-§5 Step-2 spec gap — sub-source mechanics reconstructed from the v2.x
+doc; fetch v1.7 §5 or sample `briefs_cache` rows if ambiguity bites). Docs
+only; nothing built._
+
+_2026-06-12 (fifth pass — SIE NER provider amended): **Google Cloud NLP →
+TextRazor** for SIE Module-11 entity extraction (owner decision, amending the
+third-pass "match PRD exactly" provider lock; ScrapeOwl unchanged). The PRD's
+Module-11 *design* is preserved — a grounded NER pass 1 whose output the LLM
+pass 2 may dedupe/categorize/filter but never add to — with TextRazor
+supplying pass 1 (`app/sie/textrazor_client.py`, httpx REST,
+`extractors=entities`, one document per request). Google-specific parameters
+become calibration items (SIE plan §9 #6): salience ≥ 0.40 → TextRazor
+`relevanceScore` ≥ 0.40 (starting point), the Google entity-type whitelist →
+an equivalent DBpedia-type whitelist, the 100KB input cap kept as our
+truncation rule (non-binding for TextRazor). Billing is subscription/daily-
+quota, so the meter carries an amortized per-request estimate. **Env var
+change: `TEXTRAZOR_API_KEY` replaces `GOOGLE_NLP_API_KEY`** in the owner
+provisioning prerequisite (ScrapeOwl's key unchanged). Updated: SIE plan
+(decision #2 + module table + §3/§4/§7/§9 #6), writer-plan banner, the §9.11
+provider row, CLAUDE.md locked-decisions row. Docs only; nothing built._
+
+_2026-06-12 (fourth pass — SIE trigger timing locked): **SIE runs lazily, at
+write time only** (owner decision). It executes solely as **stage 1 of
+generating a specific article** (M13 `run_article_job`: `keyword_analyses`
+cache check → run on miss/stale → adapt → write; M14 scheduled runs do the
+same at their scheduled time). It is **never** invoked during keyword
+research/planning — no SIE hooks in `/expand`, `/plan-articles`, `/regate`,
+`/fanout`, or `/architecture` — and it is **not bulk-prefetched** at
+`Schedule all` time, so an article that is never written never incurs SIE
+spend (a 315-article session's ≈$100–190 of SIE cost is spread across the
+drip window, not paid up front; per-article worker time ≈ 2–4 min incl. the
+write). The M12 `Term analysis` endpoint stays single-cluster, owner-only —
+a validation surface, not an eager-analysis pathway. Encoded in
+`docs/sie-module-plan.md` (decision #4 + §6/§7/§11), the writer plan banner,
+and the §9.11 table._
+
+_2026-06-12 (third pass — SIE pulled into scope; sequence re-set): **Three
+owner decisions in-session.** **(1) SIE is IN scope** — reopens §9.11's "Skip
+SIE in v1" lock; on-page term/entity intelligence (SurferSEO/Clearscope-style)
+is required for SEO-competitive output. **(2) Match the SIE PRD exactly on
+providers:** **ScrapeOwl** (scraping) + **Google Cloud NLP** (`analyzeEntities`
+NER) become **newly provisioned services** (substitutions via DataForSEO
+content-parsing / Claude extraction were offered and declined). This retires
+§9.1's "no new third-party deps" line. **Owner prerequisite before M12 live
+validation: provision `SCRAPEOWL_API_KEY` + `GOOGLE_NLP_API_KEY` (Railway
+project level).** **(3) Sequencing = SIE first:** **M12 = SIE → M13 = Writer →
+M14 = scheduling + link injection** (first articles are born enriched; Writer
+contract validates in M13). Artifacts: new **`docs/sie-module-plan.md`** (full
+14-module port per the PRD's MVP list; `fanout.keyword_analyses` 7-day cache
+with RLS ON from day one — the §8.7 `sie_cache` lesson; new `sie_analysis`
+meter phase; ~$0.30–$0.60 + 1–3 min per keyword, ≈+$100–190 on a 315-article
+session — must be included in M14's `Schedule all` cost preview); the Writer
+plan **renamed `m12-writer-foundation-plan.md` → `docs/writer-module-plan.md`**
+with a re-sequence banner (adapter now consumes real `keyword_analyses`; flat
+stub demoted to fallback; Δ4 relaxations largely fall away; C6 claim pattern
+activates). Flags awaiting owner sign-off: SIE plan §9 (5 items, incl.
+lemmatizer choice — shared with the Writer's future term audit) + writer plan
+§8 (6 items). Docs only; nothing built._
+
+_2026-06-12 (later — M13 Writer plan drafted; was "M12" at drafting time,
+re-sequenced same day — see the entry above): **Reconciled the §9 sketch
+against the real Writer PRD and drafted the Writer build plan** at
+**`docs/writer-module-plan.md`** (docs only, nothing built). The sketch
+held up; four deltas found and resolved in the plan: **(Δ1)** the adapter gains a
+**4th cached LLM call — heading-structure generation** (the predicted H2 gap;
+guided by Brief Gen v2.3's `intent_format_template` registry, transcribed
+verbatim into `writer/templates.py`; H2-only in v1); **(Δ2)** title + scope are
+one call with Brief Gen Step 3.5's real contract (50–80-char title, ≤500-char
+scope with a "does not cover" clause), not a derivation; **(Δ3)** §5.8.8
+citable-claim coverage should NOT be fully skipped in no-citations mode — its
+rewrite-to-remove retry + C7–C9 auto-soften is an anti-fabrication guard
+(recommended keep, config-flagged; diverges from §9.1's "skip" — flagged);
+**(Δ4)** two degraded-mode relaxations the PRD doesn't define (lede entity rule
+→ top supporting keyword; flat term-zone defaults). Also: PRD §17 model tiers
+adopted exactly (Sonnet 4.6 prose / Haiku 4.5 short calls, no Opus);
+`output.title` collapsed onto `brief.title` (flagged); pillar generation
+deferred to M13; M12 migration = `clusters.adapter_cache` + `fanout.
+article_outputs` only (slug / site_base_url / schedules are M13-owned). Six
+flagged decisions for owner sign-off in the plan's §8._
+
+_2026-06-12 (M12 unblocked — Blog Writer PRD bundle landed): **The AR Tools Blog
+Writer PRD bundle is now in the repo** at `docs/blog-writer-pipeline-bundle.md`
+(468 KB / 8,867 lines — all 8 PRDs concatenated verbatim: Content Writer
+consolidated v1.7 [incl. §17 LLM Call Inventory, §18 Prompt Scaffolds, §19
+Closures, §20 golden example] + Brief Generator v2.3 + SIE Term & Entity +
+Research & Citations v1.1.1 + Sources Cited v1.1 + Content Quality v1.0 + Suite
+Architecture & Roadmap v1.0 + Engineering Implementation Spec v1.1). This
+**satisfies the §9.13 Tier-1/2 fetch** that blocked M12 — owner uploaded it
+out-of-band (originally in a separate chat) and it was committed here so it
+survives container resets. Referenced from CLAUDE.md "Key file locations". Kept
+as **one verbatim file** (not split, not folded into the topic-fanout PRD — it's
+a different product's spec this app consumes). **Next before any Writer code:**
+read the Writer Module PRD (#1) + Engineering Spec (#8) and reconcile the §9
+sketch (built from a summary) against them — flagged delta is the empty
+`clusters.h2_outline` (the Writer PRD assumes a rich `brief.heading_structure[]`;
+the adapter/Writer must now generate body H2s itself — §9.13 closing note). No
+code changes in this entry; docs only._
 
 _2026-06-11 (doc sync, no code changes): **CLAUDE.md synced to v1.11** — it had
 fallen behind this file (M11 merge/deploy, §7.8 metrics built, writer-owned
@@ -226,7 +420,7 @@ can't be exercised" is stale. Item 4 (nested-thread `external_call` logs carryin
 `cost_usd` + non-null `session_id`) still needs a fresh pipeline run on the current
 deploy — none has happened post-redeploy._
 
-_Last updated: 2026-06-09. **§9 added — Blog Writer module integration plan.**
+_Last updated: 2026-06-15 — latest: planning consolidated onto `claude/focused-wright-kj3gyr`, all 18 plan sign-offs recorded, and the OpenAI→Gemini embeddings swap shipped dormant (see the 2026-06-15 lead-block entry up top). **§9 below was added 2026-06-09**; its "port **only** the Writer module" framing is superseded by the M12=SIE / M13=Brief Gen / M14=Writer / M15=scheduling re-sequence.
 After reviewing the AR Tools Blog Writer PRD bundle (8 PRDs), locked direction:
 port **only the Writer module** (PRD #1, v1.7) into `backend/app/writer/` in
 degraded mode (`1.7-no-context`, `no_citations: true`) + a deterministic
@@ -555,6 +749,17 @@ coupling, no full duplicate).
 
 ### 9.1 Scope (v1)
 
+> **[Amended 2026-06-12, owner decisions — see that day's dated entries:
+> (a) SIE is no longer skipped — it builds FIRST as M12 (`docs/sie-module-plan.md`),
+> with ScrapeOwl + TextRazor as newly provisioned services (NER provider
+> amended from Google NLP same day), so the
+> "no new third-party deps" line below no longer holds; (b) the Writer's
+> `sie` input is the real `keyword_analyses` output, with the flat-keyword
+> stub (§9.2) demoted to fallback; (c) §5.8.8 is not fully skipped — its
+> rewrite/soften arm is kept as an anti-fabrication guard (writer plan Δ3).
+> Brief Generator / Research / Sources Cited remain skipped; `no_citations:
+> true` and `1.7-no-context` still apply.]**
+
 Port the **Writer module** (PRD #1, v1.7) into `backend/app/writer/` as an
 in-process Python package. **Skip** the other 4 modules. Degraded mode:
 - `schema_version_effective: "1.7-no-context"` — no brand voice / ICP / client
@@ -805,24 +1010,43 @@ table.
    §8.3's Opus-on-pillars / Haiku+Opus variants flagged for revisit if Sonnet
    quality disappoints on the first live batch.
 
-### 9.10 Likely milestone sequence
+### 9.10 Likely milestone sequence — **RE-SET 2026-06-12 (owner; revised twice same day)**
 
-- **M12 — Writer foundation:** port Writer module + adapter + degraded-mode
-  contract; manual **`Generate now`** button (owner-only) on the Architecture
-  view. No scheduling, no link injection yet. Validates the Writer contract
-  on real clusters; cost + quality observed before scheduling logic.
-- **M13 — Scheduling + internal linking:** asyncio worker loop, **`Schedule
-  all`** modal (all-at-once + drip), `link_injector`, article view, schedule
-  overview, link-health report.
-- **M14 (optional) — Brand voice + citations:** add `fanout.clients` layer +
-  bolt in Research module + Sources Cited renderer. Deferred until v1 quality
-  is judged insufficient.
+- **M12 — SIE Term & Entity module** (pulled into scope 2026-06-12, reopening
+  the §9.11 "skip SIE" lock): full 14-module port per the SIE PRD's MVP list,
+  providers **ScrapeOwl + TextRazor, newly provisioned** (NER provider
+  amended from Google NLP, 2026-06-12 fifth pass),
+  `fanout.keyword_analyses` 7-day cache, owner-only `Term analysis`
+  report surface. Runs lazily at write time only.
+  **→ Build plan: `docs/sie-module-plan.md`** (flagged decisions in its §9).
+- **M13 — Brief Generator** (pulled into scope later 2026-06-12, sixth pass):
+  full PRD #2 v2.3 pipeline (Steps 0–11; Step 12 silo-identification skipped —
+  this app owns silos), write-time only, **zero new services** (all candidate
+  sources are DataForSEO incl. Reddit search + the 4-LLM "LLM Responses"
+  fan-out; embeddings `text-embedding-3-large` inside the module).
+  `fanout.briefs` 7-day cache; `brief_generation` meter phase.
+  **→ Build plan: `docs/brief-generator-module-plan.md`** (6 flags in its §7).
+- **M14 — Writer foundation** (was M12, then M13): port Writer module + thin
+  field-mapper (Brief Gen output IS Writer Input A) + degraded-mode contract
+  (`1.7-no-context`, `no_citations`); manual **`Generate now`** (owner-only).
+  At write time: Brief Gen ∥ SIE (stage 1, parallel) → Writer.
+  **→ Build plan: `docs/writer-module-plan.md`** (see its banner — adapter
+  A1–A4 + deltas Δ1/Δ2 dissolved by M13).
+- **M15 — Scheduling + internal linking** (was M13/M14): asyncio worker loop,
+  **`Schedule all`** modal (all-at-once + drip), `link_injector`, article
+  view, schedule overview, link-health report. Cost preview must include
+  Brief Gen + SIE + Writer (≈$0.92–$1.96/article) for uncached keywords.
+- **M16 (optional) — Brand voice + citations:** add `fanout.clients`
+  layer + bolt in Research module + Sources Cited renderer. Deferred until
+  v1 quality is judged insufficient.
 
 ### 9.11 Locked decisions (2026-06-09)
 
 | Topic | Decision |
 |---|---|
-| Integration depth | **Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited. |
+| Integration depth | ~~**Writer + adapter only.** Skip Brief Generator, SIE, Research, Sources Cited.~~ **[Amended twice 2026-06-12: SIE is IN scope (M12, `docs/sie-module-plan.md`, ScrapeOwl + TextRazor) AND the full Brief Generator is IN scope (M13, `docs/brief-generator-module-plan.md`, all-DataForSEO sources, write-time only).** Research + Sources Cited remain skipped (`no_citations: true`).] |
+| SIE providers (2026-06-12) | **ScrapeOwl** (scraping, PRD-exact) + **TextRazor** (NER — amended same day from the initially chosen Google Cloud NLP; Module-11 grounded-NER design preserved, Google-specific thresholds become calibration items) provisioned as new services; DataForSEO/Claude substitutions declined. Retires §9.1's "no new third-party deps" line. |
+| SIE + Brief Gen trigger timing (2026-06-12) | **Write-time only, lazy — both modules, run in parallel** as stage 1 of generating a specific article (cache check → run on miss/stale); never during research/planning (`/expand`, `/plan-articles`, `/regate`, `/fanout`, `/architecture`); never bulk-prefetched at `Schedule all`. Unwritten articles incur no SIE spend. M12's `Term analysis` endpoint = single-cluster validation surface only. |
 | Brand voice | **Skip in v1** (`1.7-no-context`). `clients` layer deferred to v2 (M14). |
 | Citations | **Skip in v1** (`no_citations: true`). Research module bolted on later without schema changes. |
 | Cadence semantics | **Per-article one-shot publish date.** Recurring refresh deferred. |
@@ -837,7 +1061,7 @@ table.
 | Dangling-link policy | **Leave + report.** link_injector keeps the URL; link-health report flags it. |
 | VA scope | **Full access on own sessions** (RLS-scoped). VA can schedule + view + regenerate. |
 | VA cost gate (Writer) | **`Schedule all` > $90 → owner approval** via existing M9 `/approvals` queue. New `writer_schedule_approval_threshold_usd = 90.0` (independent of M9's $5 `va_soft_cap_usd`). Per-article `Generate now` not gated. |
-| Writer model tier | **Sonnet 4.6 for all section calls** (PRD §17). ~$0.20–$0.40/article. Opus/Haiku variants flagged for revisit if Sonnet quality disappoints. |
+| Writer model tier | ~~**Sonnet 4.6 for all section calls**~~ → **MIXED — corrected 2026-06-12 per §17** (see §9.13 status box): **Sonnet 4.6** prose (section/intro/FAQ/conclusion/takeaways) + **Haiku 4.5** title/CTA/ICP-judge. ~$0.20–$0.40/article. |
 
 ### 9.12 Relationship to §8
 
@@ -854,11 +1078,68 @@ If §8's publish layer ships later, it reads `fanout.article_outputs`
 (Markdown + HTML already serialized + internally linked) and pushes them
 into the repo. No further generation step required.
 
-### 9.13 M12 prerequisites — artifact fetch (2026-06-10)
+### 9.13 M12 prerequisites — artifact fetch (2026-06-10) — ✅ SATISFIED 2026-06-12
+
+> **✅ RESOLVED 2026-06-12 — the bundle has landed; the content-generation work is UNBLOCKED.**
+> The owner dropped the full **8-PRD AR Tools Blog Writer bundle** into
+> **`docs/blog-writer-pipeline-bundle.md`** (8,867 lines, one concatenated file with
+> `<!-- SOURCE FILE: … -->` markers per PRD): **(1)** Content Writer v1.7 — incl.
+> **§17 LLM Call Inventory** (exact model IDs, max-tokens, temps, retries per call),
+> **§18 Prompt Scaffolds** (verbatim), **§19 Closures**, **§20 Golden Example**, the
+> Step 1→12 flow, the topic-adherence filter (cosine **0.62** to title),
+> Agree/Promise/Preview + CTA templates, paragraph cap
+> (`max_sentences_per_paragraph`, default 4), `min_h2_body_words` floors, and the 4
+> `schema_version_effective` values (`1.7` / `1.7-no-context` / `1.7-degraded` /
+> `1.7-legacy-h1`); **(2)** Brief Generator **v2.3**; **(3)** SIE; **(4)** Research &
+> Citations v1.1.1; **(5)** Sources Cited v1.1; **(6)** Content Quality v1.0 (R1–R7);
+> **(7)** Suite Architecture v1.0; **(8)** Engineering Implementation Spec v1.1.
+> Satisfies Tier 1 (Writer PRD v1.7 + Engineering Spec) and Tier 2 #3/#4 (Brief Gen
+> `intent_format_template`; Content Quality thresholds). **Still NOT in the repo**
+> (accelerators, not blockers): Tier 2 #5 (3–5 real Writer outputs from
+> AR-Internal-Tools `public.module_outputs`) and Tier 3 #6/#7 (Writer source-code
+> pointer + production Anthropic model IDs) — grab the sample outputs if the
+> documented `article_json` schema proves ambiguous against real rows.
+>
+> **Reconciliations to fold into §9 (from the verbatim PRDs + the live contract):**
+> - **Writer model split is MIXED, not all-Sonnet** (corrects the §9.11 "Writer
+>   model tier" row above): per §17, Title-gen + CTA + ICP-callout-judge use
+>   **`claude-haiku-4-5`**; section / intro / FAQ / conclusion / Key-Takeaways /
+>   brand-distillation+reconciliation use **`claude-sonnet-4-6`**. Degraded mode
+>   (`no_citations` + no `client_context`) skips the brand calls (2,3) and the ICP
+>   judge (10), so the port's hot calls are section(5)/intro(4)/FAQ(6)/
+>   conclusion(7)/takeaways(9) on Sonnet + title(1)/CTA(8) on Haiku.
+> - **Brief in the PRD is v2.3, but PRODUCTION runs v2.6** (see
+>   `docs/blog-writer-live-contract.md`). The bundle's `intent_format_template` /
+>   `format_directives` are the v2.3 spec; the live v2.6 brief output is ground
+>   truth where they differ. M13 Brief Gen still synthesizes the brief, so this is a
+>   reference-reconciliation, not a blocker.
+> - **The Engineering Spec describes a 2-service topology** (platform-api
+>   orchestrator + pipeline-api with 5 sibling modules, FastAPI `BackgroundTasks`,
+>   `EXPECTED_MODULE_VERSIONS` validation). **We are NOT adopting that** — the
+>   modules are ported in-process into our existing backend (handoff §9.1 / §9.6
+>   decision stands). The spec is informational for the I/O contracts, not the infra.
+> - **`no_citations` degraded path is first-class in v1.7** (`research.citations`
+>   empty → continue, `no_citations: true`, sections written without grounding —
+>   not an abort), exactly as §9.1 assumed.
+> - **Live-contract schema corrections** (`docs/blog-writer-live-contract.md`,
+>   recovered from the AR-Internal-Tools prod DB): real column names are
+>   `module` / `input_payload` / `output_payload` (not `module_name` / `output_json`
+>   — the Tier-2 #5 SQL sketch below still uses the old names); the writer `article`
+>   is a **Markdown section array**, not an HTML blob; writer is **v1.7** as assumed.
+>
+> **Cross-check** the verbatim PRD against `docs/blog-writer-live-contract.md`; where
+> they disagree, the live contract wins. **Next (per the 2026-06-12 re-sequence):**
+> **M12 = SIE** (`docs/sie-module-plan.md`) → **M13 = Brief Generator**
+> (`docs/brief-generator-module-plan.md`) → **M14 = Writer**
+> (`docs/writer-module-plan.md`; port `backend/app/writer/` + adapter + `Generate
+> now`). Bundle + live contract referenced from CLAUDE.md "Key file locations".
 
 §9 was designed from a **conversation summary** of the AR Tools Blog Writer
-PRD bundle, not from the PRDs themselves. The source artifacts are NOT in
-`docs/`. Before M12 drafting can produce more than a sketch, fetch:
+PRD bundle, not from the PRDs themselves. ~~The source artifacts are NOT in
+`docs/`.~~ **[Resolved 2026-06-12 — the bundle (`docs/blog-writer-pipeline-bundle.md`)
++ the live contract (`docs/blog-writer-live-contract.md`) are now in `docs/`; see the
+status box above.]** The original fetch list below is **historical / superseded**,
+retained for provenance:
 
 **Tier 1 (blockers — required to start drafting M12):**
 1. **Writer PRD #1, v1.7** verbatim. Must include:

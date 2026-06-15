@@ -79,6 +79,11 @@ def create_session(
     disambiguation_hint: str | None,
     settings: dict,
 ) -> dict:
+    # Tag the session with the active embedding model so its stored vectors are
+    # never compared against another provider's space (freeze-old-sessions guard,
+    # 2026-06-15). Lazy import to avoid an import-time cycle.
+    from app.llm import active_embedding_model
+
     row = (
         get_service_client()
         .table("sessions")
@@ -91,6 +96,7 @@ def create_session(
                 "disambiguation_hint": disambiguation_hint,
                 "settings": settings,
                 "status": "running_pre_review",
+                "embedding_model": active_embedding_model(),
             }
         )
         .execute()

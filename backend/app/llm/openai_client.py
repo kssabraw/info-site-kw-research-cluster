@@ -16,7 +16,8 @@ import time
 from openai import OpenAI
 
 from app.cancellation import raise_if_cancelled
-from app.cost_meter import embedding_token_cost, llm_token_cost, record_cost
+from app.cost_meter import llm_token_cost, record_cost
+from app.llm.embeddings import EmbeddingError, OpenAIEmbedder
 from app.pipeline.models import (
     PROPOSABLE_TYPES,
     GroundingResult,
@@ -58,11 +59,16 @@ class OpenAILLM:
         silo_model: str,
         embedding_model: str,
         web_search_tool: str = "web_search",
+        embedder=None,
     ):
         self._client = OpenAI(api_key=api_key)
         self._silo_model = silo_model
         self._embedding_model = embedding_model
         self._web_search_tool = web_search_tool
+        # Embedding backend is provider-pluggable (locked-decision override
+        # 2026-06-15: OpenAI -> Gemini). Defaults to OpenAI on this client's own
+        # embedding model so existing callers/tests are unchanged.
+        self._embedder = embedder or OpenAIEmbedder(self._client, embedding_model)
 
     def _respond(self, prompt: str, purpose: str, *, browsing: bool) -> str:
         raise_if_cancelled()
@@ -277,31 +283,12 @@ class OpenAILLM:
         return out
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        raise_if_cancelled()
-        started = time.perf_counter()
+        """Delegate to the configured embedding backend (OpenAI or Gemini),
+        preserving the historical ``LLMError`` contract for callers."""
         try:
-            resp = self._client.embeddings.create(model=self._embedding_model, input=texts)
-        except Exception as exc:  # noqa: BLE001
-            raise LLMError(f"Embedding call failed: {exc}") from exc
-        usage = getattr(resp, "usage", None)
-        cost = embedding_token_cost(
-            self._embedding_model, getattr(usage, "total_tokens", None)
-        )
-        record_cost(cost)  # PRD §16.4 — token-derived cost
-        logger.info(
-            "external_call",
-            extra={
-                "event": "external_call",
-                "service": "openai",
-                "endpoint": "embeddings",
-                "result_count": len(texts),
-                "latency_ms": round((time.perf_counter() - started) * 1000, 2),
-                "cost_usd": cost,
-            },
-        )
-        return [d.embedding for d in resp.data]
+            return self._embedder.embed(texts)
+        except EmbeddingError as exc:
+            raise LLMError(str(exc)) from exc
 
     @staticmethod
     def _parse_silos(raw) -> list[ProposedSilo]:

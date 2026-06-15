@@ -76,9 +76,17 @@ def _split_article(
     if len(keywords) <= min_keywords:
         return [art]
 
-    embeddings = embed_fn(keywords)
+    try:
+        embeddings = embed_fn(keywords)
+    except Exception as exc:  # noqa: BLE001 — split is best-effort; keep the article whole
+        logger.warning(
+            "degraded",
+            extra={"event": "degraded", "step": "salience_split",
+                   "reason": f"embedding failed: {exc}"},
+        )
+        return [art]
     if not embeddings or len(embeddings) != len(keywords):
-        # Embedding failed/short — leave the article intact rather than guess.
+        # Embedding short/mismatched — leave the article intact rather than guess.
         return [art]
 
     groupings = cluster_topic(
