@@ -24,11 +24,14 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `TEXTRAZOR_API_KEY` are provisioned on the `info-site-kw-research-cluster`
 > Railway **service**, DataForSEO "LLM Responses" is enabled on our account, and
 > **all 18 plan sign-off flags are resolved** (SIE §9 / Brief Gen §7 / Writer §8).
-> **Also in-flight (see the 2026-06-15 entry below): a whole-app embeddings
-> provider swap OpenAI → Gemini, shipped DORMANT** on
-> `claude/focused-wright-kj3gyr` — code + the prod migration are done; cutover
-> (deploy, flip `EMBEDDING_PROVIDER=gemini`, recalibrate thresholds) is pending.
-> Consolidated planning lives on that branch (not yet merged to `main`).
+> **Embeddings swap CUTOVER (2026-06-15): OpenAI → Google Gemini is LIVE in prod.**
+> Branch merged to `main` + deployed (`bf01879`); on the Railway service
+> `EMBEDDING_PROVIDER=gemini` + `GEMINI_EMBEDDING_MODEL=gemini-embedding-2-preview`
+> (**Embedding 2**, public preview, #1 MTEB) are set + health-verified, and the prod
+> migration is applied. **ONLY recalibration remains** — the 8 cosine thresholds are
+> still OpenAI values, so clustering is degraded until re-tuned on live Embedding-2
+> runs (**in progress**); do NOT run production sessions until they're locked. GA
+> fallback model: `gemini-embedding-001`.
 
 _2026-06-15 — planning consolidation + sign-offs + embeddings provider swap (this
 session; all on `claude/focused-wright-kj3gyr`, NOT yet merged to `main`):_
