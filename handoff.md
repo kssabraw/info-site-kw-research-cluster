@@ -420,7 +420,7 @@ can't be exercised" is stale. Item 4 (nested-thread `external_call` logs carryin
 `cost_usd` + non-null `session_id`) still needs a fresh pipeline run on the current
 deploy — none has happened post-redeploy._
 
-_Last updated: 2026-06-09. **§9 added — Blog Writer module integration plan.**
+_Last updated: 2026-06-15 — latest: planning consolidated onto `claude/focused-wright-kj3gyr`, all 18 plan sign-offs recorded, and the OpenAI→Gemini embeddings swap shipped dormant (see the 2026-06-15 lead-block entry up top). **§9 below was added 2026-06-09**; its "port **only** the Writer module" framing is superseded by the M12=SIE / M13=Brief Gen / M14=Writer / M15=scheduling re-sequence.
 After reviewing the AR Tools Blog Writer PRD bundle (8 PRDs), locked direction:
 port **only the Writer module** (PRD #1, v1.7) into `backend/app/writer/` in
 degraded mode (`1.7-no-context`, `no_citations: true`) + a deterministic
