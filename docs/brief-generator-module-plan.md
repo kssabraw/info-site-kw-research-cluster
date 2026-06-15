@@ -162,8 +162,11 @@ article batch.
 >    manual-override API affordance (more than the proceed+warn alternative).
 > 5. **Step 2 (v1.7 §5) reconstruction — accepted.** Fetch v1.7 §5 or 2–3
 >    `briefs_cache` rows only if a build-time ambiguity surfaces.
-> 6. **DataForSEO "LLM Responses" availability — OWNER ACTION ITEM.** Confirm the
->    endpoint family is enabled on our account before M13 live validation.
+> 6. **DataForSEO "LLM Responses" — ✅ ENABLED on our account (confirmed 2026-06-15).**
+>    M13's Step-2D 4-LLM fan-out (ChatGPT/Claude/Gemini/Perplexity, ~$0.08–0.20/run)
+>    runs as in production — no degraded path needed at launch; the bundle's
+>    `llm_fanout_unavailable` graceful-degradation stays purely as a runtime safety
+>    net for transient per-LLM failures.
 
 ### Original flagged list (now resolved)
 
