@@ -144,7 +144,28 @@ per article at write time (lazy rule), spread across the drip window. M15's
 at these numbers the $90 VA approval threshold trips at roughly a 50–100
 article batch.
 
-## 7. Flagged decisions for owner sign-off
+## 7. Sign-off decisions — ✅ RESOLVED 2026-06-15 (owner)
+
+> **Owner sign-off 2026-06-15 — all six resolved (originals retained below for context):**
+> 1. **Step 12 (silo identification) skipped — confirmed.** App owns silos;
+>    `discarded_headings` persisted for future spin-off use.
+> 2. **No degraded fallback brief — confirmed.** A Brief Gen abort FAILS the
+>    article run (process-identical articles). The M14 stub survives only as a
+>    test fixture.
+> 3. **`text-embedding-3-large` inside Brief Gen — exception GRANTED.** Scoped to
+>    the brief's internal selection gates (0.55/0.78/0.65/0.75 stay as the PRD
+>    calibrated them); 3-small remains the app-wide lock everywhere else.
+> 4. **Low-intent (<0.75) articles BLOCK — stricter path chosen.** An article with
+>    intent confidence <0.75 does NOT auto-generate; it parks in an
+>    `intent_review_required` state until an owner sets a manual intent override,
+>    then generates. **Build impact:** needs a parked/blocked article state + a
+>    manual-override API affordance (more than the proceed+warn alternative).
+> 5. **Step 2 (v1.7 §5) reconstruction — accepted.** Fetch v1.7 §5 or 2–3
+>    `briefs_cache` rows only if a build-time ambiguity surfaces.
+> 6. **DataForSEO "LLM Responses" availability — OWNER ACTION ITEM.** Confirm the
+>    endpoint family is enabled on our account before M13 live validation.
+
+### Original flagged list (now resolved)
 
 1. **Step 12 skipped** (silo identification/viability) — this app owns silos;
    `discarded_headings` persisted for future spin-off use. Confirm.

@@ -52,7 +52,7 @@ Output Model
 min/target/max, `target_keyword.minimum_usage`, warnings) — persisted with
 **7-day caching** keyed by keyword + location.
 
-Consumer is the M13 Writer adapter (it replaces the flat-keyword `sie_stub`
+Consumer is the M14 Writer adapter (it replaces the flat-keyword `sie_stub`
 with this output). Since no Writer exists during M12, M12 ships its own
 evaluation surface: an owner-only **`Term analysis`** action per article +
 a report view (§6), which is also how SIE quality gets judged at review.
@@ -192,7 +192,25 @@ target-keyword floor-vs-percentile merge (Module 13's higher-of rule); word-
 count percentiles with the 800/5,000 filters; near-dup detection. Egress
 clients mocked; one end-to-end pipeline test over fixture pages.
 
-## 9. Flagged decisions for owner sign-off
+## 9. Sign-off decisions — ✅ RESOLVED 2026-06-15 (owner)
+
+> **Owner sign-off 2026-06-15 — all six resolved (originals retained below for context):**
+> 1. **Lemmatizer = spaCy `en_core_web_sm`** (NOT simplemma) — one shared NLP dep
+>    with the entity-derivation noun-chunking/NER and the Writer §13 term audit
+>    (cross-module lock); accept the model download in the image.
+> 2. **`keyword_analyses` RLS = match the other `fanout` tables** (owner-all +
+>    session-owner via a `sessions` join, like `keywords`/`site_architecture`) —
+>    NOT the stricter owner-read/VA-mediated variant. keyword_analyses holds
+>    SERP/competitor data, not user-sensitive data; consistency wins.
+> 3. **UI minimalism — confirmed** (report view only, owner-only trigger).
+> 4. **ScrapeOwl/TextRazor meter rates = estimates** until first invoices.
+> 5. **TextRazor calibration = build-time item** (salience→`relevanceScore` ≥0.40,
+>    entity-type→DBpedia whitelist, keep the 100KB truncation; verify exact field
+>    names against TextRazor docs at build time).
+> 6. **Intent-alignment input = PRD fallback** (Module-3 page-category
+>    distribution) — confirmed.
+
+### Original flagged list (now resolved)
 
 1. **Lemmatizer choice:** recommend `simplemma` (pure-Python, no model
    downloads — Docker/Railway friendly) over spaCy/NLTK. The Writer PRD §13
@@ -231,10 +249,10 @@ fresh row, old row preserved. (4) `sie_analysis` phase appears in
 `cost_breakdown` with real DataForSEO + estimated ScrapeOwl/NLP cost.
 (5) Pure-module test suite green in sandbox; ruff clean.
 
-## 11. Relationship to M13 (Writer)
+## 11. Relationship to M14 (Writer)
 
 The Writer plan (`docs/writer-module-plan.md`) already builds against the
-full SIE input schema; its M13 adapter swaps the flat-keyword stub for this
+full SIE input schema; its M14 adapter swaps the flat-keyword stub for this
 module's output, **invoking SIE lazily as stage 1 of `run_article_job`**
 (cache check on `keyword_analyses` → run on miss/stale → adapt → write —
 decision #4): `terms.required[]` (+ real per-zone `usage_recommendations`,

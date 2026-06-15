@@ -1,37 +1,26 @@
 # M14 — Writer Foundation: Build Plan
 
-> **Re-sequenced again 2026-06-12 (owner decision, third revision of the day):
-> the full Brief Generator also runs at write time — it builds as M13
-> (`docs/brief-generator-module-plan.md`) and the Writer is now M14;
-> scheduling shifts to M15.** Consequences for this plan: the §3 adapter's
-> LLM calls **A1–A4 are superseded** by real Brief Gen output (Steps 3 /
-> 3.5 / 4–8.7 / 10) — the adapter shrinks to a thin field-mapper, since Brief
-> Gen output IS the Writer's Input A; **deltas Δ1 and Δ2 below dissolve**
-> (they approximated what Brief Gen now actually does); H3s + authority-gap
-> sections return (the Writer's dormant H3 handling is exercised from day
-> one); `clusters.adapter_cache` is dropped from the migration (superseded by
-> `fanout.briefs`); the flat-keyword/stub fallback is demoted to a test
-> fixture (a Brief Gen abort fails the run — process-identical articles per
-> owner rule). At write time, Brief Gen and SIE run in parallel as stage 1,
-> then the Writer. Earlier banner notes below remain for history.
-
-> **[Earlier same-day banner]** the **SIE Term & Entity module builds first as M12**
-> (`docs/sie-module-plan.md`) — the Writer is **M13**, and scheduling + link
-> injection shift to **M14**. Two consequences for this plan: **(a)** the §3
-> adapter consumes the **real SIE output** (`fanout.keyword_analyses`),
-> **invoking SIE lazily as stage 1 of `run_article_job`** (cache check → run
-> on miss/stale → adapt → write; SIE is write-time-only by owner decision —
-> never triggered by the research pipeline, never bulk-prefetched) — the
-> flat-keyword stub remains the documented fallback when an analysis fails;
-> with real SIE data, per-zone term targets are real, the C6 citable-claim
-> pattern activates (`is_entity` exists), and the Δ4 relaxations below
-> largely fall away. **(b)** Providers were re-decided: SIE runs
-> ScrapeOwl + TextRazor as provisioned services (NER provider amended
-> Google NLP → TextRazor later the same day), which retires
-> the "no new third-party services" framing in §1 — for the *Writer's own
-> calls* nothing changes (Anthropic + OpenAI only). Milestone numbers in the
-> body below were written before the re-sequence; read M12→M13 and M13→M14.
-> (File renamed from `m12-writer-foundation-plan.md`.)
+> **Canonical milestone sequence (consolidated 2026-06-15): M12 = SIE → M13 =
+> Brief Generator → M14 = Writer (this plan) → M15 = scheduling + link injection.**
+> The body below was drafted before the re-sequence using the original numbering
+> (Writer = M12, scheduling = M13). **Read it with this key: body "M12" → M14
+> (this plan), body "M13" → M15 (scheduling), body "M14" → later/v2.** (File
+> renamed from `m12-writer-foundation-plan.md`.)
+>
+> **Substantive consequences of the re-sequence (still current):** the full Brief
+> Generator (M13) runs at write time and **its output IS the Writer's Input A**, so
+> the §3 adapter shrinks to a thin field-mapper — adapter LLM calls **A1–A4** and
+> **deltas Δ1/Δ2** below **dissolve** (Brief Gen now does that work). **H3s +
+> authority-gap sections are exercised from day one** (the Writer's already-ported
+> H3 handling — confirmed by the §8 sign-off, superseding §8.4's stale "H2-only").
+> `clusters.adapter_cache` is **dropped** from the migration (superseded by
+> `fanout.briefs`); the flat-keyword/stub fallback is demoted to a **test fixture**
+> (a Brief Gen abort fails the run — process-identical articles per owner rule). At
+> write time, **Brief Gen and SIE run in parallel as stage 1**, then the Writer; SIE
+> supplies real per-zone term targets + `is_entity` (C6 citable-claim pattern
+> activates), so the Δ4 relaxations below apply only on the SIE-failure fallback
+> path. SIE runs ScrapeOwl + TextRazor (new services); the Writer's own calls remain
+> Anthropic + OpenAI only.
 
 **Status:** Draft for owner review (2026-06-12). Nothing built.
 **Sources:** `docs/blog-writer-pipeline-bundle.md` (the real PRDs, landed 2026-06-12),
@@ -40,9 +29,9 @@ Writer Module v1.7 (bundle lines ~26–2470), Brief Gen v2.3 (for the
 `intent_format_template` registry the adapter mirrors).
 
 This document reconciles the §9 sketch (written from a conversation summary)
-against the real Writer PRD, and specifies M12 per the §9.10 milestone split:
+against the real Writer PRD, and specifies **M14** per the §9.10 milestone split:
 **port the Writer module + adapter + degraded-mode contract + a manual
-owner-only `Generate now`**. No scheduling, no link injection (M13).
+owner-only `Generate now`**. No scheduling, no link injection (those are **M15**).
 
 ---
 
@@ -281,7 +270,29 @@ or mockable, no egress:
 - Budget allocator: group math, authority-gap weights (present but unused in
   v1 — no `authority_gap_sme` H3s), 50-word floor.
 
-## 8. Flagged decisions for owner sign-off
+## 8. Sign-off decisions — ✅ RESOLVED 2026-06-15 (owner)
+
+> **Owner sign-off 2026-06-15 — all six resolved (originals retained below for context):**
+> 1. **Δ3 — keep citable-claim detection in no-citations mode — confirmed.**
+>    `writer_claim_coverage_enabled` default on; unsupported claims get
+>    rewrite-retry + soften as an anti-fabrication guard. Knowingly diverges from
+>    the §9.1 sketch's "skip §5.8.8 entirely".
+> 2. **Title collapse — confirmed.** `output.title = brief.title`; Writer Step 1
+>    reduces to embedding the anchor. Structural deviation from PRD §5.1 accepted.
+> 3. **Pillar path BUILT IN M14 — scope expanded.** `Generate now` covers BOTH
+>    supporting articles AND pillars (silo-level pillar adapter included in M14);
+>    pillar editorial is generated, not placeholder. (See the corrected item 3 below.)
+> 4. **H3 subheadings ON — exercised from day one** (supersedes §8.4's stale
+>    "H2-only / no H3 source"). Brief Gen (M13) produces the full heading structure
+>    incl. H3s + authority-gap sections, so the Writer's already-ported H3 handling
+>    runs in M14 — no deferral.
+> 5. **Δ4 relaxations — accepted, but fallback-only.** The lede entity rule → top
+>    supporting keyword + flat term-zone defaults apply ONLY on the SIE-failure
+>    fallback path; the normal path uses real SIE data (so Δ4 largely falls away).
+> 6. **Tier-2 sample outputs — fetch-if-needed.** Not blocking; pull real
+>    `module_outputs` rows only if `article_json` proves ambiguous during the port.
+
+### Original flagged list (now resolved)
 
 1. **Δ3 — keep citable-claim detection in no-citations mode** (rewrite-retry +
    soften as an anti-fabrication guard) vs. the §9.1 sketch's "skip §5.8.8
@@ -289,11 +300,13 @@ or mockable, no egress:
    default on). Diverges from the locked §9.1 wording, so flagging.
 2. **Title collapse** (`output.title = brief.title`; Writer Step 1 reduced to
    anchor embedding) — see §2 note. Recommended; structural deviation from PRD §5.1.
-3. **Pillar generation is out of M12.** `Generate now` covers supporting
-   articles (clusters) only. Pillars need a different adapter path (silo-level
-   brief; the writer owns pillar title/summary per the 2026-06-09 decision) and
-   are required by M13's pillars-first drip anyway — build the pillar path in
-   M13. Consequence: through M12, pillar editorial stays placeholder.
+3. **Pillar generation — BUILT IN M14** (resolved 2026-06-15; supersedes this
+   item's pre-re-sequence "out of M12 / build in M13" wording). `Generate now`
+   covers BOTH supporting articles (clusters) AND pillars; M14 includes the
+   silo-level pillar adapter (silo-level brief; the writer owns pillar
+   title/summary per the 2026-06-09 decision). Pillars are also required by
+   **M15**'s pillars-first drip. Consequence: pillar editorial is generated in
+   M14, not placeholder — scope expanded per owner decision.
 4. **H2-only heading structure** in v1 (no H3s — no SERP/authority-gap source).
    Budget math + validators still handle H3s (code ported intact) so M14+ can
    add them without rework.
