@@ -73,8 +73,8 @@ class _FakeHTTPResp:
 
 
 def _patch_post(monkeypatch, capture, values=(3.0, 4.0)):
-    def fake_post(url, params, json, timeout):
-        capture.append({"url": url, "params": params, "json": json})
+    def fake_post(url, headers, json, timeout):
+        capture.append({"url": url, "headers": headers, "json": json})
         n = len(json["requests"])
         return _FakeHTTPResp({"embeddings": [{"values": list(values)} for _ in range(n)]})
 
@@ -97,7 +97,7 @@ def test_gemini_builds_request_and_normalizes(monkeypatch):
     assert req["outputDimensionality"] == 2
     assert req["taskType"] == "SEMANTIC_SIMILARITY"
     assert req["content"]["parts"][0]["text"] == "x"
-    assert cap[0]["params"] == {"key": "k"}
+    assert cap[0]["headers"] == {"x-goog-api-key": "k"}  # key in header, not URL
     assert cap[0]["url"].endswith("/models/gemini-embedding-001:batchEmbedContents")
 
 
@@ -112,7 +112,7 @@ def test_gemini_chunks_batches_over_limit(monkeypatch):
 def test_gemini_count_mismatch_raises(monkeypatch):
     monkeypatch.setattr(
         "app.llm.embeddings.httpx.post",
-        lambda url, params, json, timeout: _FakeHTTPResp({"embeddings": [{"values": [1.0]}]}),
+        lambda url, headers, json, timeout: _FakeHTTPResp({"embeddings": [{"values": [1.0]}]}),
     )
     with pytest.raises(EmbeddingError):
         GeminiEmbedder(api_key="k").embed(["a", "b"])

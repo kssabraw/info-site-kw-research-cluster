@@ -127,7 +127,10 @@ class GeminiEmbedder:
         }
         try:
             resp = httpx.post(
-                url, params={"key": self._api_key}, json=payload, timeout=self._timeout_s
+                url,
+                headers={"x-goog-api-key": self._api_key},
+                json=payload,
+                timeout=self._timeout_s,
             )
             resp.raise_for_status()
             data = resp.json()

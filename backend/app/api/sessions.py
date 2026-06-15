@@ -1405,5 +1405,50 @@ def remove_topic(topic_id: str, user: AuthedUser = Depends(require_user)) -> Non
     store.delete_topic(topic_id)
 
 
+@router.get("/debug/embedding-health")
+def embedding_health(user: AuthedUser = Depends(require_owner)) -> dict:
+    """Owner-only: probe the Gemini embedding backend with a one-string call so the
+    `GEMINI_API_KEY` + API + 1536-dim access can be verified on the deployed stack
+    BEFORE flipping `EMBEDDING_PROVIDER` to gemini. Builds the Gemini backend
+    directly from settings — it does NOT change the active provider, touch any
+    session, or read stored vectors. Returns `ok` + the returned dimension + L2
+    norm + latency, or the failure reason (the key is sent as a header, so it
+    never appears in the error string)."""
+    import math
+    import time as _t
+
+    from app.config import get_settings
+    from app.llm.embeddings import GeminiEmbedder
+
+    s = get_settings()
+    out: dict = {
+        "active_embedding_provider": s.embedding_provider,
+        "gemini_model": s.gemini_embedding_model,
+        "expected_dim": s.gemini_embedding_dim,
+        "gemini_api_key_present": bool(s.gemini_api_key),
+    }
+    try:
+        embedder = GeminiEmbedder(
+            api_key=s.gemini_api_key,
+            model=s.gemini_embedding_model,
+            output_dim=s.gemini_embedding_dim,
+            task_type=s.gemini_embedding_task_type,
+        )
+        started = _t.perf_counter()
+        vec = embedder.embed(["embedding health check"])[0]
+        out.update(
+            {
+                "ok": True,
+                "returned_dim": len(vec),
+                "dim_matches": len(vec) == s.gemini_embedding_dim,
+                "l2_norm": round(math.sqrt(sum(x * x for x in vec)), 4),
+                "latency_ms": round((_t.perf_counter() - started) * 1000, 1),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 — report the failure to the owner
+        out.update({"ok": False, "error": str(exc)})
+    return out
+
+
 # Re-export for callers that validate relationship types.
 __all__ = ["router", "PROPOSABLE_TYPES"]
