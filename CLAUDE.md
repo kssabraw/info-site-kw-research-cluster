@@ -36,9 +36,10 @@ These don't change session-to-session. Don't propose alternatives.
 | LLM (silo discovery) | OpenAI `gpt-5.4` with browsing |
 | LLM (article-planning orchestrator) | Anthropic `claude-opus-4-7` with tool-use mode for strict-schema JSON |
 | Site architecture | **Deterministic, LLM-free** since 2026-06-09 (per-pillar Opus call removed, owner decision; the writer module owns pillar titles/summaries — flagged divergence from PRD §7.11) |
-| LLM (writer module, M12+) | Anthropic `claude-sonnet-4-6` for all section calls (locked 2026-06-09, `handoff.md` §9.11) |
+| LLM (writer module, M14+) | Anthropic `claude-sonnet-4-6` for prose calls + `claude-haiku-4-5` for short/classification calls (locked 2026-06-09 §9.11; tiering per Writer PRD §17, 2026-06-12) |
 | Embeddings | OpenAI `text-embedding-3-small` |
 | External data | DataForSEO (Labs + SERP + Keyword Data) |
+| SIE module (M12) | **ScrapeOwl** (page scraping, PRD-exact) + **TextRazor** (entity-extraction NER pass — owner amendment 2026-06-12, replacing the initially chosen Google Cloud NLP; the PRD's grounded-NER Module-11 design is preserved) — newly provisioned services (substitutions declined). **Runs lazily at write time only** — stage 1 of generating a specific article; never during keyword research/planning, never bulk-prefetched (owner decision 2026-06-12) |
 | Clustering | NetworkX + python-louvain |
 
 API keys (DataForSEO, OpenAI, Anthropic, Supabase) are already configured at the Railway project level and inherited by this service. No new keys need provisioning.
@@ -102,6 +103,8 @@ The active milestone is tracked at the bottom of this file (`## Active milestone
 | Path | What's there |
 |---|---|
 | `docs/topic-fanout-prd-v1_7.md` | The PRD (current version). Always read before significant work. |
+| `docs/blog-writer-pipeline-bundle.md` | **The AR Tools Blog Writer PRD bundle** (all 8 PRDs concatenated, verbatim) — the source of truth for the M12–M14 content-generation integration (`handoff.md §9`). Landed 2026-06-12. PRD #3 (SIE) = M12; PRD #2 (Brief Generator v2.3) = M13; PRD #1 (Writer v1.7, with §17 Call Inventory / §18 Prompt Scaffolds / §20 golden example) = M14. Read before drafting any SIE/Brief-Gen/Writer code. |
+| `docs/sie-module-plan.md` / `docs/brief-generator-module-plan.md` / `docs/writer-module-plan.md` | The **M12 (SIE)**, **M13 (Brief Generator)**, and **M14 (Writer)** build plans, reconciled against the bundle (2026-06-12). Each carries flagged decisions awaiting owner sign-off (SIE §9, Brief Gen §7, Writer §8). |
 | `handoff.md` | Session-continuity doc: live state, the §2 live-validation checklist, deploy/infra gotchas (§3), and the post-v1 plans (§8 site creation, §9 Writer integration). **Its dated entries are newer than the milestone history below — where they conflict, `handoff.md` wins.** |
 | `docs/` | Historical PRD versions and supplementary design docs. |
 | `backend/app/main.py` | FastAPI entry point. |
@@ -189,17 +192,36 @@ decisions; nothing mid-flight):**
    `external_call` logs carrying `cost_usd` + non-null `session_id` on a fresh
    post-redeploy run). Partially done: the meter and §16.4
    partial-cost-on-failure are live-confirmed.
-2. **M12 — Writer foundation: design locked, blocked on source PRDs.** All six
-   §9.9 decisions resolved 2026-06-09 (`handoff.md` §9.11: Writer module ported
-   into `backend/app/writer/` in degraded mode, in-process asyncio worker,
-   concurrency cap 3, Sonnet 4.6, deterministic link injection with plan-time
-   slugs, pillars-first drip, VA `Schedule all` > $90 → M9 approval queue). But
-   §9 was designed from a **conversation summary** — the AR Tools Blog Writer
-   PRD bundle is NOT in `docs/`. The owner is fetching the §9.13 Tier-1/2
-   artifacts in a separate chat (2026-06-10); when they land, drop them into
-   `docs/`, reference them here, then draft M12. Until then, M12 work is
-   sketch-only (`# TODO: real PRD says…`).
-3. **Before M12 ships:** address the `handoff.md` §8.7 security finding —
+2. **Post-v1 sequence re-set 2026-06-12 (owner decisions, revised twice same
+   day): M12 = SIE Term & Entity module → M13 = Brief Generator → M14 =
+   Writer foundation → M15 = scheduling + link injection** (`handoff.md`
+   2026-06-12 dated entries + §9.10). **Brief Gen + SIE both run lazily at
+   write time only** (parallel stage 1 of generating a specific article —
+   never during keyword research, never bulk-prefetched; per-article ≈
+   $0.92–$1.96, ~3–5 min on cache miss). The AR Tools Blog Writer PRD bundle
+   landed in `docs/blog-writer-pipeline-bundle.md` (2026-06-12, all 8 PRDs
+   verbatim — the §9.13 fetch is satisfied); all three build plans are
+   drafted and reconciled against it:
+   **`docs/sie-module-plan.md`** (M12 — full 14-module SIE port; **PRD-exact
+   providers: ScrapeOwl + TextRazor, newly provisioned services** (owner
+   decision, overriding the earlier "no new third-party deps" framing; NER
+   provider amended Google NLP → TextRazor same day);
+   `fanout.keyword_analyses` 7-day cache with RLS on from day one),
+   **`docs/brief-generator-module-plan.md`** (M13 — full Brief Gen v2.3
+   Steps 0–11 at write time; **zero new services** — Reddit + the 4-LLM
+   fan-out are DataForSEO endpoints; `text-embedding-3-large` inside the
+   module; Step 12 silo-identification skipped; `fanout.briefs` 7-day
+   cache), and **`docs/writer-module-plan.md`** (M14 — Writer in
+   `1.7-no-context` + `no_citations` degraded mode; Sonnet 4.6 prose /
+   Haiku 4.5 short calls; Brief Gen output IS Writer Input A, so the heading
+   structure comes from the real Brief Gen — resolving the empty-`h2_outline`
+   gap). **Owner prerequisite before M12 live validation: provision
+   `SCRAPEOWL_API_KEY` + `TEXTRAZOR_API_KEY` at the Railway project
+   level.** Open: plan-level flags awaiting sign-off (SIE plan §9 — incl.
+   the lemmatizer choice, shared with the Writer's future term audit;
+   brief-gen plan §7 — incl. the v1.7-§5 Step-2 spec gap and the DataForSEO
+   "LLM Responses" availability check; writer plan §8).
+3. **Before M14 (Writer) ships:** address the `handoff.md` §8.7 security finding —
    `AR-Internal-Tools.public.sie_cache` has **RLS disabled**. Don't enable it
    blind (the writer service's reads would break without a policy); coordinate
    with the AR-Internal-Tools owner.
