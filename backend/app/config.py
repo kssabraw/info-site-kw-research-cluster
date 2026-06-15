@@ -39,6 +39,20 @@ class Settings(BaseSettings):
     # Responses API browsing tool type. Configurable so the exact name can be
     # corrected without a code change if OpenAI's differs (e.g. web_search_preview).
     openai_web_search_tool: str = "web_search"
+
+    # Embeddings provider (locked-decision override 2026-06-15, owner: OpenAI ->
+    # Google Gemini, whole-app, quality/consistency). Ships DORMANT: default
+    # "openai" so prod is untouched until GEMINI_API_KEY is provisioned + a live
+    # smoke test passes; THEN set EMBEDDING_PROVIDER=gemini and recalibrate every
+    # cosine threshold below (the Gemini similarity distribution differs from
+    # OpenAI's). gemini-embedding-001 @ 1536 dims (Matryoshka truncation) keeps the
+    # existing vector(1536) columns, so no schema migration of stored vectors.
+    embedding_provider: str = "openai"  # "openai" | "gemini"
+    gemini_api_key: str = ""
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_embedding_dim: int = 1536
+    gemini_embedding_task_type: str = "SEMANTIC_SIMILARITY"
+
     # Disambiguation gate (PRD §7.1.2 / Q16). The LLM's ambiguity signal is
     # corroborated by embedding separation between candidate interpretations:
     # ambiguity is confirmed only if the two most-distinct interpretations have a

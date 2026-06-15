@@ -38,6 +38,9 @@ _DEFAULT_LLM_RATE = (5.0, 15.0)
 _EMBED_RATES: dict[str, float] = {
     "text-embedding-3-small": 0.02,
     "text-embedding-3-large": 0.13,
+    # Google AI Studio list price ($0.15/1M input; $0.075 batch). Tokens are
+    # estimated from input length (Gemini's embed response carries no usage).
+    "gemini-embedding-001": 0.15,
 }
 _DEFAULT_EMBED_RATE = 0.02
 
