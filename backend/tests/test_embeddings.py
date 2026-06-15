@@ -127,6 +127,31 @@ def test_gemini_parallel_chunks_preserve_order(monkeypatch):
     assert [v[0] for v in out] == [float(i) for i in range(250)]
 
 
+def test_gemini_meters_completed_chunks_on_partial_failure(monkeypatch):
+    # One chunk fails mid-batch; the chunks that already completed (and were billed)
+    # must still be metered (#5 — per-chunk cost recording).
+    from app.cost_meter import CostMeter, bind_meter
+
+    def post(url, headers, json, timeout):
+        texts = [r["content"]["parts"][0]["text"] for r in json["requests"]]
+        if "t150" in texts:  # the second chunk is malformed -> EmbeddingError
+            return _FakeHTTPResp({"embeddings": [{"oops": 1}]})
+        return _FakeHTTPResp({"embeddings": [{"values": [1.0, 0.0]} for _ in texts]})
+
+    monkeypatch.setattr("app.llm.embeddings.httpx.post", post)
+    meter = CostMeter()
+    bind_meter(meter)
+    try:
+        with pytest.raises(EmbeddingError):
+            GeminiEmbedder(api_key="k", output_dim=2, max_workers=4).embed(
+                [f"t{i}" for i in range(250)]
+            )
+        total, _ = meter.snapshot()
+        assert total > 0  # completed chunks recorded cost despite the failure
+    finally:
+        bind_meter(None)
+
+
 def test_gemini_malformed_response_raises(monkeypatch):
     # 200 OK but an embedding entry has no "values" -> EmbeddingError, not a raw
     # KeyError (so the OpenAILLM.embed -> LLMError contract holds for the

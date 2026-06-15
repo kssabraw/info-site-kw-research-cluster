@@ -74,7 +74,11 @@ class OpenAIEmbedder:
                 "cost_usd": cost,
             },
         )
-        return [d.embedding for d in resp.data]
+        # Order by the response's `index` rather than trusting list order, so each
+        # vector stays aligned with texts[i] (#4). OpenAI returns in order today;
+        # this makes it an enforced invariant. (Gemini's batch has no such field.)
+        ordered = sorted(resp.data, key=lambda d: getattr(d, "index", 0))
+        return [d.embedding for d in ordered]
 
 
 class GeminiEmbedder:
@@ -119,6 +123,7 @@ class GeminiEmbedder:
 
     def _embed_chunk(self, texts: list[str]) -> list[list[float]]:
         raise_if_cancelled()
+        started = time.perf_counter()
         url = f"{self._BASE}/{self._model}:batchEmbedContents"
         payload = {
             "requests": [
@@ -152,40 +157,20 @@ class GeminiEmbedder:
             raise EmbeddingError(
                 f"Gemini returned a malformed embeddings response: {exc}"
             ) from exc
+        # Alignment (#4): batchEmbedContents returns one embedding per request in
+        # request order, with NO index/echo field to verify against — so vectors are
+        # aligned to texts[i] by position and the count check is the only enforceable
+        # guard (an API reorder would be undetectable here).
         if len(vectors) != len(texts):
             raise EmbeddingError(
                 f"Gemini returned {len(vectors)} embeddings for {len(texts)} inputs"
             )
-        return vectors
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        raise_if_cancelled()
-        started = time.perf_counter()
-        chunks = [
-            texts[i : i + self._MAX_BATCH]
-            for i in range(0, len(texts), self._MAX_BATCH)
-        ]
-        if len(chunks) == 1:
-            vectors = self._embed_chunk(chunks[0])
-        else:
-            # Chunks are independent network calls; run them concurrently (bounded)
-            # so a 1000-item batch isn't 10 sequential round-trips — Gemini caps
-            # batchEmbedContents at 100 requests/call, so chunk count can't shrink.
-            # ContextThreadPoolExecutor propagates the cost-meter + cancellation
-            # contextvars into the workers; .map preserves input order and re-raises
-            # the first chunk's EmbeddingError.
-            workers = min(self._max_workers, len(chunks))
-            with ContextThreadPoolExecutor(max_workers=workers) as pool:
-                chunk_results = list(pool.map(self._embed_chunk, chunks))
-            vectors = [v for chunk_vecs in chunk_results for v in chunk_vecs]
-        # Gemini's embed response carries no token usage; estimate from input size
-        # (~4 chars/token) so the meter has a figure (the $/token rate is an
-        # estimate anyway, per cost_meter's convention).
+        # Meter + log per chunk (#5) so a partial failure of a later chunk still
+        # attributes the cost of the chunks that already completed (they were
+        # billed). Gemini's response carries no token usage; estimate from length.
         est_tokens = sum(max(1, len(t) // 4) for t in texts)
         cost = embedding_token_cost(self.model, est_tokens)
-        record_cost(cost)  # PRD §16.4
+        record_cost(cost)  # PRD §16.4 — per chunk
         logger.info(
             "external_call",
             extra={
@@ -198,3 +183,24 @@ class GeminiEmbedder:
             },
         )
         return vectors
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        raise_if_cancelled()
+        chunks = [
+            texts[i : i + self._MAX_BATCH]
+            for i in range(0, len(texts), self._MAX_BATCH)
+        ]
+        if len(chunks) == 1:
+            return self._embed_chunk(chunks[0])
+        # Chunks are independent network calls; run them concurrently (bounded) so a
+        # 1000-item batch isn't 10 sequential round-trips — Gemini caps
+        # batchEmbedContents at 100 requests/call, so the chunk count can't shrink.
+        # ContextThreadPoolExecutor propagates the cost-meter + cancellation
+        # contextvars into the workers; .map preserves input order and re-raises the
+        # first failing chunk's EmbeddingError. Each chunk meters its own cost (#5).
+        workers = min(self._max_workers, len(chunks))
+        with ContextThreadPoolExecutor(max_workers=workers) as pool:
+            chunk_results = list(pool.map(self._embed_chunk, chunks))
+        return [v for chunk_vecs in chunk_results for v in chunk_vecs]
