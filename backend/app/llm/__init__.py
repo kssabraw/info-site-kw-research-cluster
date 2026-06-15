@@ -10,7 +10,20 @@ __all__ = [
     "AnthropicError",
     "get_llm",
     "get_orchestrator",
+    "active_embedding_model",
 ]
+
+
+def active_embedding_model() -> str:
+    """The embedding model the app is currently configured to use. Source of truth
+    for tagging new sessions (`sessions.embedding_model`) and the freeze-old-sessions
+    guard, so vectors are never compared across the OpenAI/Gemini boundary."""
+    from app.config import get_settings
+
+    s = get_settings()
+    if s.embedding_provider == "gemini":
+        return s.gemini_embedding_model
+    return s.openai_embedding_model
 
 
 @lru_cache

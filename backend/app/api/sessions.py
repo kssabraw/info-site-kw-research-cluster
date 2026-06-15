@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.cost import estimate_cost, requires_approval
 from app.cost_attribution import metered_sync
 from app.dataforseo import get_dataforseo
-from app.llm import LLMError, get_llm
+from app.llm import LLMError, active_embedding_model, get_llm
 from app.logging import bind_session_id
 from app.pipeline.models import PROPOSABLE_TYPES, RelationshipType
 from app.pipeline.orchestrate import (
@@ -151,6 +151,27 @@ def _require_session(user: AuthedUser, session_id: str) -> dict:
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return session
+
+
+def _assert_embedding_current(session: dict) -> None:
+    """Refuse an embedding-dependent re-op on a session whose stored vectors were
+    produced by a different embedding model than the active one (freeze-old-sessions
+    rule, 2026-06-15). text-embedding-3-small and gemini-embedding-001 are both
+    1536-dim but in different spaces, so re-processing would silently mix them.
+    During the dormant period (active == OpenAI) this is a no-op for every session.
+    """
+    active = active_embedding_model()
+    tagged = session.get("embedding_model") or "text-embedding-3-small"
+    if tagged != active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This session's vectors were built with '{tagged}', but the app now "
+                f"embeds with '{active}'. Re-processing would mix incompatible vector "
+                "spaces. Start a new session — existing sessions are read-only for "
+                "embedding operations after an embedding-provider change."
+            ),
+        )
 
 
 def _require_cluster(user: AuthedUser, cluster_id: str) -> tuple[dict, str]:
@@ -466,6 +487,7 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
     GET /sessions/{id}/summary for status. The atomic run guard rejects a
     double-submit (409)."""
     session = _require_session(user, session_id)
+    _assert_embedding_current(session)
     bind_session_id(session_id)
     topics = store.list_topics(session_id)
     if not topics:
@@ -754,6 +776,7 @@ def regate_session(
     tool: tune the threshold without re-paying for expansion + mining. Owner-only —
     it adjusts the relevance threshold, which VAs cannot (PRD §11.2)."""
     session = _require_session(user, session_id)
+    _assert_embedding_current(session)
     bind_session_id(session_id)
     if not store.list_all_keyword_pool(session_id):
         raise HTTPException(
@@ -815,6 +838,7 @@ def fanout_session(
     Owner-only: for VAs, recursive fanout is always gated behind the approval
     workflow (PRD §11.2 / §11.3), which lands in M9; until then it's owner-direct."""
     session = _require_session(user, session_id)
+    _assert_embedding_current(session)
     bind_session_id(session_id)
     clustering_log = session.get("statistical_clustering_log") or {}
     topics = store.list_topics(session_id)
@@ -1038,6 +1062,7 @@ def plan_articles(
     coverage gaps. With body {"direct": true}, skips the orchestrator (groupings
     -> articles directly). Returns immediately; poll GET /summary for status."""
     session = _require_session(user, session_id)
+    _assert_embedding_current(session)
     bind_session_id(session_id)
     if not (session.get("statistical_clustering_log") or {}).get("topics"):
         raise HTTPException(
@@ -1205,7 +1230,8 @@ def generate_architecture(
     — re-running regenerates (PRD §9.3). Returns immediately; poll GET /summary for
     status, then GET /architecture for the result. Owner-only: VAs get a read-only
     architecture view and cannot (re)generate it (PRD §11.2 / §10.3)."""
-    _require_session(user, session_id)
+    session = _require_session(user, session_id)
+    _assert_embedding_current(session)
     bind_session_id(session_id)
     if not store.list_clusters(session_id):
         raise HTTPException(
