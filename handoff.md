@@ -20,9 +20,73 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > against it, and SIE runs **ScrapeOwl + TextRazor as newly provisioned
 > services** (NER provider amended Google NLP → TextRazor, 2026-06-12 fifth
 > pass; retires §9.1's "no new third-party deps" line).
-> **Before M12 live-validation: owner provisions `SCRAPEOWL_API_KEY` +
-> `TEXTRAZOR_API_KEY` at the Railway project level.** Plan-level flags
-> awaiting sign-off: writer plan §8 (six items) + SIE plan §9 (five items).
+> **M12/M13 prerequisites are DONE (2026-06-15):** `SCRAPEOWL_API_KEY` +
+> `TEXTRAZOR_API_KEY` are provisioned on the `info-site-kw-research-cluster`
+> Railway **service**, DataForSEO "LLM Responses" is enabled on our account, and
+> **all 18 plan sign-off flags are resolved** (SIE §9 / Brief Gen §7 / Writer §8).
+> **Also in-flight (see the 2026-06-15 entry below): a whole-app embeddings
+> provider swap OpenAI → Gemini, shipped DORMANT** on
+> `claude/focused-wright-kj3gyr` — code + the prod migration are done; cutover
+> (deploy, flip `EMBEDDING_PROVIDER=gemini`, recalibrate thresholds) is pending.
+> Consolidated planning lives on that branch (not yet merged to `main`).
+
+_2026-06-15 — planning consolidation + sign-offs + embeddings provider swap (this
+session; all on `claude/focused-wright-kj3gyr`, NOT yet merged to `main`):_
+
+- **Consolidated the two divergent Blog-Writer planning branches**
+  (`claude/peaceful-mayer-iho6m4` + `claude/wizardly-clarke-3zxvh4`) into one set:
+  the 8-PRD bundle (deduped — kept `blog-writer-pipeline-bundle.md`), the live I/O
+  contract (`blog-writer-live-contract.md`), and the SIE/Brief-Gen/Writer module
+  plans, with `CLAUDE.md` + this file reconciled to the M12=SIE / M13=BriefGen /
+  M14=Writer / M15=scheduling sequence (CLAUDE.md v1.12). Both source branches
+  stay on `origin` for provenance.
+- **Owner sign-off recorded on all 18 flagged plan decisions** (+ one surfaced H3
+  conflict). Highlights: SIE lemmatizer = **spaCy `en_core_web_sm`** (shared lock
+  w/ the Writer term audit); `fanout.keyword_analyses` RLS = match the other
+  fanout tables; Brief Gen **fails the run on abort** (no degraded fallback);
+  **low-intent (<0.75) articles BLOCK** until a manual owner intent-override
+  (needs a parked state + an override affordance — more build than proceed+warn);
+  Writer keeps citable-claim detection in no-citations mode, collapses the title
+  to `brief.title`, **builds the pillar path in M14** (scope expanded), and
+  **emits H3s from day one** (Brief Gen sources them — supersedes the stale
+  "H2-only"). Full text in the SIE §9 / Brief Gen §7 / Writer §8 sign-off blocks.
+- **DataForSEO "LLM Responses" confirmed enabled** on our account → M13's Step-2D
+  4-LLM fan-out runs at full quality (the `llm_fanout_unavailable` degradation
+  stays a runtime safety net only).
+- **Embeddings provider swap — locked-decision override (owner): OpenAI
+  `text-embedding-3-small` → Google `gemini-embedding-001` @ 1536-dim (Matryoshka),
+  whole-app, quality/consistency.** Shipped **DORMANT** (`embedding_provider`
+  defaults to `openai`, so prod is untouched until cutover). Code: provider-pluggable
+  `backend/app/llm/embeddings.py` (`OpenAIEmbedder` + `GeminiEmbedder` — REST
+  `:batchEmbedContents`, `x-goog-api-key` header auth, `outputDimensionality=1536`
+  + L2-normalize, 100/req chunks run **concurrently** via `ContextThreadPoolExecutor`,
+  cap `gemini_embedding_max_workers=8`); `OpenAILLM.embed` delegates (the LLMError
+  contract preserved); per-session `embedding_model` tag + a **freeze-old-sessions
+  409 guard** on expand/regate/fanout/plan-articles/architecture (never mixes
+  OpenAI/Gemini vector spaces — both are 1536-dim but different spaces); owner-only
+  `GET /debug/embedding-health` probe. **Migration
+  `20260615000000_session_embedding_model.sql` APPLIED TO PROD** (AR-Internal-Tools
+  `wvcthtmmcmhkybcesirb`, `fanout.sessions`, via Supabase MCP). `GEMINI_API_KEY`
+  provisioned. CLAUDE.md v1.13 + the locked-decisions table updated; Brief Gen
+  §7.3's `text-embedding-3-large` exception is **superseded** by this.
+- **Adversarial self-review of the swap → 6 items, all fixed:** (1) `GeminiEmbedder`
+  wraps every malformed-response failure as `EmbeddingError` (it was leaking raw
+  `KeyError`/`ValueError` past the `LLMError` contract → unhandled 500s at finalize
+  + disambiguation, which catch `LLMError` only); (2) parallel chunking (above);
+  (3) `split.py` degrades on an embed failure instead of aborting the plan job;
+  (4) `OpenAIEmbedder` orders results by the response `index` (Gemini has no index
+  field — documented, count-checked); (5) per-chunk cost metering so a partial
+  batch failure still attributes the completed chunks. ruff + py_compile clean;
+  logic validated against the real `CostMeter` (full pytest runs in CI — no deps
+  in the sandbox).
+- **Remaining to cut the swap over (ops + live):** deploy this branch (merge to
+  `main`), smoke-test `GET /debug/embedding-health` (expect `ok:true`,
+  `returned_dim:1536`), set `EMBEDDING_PROVIDER=gemini` + redeploy, then
+  **recalibrate the 8 cosine thresholds** on live Gemini runs (relevance 0.65 /
+  clustering 0.55 / dedup 0.85 / lateral 0.55 / orphan 0.65 / split 0.55 /
+  ambiguity 0.5 / routing-margin 0.04 — all env-overridable + `/regate`-tunable, no
+  per-tweak redeploy). Brief Gen's gates (0.55/0.78/0.65/0.75) recalibrate too. If
+  Gemini 429s on big runs, lower `GEMINI_EMBEDDING_MAX_WORKERS`.
 
 _2026-06-12 (sixth pass — full Brief Generator pulled into scope, write-time
 only): **The complete Brief Generator pipeline (PRD #2 v2.3, Steps 0–11) now
