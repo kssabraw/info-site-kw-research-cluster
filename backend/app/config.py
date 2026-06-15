@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # existing vector(1536) columns, so no schema migration of stored vectors.
     embedding_provider: str = "openai"  # "openai" | "gemini"
     gemini_api_key: str = ""
-    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_embedding_model: str = "gemini-embedding-2-preview"  # public preview; #1 MTEB. Override via GEMINI_EMBEDDING_MODEL (e.g. gemini-embedding-001 GA).
     gemini_embedding_dim: int = 1536
     gemini_embedding_task_type: str = "SEMANTIC_SIMILARITY"
     # Concurrent batchEmbedContents calls (Gemini caps each at 100 inputs, so a
