@@ -133,15 +133,24 @@ class GeminiEmbedder:
                 timeout=self._timeout_s,
             )
             resp.raise_for_status()
-            data = resp.json()
         except httpx.HTTPError as exc:
             raise EmbeddingError(f"Gemini embedding call failed: {exc}") from exc
-        embeddings = data.get("embeddings") or []
-        if len(embeddings) != len(texts):
+        # Parse defensively: a 200 with a non-JSON body or an unexpected shape
+        # (missing "embeddings"/"values", null entries) must surface as an
+        # EmbeddingError so the OpenAILLM.embed -> LLMError contract holds for the
+        # synchronous callers (finalize, disambiguation) that catch LLMError only.
+        try:
+            embeddings = resp.json()["embeddings"]
+            vectors = [l2_normalize(e["values"]) for e in embeddings]
+        except (ValueError, KeyError, TypeError) as exc:
             raise EmbeddingError(
-                f"Gemini returned {len(embeddings)} embeddings for {len(texts)} inputs"
+                f"Gemini returned a malformed embeddings response: {exc}"
+            ) from exc
+        if len(vectors) != len(texts):
+            raise EmbeddingError(
+                f"Gemini returned {len(vectors)} embeddings for {len(texts)} inputs"
             )
-        return [l2_normalize(e["values"]) for e in embeddings]
+        return vectors
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:

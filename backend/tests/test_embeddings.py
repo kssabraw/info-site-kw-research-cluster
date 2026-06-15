@@ -118,6 +118,34 @@ def test_gemini_count_mismatch_raises(monkeypatch):
         GeminiEmbedder(api_key="k").embed(["a", "b"])
 
 
+def test_gemini_malformed_response_raises(monkeypatch):
+    # 200 OK but an embedding entry has no "values" -> EmbeddingError, not a raw
+    # KeyError (so the OpenAILLM.embed -> LLMError contract holds for the
+    # synchronous finalize/disambiguation callers that catch LLMError only).
+    monkeypatch.setattr(
+        "app.llm.embeddings.httpx.post",
+        lambda url, headers, json, timeout: _FakeHTTPResp({"embeddings": [{"oops": 1}]}),
+    )
+    with pytest.raises(EmbeddingError):
+        GeminiEmbedder(api_key="k").embed(["a"])
+
+
+def test_gemini_non_json_body_raises(monkeypatch):
+    class _BadJSON:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr(
+        "app.llm.embeddings.httpx.post",
+        lambda url, headers, json, timeout: _BadJSON(),
+    )
+    with pytest.raises(EmbeddingError):
+        GeminiEmbedder(api_key="k").embed(["a"])
+
+
 def test_gemini_empty_skips_call(monkeypatch):
     monkeypatch.setattr(
         "app.llm.embeddings.httpx.post",
