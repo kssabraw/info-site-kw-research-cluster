@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dim: int = 1536
     gemini_embedding_task_type: str = "SEMANTIC_SIMILARITY"
+    # Concurrent batchEmbedContents calls (Gemini caps each at 100 inputs, so a
+    # 1000-keyword batch is 10 calls run in parallel). Lower if region RPM bites.
+    gemini_embedding_max_workers: int = 8
 
     # Disambiguation gate (PRD §7.1.2 / Q16). The LLM's ambiguity signal is
     # corroborated by embedding separation between candidate interpretations:

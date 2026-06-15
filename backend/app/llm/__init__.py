@@ -43,6 +43,7 @@ def get_llm() -> OpenAILLM:
             model=s.gemini_embedding_model,
             output_dim=s.gemini_embedding_dim,
             task_type=s.gemini_embedding_task_type,
+            max_workers=s.gemini_embedding_max_workers,
         )
     return OpenAILLM(
         api_key=s.openai_api_key,

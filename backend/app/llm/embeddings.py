@@ -22,6 +22,7 @@ import time
 import httpx
 
 from app.cancellation import raise_if_cancelled
+from app.concurrency import ContextThreadPoolExecutor
 from app.cost_meter import embedding_token_cost, record_cost
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class GeminiEmbedder:
         output_dim: int = 1536,
         task_type: str = "SEMANTIC_SIMILARITY",
         timeout_s: float = 60.0,
+        max_workers: int = 8,
     ):
         if not api_key:
             raise EmbeddingError(
@@ -106,6 +108,9 @@ class GeminiEmbedder:
         self._output_dim = output_dim
         self._task_type = task_type
         self._timeout_s = timeout_s
+        # Max chunk requests in flight at once. Bounded to respect Gemini's region
+        # RPM (the 5M tok/min quota is no constraint for short keywords).
+        self._max_workers = max(1, max_workers)
 
     @property
     def model(self) -> str:
@@ -113,6 +118,7 @@ class GeminiEmbedder:
         return self._model.removeprefix("models/")
 
     def _embed_chunk(self, texts: list[str]) -> list[list[float]]:
+        raise_if_cancelled()
         url = f"{self._BASE}/{self._model}:batchEmbedContents"
         payload = {
             "requests": [
@@ -157,10 +163,23 @@ class GeminiEmbedder:
             return []
         raise_if_cancelled()
         started = time.perf_counter()
-        vectors: list[list[float]] = []
-        for i in range(0, len(texts), self._MAX_BATCH):
-            raise_if_cancelled()
-            vectors.extend(self._embed_chunk(texts[i : i + self._MAX_BATCH]))
+        chunks = [
+            texts[i : i + self._MAX_BATCH]
+            for i in range(0, len(texts), self._MAX_BATCH)
+        ]
+        if len(chunks) == 1:
+            vectors = self._embed_chunk(chunks[0])
+        else:
+            # Chunks are independent network calls; run them concurrently (bounded)
+            # so a 1000-item batch isn't 10 sequential round-trips — Gemini caps
+            # batchEmbedContents at 100 requests/call, so chunk count can't shrink.
+            # ContextThreadPoolExecutor propagates the cost-meter + cancellation
+            # contextvars into the workers; .map preserves input order and re-raises
+            # the first chunk's EmbeddingError.
+            workers = min(self._max_workers, len(chunks))
+            with ContextThreadPoolExecutor(max_workers=workers) as pool:
+                chunk_results = list(pool.map(self._embed_chunk, chunks))
+            vectors = [v for chunk_vecs in chunk_results for v in chunk_vecs]
         # Gemini's embed response carries no token usage; estimate from input size
         # (~4 chars/token) so the meter has a figure (the $/token rate is an
         # estimate anyway, per cost_meter's convention).

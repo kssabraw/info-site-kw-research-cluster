@@ -118,6 +118,15 @@ def test_gemini_count_mismatch_raises(monkeypatch):
         GeminiEmbedder(api_key="k").embed(["a", "b"])
 
 
+def test_gemini_parallel_chunks_preserve_order(monkeypatch):
+    # 250 inputs -> 3 chunks run concurrently; the flattened output must stay in
+    # input order regardless of which worker finishes first.
+    g = GeminiEmbedder(api_key="k", output_dim=1, max_workers=4)
+    monkeypatch.setattr(g, "_embed_chunk", lambda texts: [[float(t)] for t in texts])
+    out = g.embed([str(i) for i in range(250)])
+    assert [v[0] for v in out] == [float(i) for i in range(250)]
+
+
 def test_gemini_malformed_response_raises(monkeypatch):
     # 200 OK but an embedding entry has no "values" -> EmbeddingError, not a raw
     # KeyError (so the OpenAILLM.embed -> LLMError contract holds for the
