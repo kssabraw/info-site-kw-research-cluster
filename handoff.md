@@ -997,7 +997,7 @@ table.
 | Dangling-link policy | **Leave + report.** link_injector keeps the URL; link-health report flags it. |
 | VA scope | **Full access on own sessions** (RLS-scoped). VA can schedule + view + regenerate. |
 | VA cost gate (Writer) | **`Schedule all` > $90 → owner approval** via existing M9 `/approvals` queue. New `writer_schedule_approval_threshold_usd = 90.0` (independent of M9's $5 `va_soft_cap_usd`). Per-article `Generate now` not gated. |
-| Writer model tier | **Sonnet 4.6 for all section calls** (PRD §17). ~$0.20–$0.40/article. Opus/Haiku variants flagged for revisit if Sonnet quality disappoints. |
+| Writer model tier | ~~**Sonnet 4.6 for all section calls**~~ → **MIXED — corrected 2026-06-12 per §17** (see §9.13 status box): **Sonnet 4.6** prose (section/intro/FAQ/conclusion/takeaways) + **Haiku 4.5** title/CTA/ICP-judge. ~$0.20–$0.40/article. |
 
 ### 9.12 Relationship to §8
 
@@ -1016,23 +1016,66 @@ into the repo. No further generation step required.
 
 ### 9.13 M12 prerequisites — artifact fetch (2026-06-10) — ✅ SATISFIED 2026-06-12
 
-> **STATUS (2026-06-12): the fetch landed.** The full bundle is committed at
-> **`docs/blog-writer-pipeline-bundle.md`** (all 8 PRDs verbatim). This covers
-> Tier 1 (Writer PRD #1 v1.7 with §17 Call Inventory + §18 Prompt Scaffolds +
-> §20 golden example; Engineering Spec #8) **and** Tier 2 #3 (Brief Generator
-> v2.3 — its `intent_format_template` table) + #4 (Content Quality thresholds,
-> PRD #6). **Still NOT in the repo:** Tier 2 #5 (3–5 real Writer outputs from
-> AR-Internal-Tools `public.module_outputs` — ground-truth shapes) and Tier 3
-> #6/#7 (Writer source-code pointer + production Anthropic model IDs). Those are
-> accelerators, not blockers — M12 drafting can proceed from the bundle now;
-> grab the sample outputs if the documented `article_json` schema proves
-> ambiguous against real rows. The original (now-satisfied) fetch list is
-> retained below for reference.
+> **✅ RESOLVED 2026-06-12 — the bundle has landed; the content-generation work is UNBLOCKED.**
+> The owner dropped the full **8-PRD AR Tools Blog Writer bundle** into
+> **`docs/blog-writer-pipeline-bundle.md`** (8,867 lines, one concatenated file with
+> `<!-- SOURCE FILE: … -->` markers per PRD): **(1)** Content Writer v1.7 — incl.
+> **§17 LLM Call Inventory** (exact model IDs, max-tokens, temps, retries per call),
+> **§18 Prompt Scaffolds** (verbatim), **§19 Closures**, **§20 Golden Example**, the
+> Step 1→12 flow, the topic-adherence filter (cosine **0.62** to title),
+> Agree/Promise/Preview + CTA templates, paragraph cap
+> (`max_sentences_per_paragraph`, default 4), `min_h2_body_words` floors, and the 4
+> `schema_version_effective` values (`1.7` / `1.7-no-context` / `1.7-degraded` /
+> `1.7-legacy-h1`); **(2)** Brief Generator **v2.3**; **(3)** SIE; **(4)** Research &
+> Citations v1.1.1; **(5)** Sources Cited v1.1; **(6)** Content Quality v1.0 (R1–R7);
+> **(7)** Suite Architecture v1.0; **(8)** Engineering Implementation Spec v1.1.
+> Satisfies Tier 1 (Writer PRD v1.7 + Engineering Spec) and Tier 2 #3/#4 (Brief Gen
+> `intent_format_template`; Content Quality thresholds). **Still NOT in the repo**
+> (accelerators, not blockers): Tier 2 #5 (3–5 real Writer outputs from
+> AR-Internal-Tools `public.module_outputs`) and Tier 3 #6/#7 (Writer source-code
+> pointer + production Anthropic model IDs) — grab the sample outputs if the
+> documented `article_json` schema proves ambiguous against real rows.
+>
+> **Reconciliations to fold into §9 (from the verbatim PRDs + the live contract):**
+> - **Writer model split is MIXED, not all-Sonnet** (corrects the §9.11 "Writer
+>   model tier" row above): per §17, Title-gen + CTA + ICP-callout-judge use
+>   **`claude-haiku-4-5`**; section / intro / FAQ / conclusion / Key-Takeaways /
+>   brand-distillation+reconciliation use **`claude-sonnet-4-6`**. Degraded mode
+>   (`no_citations` + no `client_context`) skips the brand calls (2,3) and the ICP
+>   judge (10), so the port's hot calls are section(5)/intro(4)/FAQ(6)/
+>   conclusion(7)/takeaways(9) on Sonnet + title(1)/CTA(8) on Haiku.
+> - **Brief in the PRD is v2.3, but PRODUCTION runs v2.6** (see
+>   `docs/blog-writer-live-contract.md`). The bundle's `intent_format_template` /
+>   `format_directives` are the v2.3 spec; the live v2.6 brief output is ground
+>   truth where they differ. M13 Brief Gen still synthesizes the brief, so this is a
+>   reference-reconciliation, not a blocker.
+> - **The Engineering Spec describes a 2-service topology** (platform-api
+>   orchestrator + pipeline-api with 5 sibling modules, FastAPI `BackgroundTasks`,
+>   `EXPECTED_MODULE_VERSIONS` validation). **We are NOT adopting that** — the
+>   modules are ported in-process into our existing backend (handoff §9.1 / §9.6
+>   decision stands). The spec is informational for the I/O contracts, not the infra.
+> - **`no_citations` degraded path is first-class in v1.7** (`research.citations`
+>   empty → continue, `no_citations: true`, sections written without grounding —
+>   not an abort), exactly as §9.1 assumed.
+> - **Live-contract schema corrections** (`docs/blog-writer-live-contract.md`,
+>   recovered from the AR-Internal-Tools prod DB): real column names are
+>   `module` / `input_payload` / `output_payload` (not `module_name` / `output_json`
+>   — the Tier-2 #5 SQL sketch below still uses the old names); the writer `article`
+>   is a **Markdown section array**, not an HTML blob; writer is **v1.7** as assumed.
+>
+> **Cross-check** the verbatim PRD against `docs/blog-writer-live-contract.md`; where
+> they disagree, the live contract wins. **Next (per the 2026-06-12 re-sequence):**
+> **M12 = SIE** (`docs/sie-module-plan.md`) → **M13 = Brief Generator**
+> (`docs/brief-generator-module-plan.md`) → **M14 = Writer**
+> (`docs/writer-module-plan.md`; port `backend/app/writer/` + adapter + `Generate
+> now`). Bundle + live contract referenced from CLAUDE.md "Key file locations".
 
 §9 was designed from a **conversation summary** of the AR Tools Blog Writer
 PRD bundle, not from the PRDs themselves. ~~The source artifacts are NOT in
-`docs/`.~~ **[Resolved 2026-06-12 — see status box above.]** Before M12 drafting
-can produce more than a sketch, fetch:
+`docs/`.~~ **[Resolved 2026-06-12 — the bundle (`docs/blog-writer-pipeline-bundle.md`)
++ the live contract (`docs/blog-writer-live-contract.md`) are now in `docs/`; see the
+status box above.]** The original fetch list below is **historical / superseded**,
+retained for provenance:
 
 **Tier 1 (blockers — required to start drafting M12):**
 1. **Writer PRD #1, v1.7** verbatim. Must include:
