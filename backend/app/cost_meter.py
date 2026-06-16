@@ -41,6 +41,9 @@ _EMBED_RATES: dict[str, float] = {
     # Google AI Studio list price ($0.15/1M input; $0.075 batch). Tokens are
     # estimated from input length (Gemini's embed response carries no usage).
     "gemini-embedding-001": 0.15,
+    # Embedding 2 (preview) — $0.20/1M ($0.10 batch). The bare "gemini-embedding-2"
+    # key prefix-matches the "-preview" (and future) variants via _match_rate.
+    "gemini-embedding-2": 0.20,
 }
 _DEFAULT_EMBED_RATE = 0.02
 

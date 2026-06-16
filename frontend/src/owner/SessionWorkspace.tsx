@@ -4,6 +4,7 @@ import { getMe, getSession, getSummary, planArticles, type Silo } from "../share
 import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
+import { SessionIdChip } from "../shared/SessionIdChip";
 import { hasResults, statusClass, statusLabel } from "../shared/sessionStatus";
 
 export interface SessionCtx {
@@ -80,6 +81,7 @@ export function SessionWorkspace() {
             </Link>
           )}
         </div>
+        <SessionIdChip sessionId={sessionId} />
         <CostBanner cost={summary.data?.cost} running={status === "running"} />
         <nav className="segmented">
           {tabs.map((t) => (
