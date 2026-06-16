@@ -37,6 +37,48 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
 
+_2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
+noted; build path resumes at M12=SIE:_
+
+- **Cutover was carried all the way live, then reverted (same wave).** The
+  2026-06-15 swap went: branch merged to `main` + deployed (`bf01879`), migration
+  `20260615000000_session_embedding_model` applied to prod, `EMBEDDING_PROVIDER=gemini`
+  set + smoke-tested green via `GET /debug/embedding-health`, then model upgraded to
+  **Gemini Embedding 2** (`gemini-embedding-2-preview`, public preview) + health-verified.
+- **Why rolled back:** write-time calibration on `retatrutide` showed **poor relevance
+  discrimination** — off-topic keywords survived the relevance gate even after sweeping
+  `relevance_threshold` 0.65 → 0.85 → 0.88 → 0.90 via `/regate` (cosines compressed too
+  high to separate on-topic from off-topic; prime suspect = the `SEMANTIC_SIMILARITY`
+  task type, possibly preview-model behavior).
+- **Rollback = one env var:** `EMBEDDING_PROVIDER=openai` on the Railway service (no code
+  change, no recalibration — OpenAI `text-embedding-3-small` + the original
+  0.65/0.55/0.85/… thresholds restored). **Caught entirely in calibration; ZERO
+  production data affected** — the staged "deploy-dormant → calibrate-before-real-work"
+  plan did exactly its job. CLAUDE.md v1.15 records it; config `gemini_embedding_model`
+  default reverted preview → GA `gemini-embedding-001`.
+- **Gemini infra kept dormant** (not deleted): `GeminiEmbedder`, the per-session
+  `embedding_model` 409 guard, the cost rates, `GET /debug/embedding-health`, and the
+  `sessions.embedding_model` column/migration all stay. Revisiting Gemini later = flip
+  the var + a re-embed + threshold recalibration — best tried with **`RETRIEVAL_*` task
+  types** (the likely fix for the discrimination problem) and/or Embedding 2 at **GA**.
+- **Brief Generator (M13) Gemini usage is INDEPENDENT of all this.** "Gemini in the brief
+  generator" means either **(a)** Gemini as one of the 4 Step-2D fan-out LLMs (DataForSEO
+  "LLM Responses" — Gemini-the-LLM, already in the M13 plan, untouched by the rollback),
+  and/or **(b)** Gemini *embeddings* inside the brief module (a per-module choice made at
+  M13 build time). The app-wide embeddings rollback constrains neither. **TODO:** the
+  brief-plan §7.3 sign-off note marks `text-embedding-3-large` as "superseded by the Gemini
+  swap" — now stale (the swap was rolled back); re-open it as an M13 embedding-model decision.
+- **Logging — exists, with one worthwhile gap.** Structured JSON logging is in place (§16.3:
+  `step_complete` / `degraded` / `external_call` with cost+latency / `llm_call`, every entry
+  carrying `session_id` + `correlation_id`, secrets redacted; visible in Railway logs + the
+  owner `GET /sessions/{id}/debug`). **Gap (recommended, NOT yet built):** the relevance gate
+  logs keep/drop *counts* + threshold but not the score *distribution* — adding min/p10/p50/
+  p90/max of the relevance cosines (kept vs dropped) + cluster cohesion to the existing
+  `step_complete` events would have surfaced the Gemini compression from a single log line.
+  ~15 lines in `relevance.py` / `clustering.py`. Awaiting go-ahead.
+- **Next:** the embeddings detour is concluded (OpenAI is the live embedding again); the
+  build path returns to **M12 = SIE** per the §9.10 sequence.
+
 _2026-06-15 — planning consolidation + sign-offs + embeddings provider swap (this
 session; all on `claude/focused-wright-kj3gyr`, NOT yet merged to `main`):_
 
