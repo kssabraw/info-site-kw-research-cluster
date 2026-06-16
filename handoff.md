@@ -79,11 +79,22 @@ noted; build path resumes at M12=SIE:_
   p90/max of the relevance cosines (kept vs dropped) + cluster cohesion to the existing
   `step_complete` events would have surfaced the Gemini compression from a single log line.
   ~15 lines in `relevance.py` / `clustering.py`. Awaiting go-ahead.
+- **Session-id chip (frontend convenience).** Added a copyable "Session ID: <id>"
+  to the workspace header (`frontend/src/shared/SessionIdChip.tsx`, rendered in
+  `SessionWorkspace`) so the `session_id` — the field you filter Railway logs on, pass
+  to `GET /sessions/{id}/debug`, and use in API calls — is one click away instead of
+  dug out of the URL or a console call. Owner + VA surfaces both (shared component).
+- **Everything from this session is now MERGED to `main` + deployed.** The embeddings
+  swap landed earlier at `bf01879`; the rollback config cleanup, all the doc updates
+  above, the brief-plan §7.3 fix, and the session-id chip landed at **`1e03b80`**
+  (`--no-ff`, clean FF, Railway + Netlify auto-deploy; backend behavior-neutral —
+  embeddings stay OpenAI via the env var, the chip is the only live change).
+  `claude/focused-wright-kj3gyr` is fully merged + re-synced to `main`.
 - **Next:** the embeddings detour is concluded (OpenAI is the live embedding again); the
   build path returns to **M12 = SIE** per the §9.10 sequence.
 
 _2026-06-15 — planning consolidation + sign-offs + embeddings provider swap (this
-session; all on `claude/focused-wright-kj3gyr`, NOT yet merged to `main`):_
+session; **now all merged to `main`** — see the 2026-06-16 entry above):_
 
 - **Consolidated the two divergent Blog-Writer planning branches**
   (`claude/peaceful-mayer-iho6m4` + `claude/wizardly-clarke-3zxvh4`) into one set:
