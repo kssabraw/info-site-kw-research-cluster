@@ -24,14 +24,18 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `TEXTRAZOR_API_KEY` are provisioned on the `info-site-kw-research-cluster`
 > Railway **service**, DataForSEO "LLM Responses" is enabled on our account, and
 > **all 18 plan sign-off flags are resolved** (SIE §9 / Brief Gen §7 / Writer §8).
-> **Embeddings swap CUTOVER (2026-06-15): OpenAI → Google Gemini is LIVE in prod.**
-> Branch merged to `main` + deployed (`bf01879`); on the Railway service
-> `EMBEDDING_PROVIDER=gemini` + `GEMINI_EMBEDDING_MODEL=gemini-embedding-2-preview`
-> (**Embedding 2**, public preview, #1 MTEB) are set + health-verified, and the prod
-> migration is applied. **ONLY recalibration remains** — the 8 cosine thresholds are
-> still OpenAI values, so clustering is degraded until re-tuned on live Embedding-2
-> runs (**in progress**); do NOT run production sessions until they're locked. GA
-> fallback model: `gemini-embedding-001`.
+> **Embeddings: tried Gemini, ROLLED BACK to OpenAI (2026-06-16).** The 2026-06-15
+> swap to **Gemini Embedding 2** (`gemini-embedding-2-preview`) was deployed
+> (`bf01879`) + flipped live + health-verified, but in write-time calibration Gemini
+> gave **poor relevance discrimination** — off-topic keywords passed the gate even at
+> `relevance_threshold` 0.90 (cosines compressed too high; likely the
+> `SEMANTIC_SIMILARITY` task type and/or preview-model behavior). **Reverted by
+> setting `EMBEDDING_PROVIDER=openai`** (one env var; no code change, no
+> recalibration — back to `text-embedding-3-small` + the original `0.65` thresholds).
+> The provider-pluggable embedder + per-session guard + `/debug/embedding-health`
+> **stay in place (dormant)** for a future revisit (Embedding 2 at GA and/or
+> `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
+> in calibration — **no production data affected.**
 
 _2026-06-15 — planning consolidation + sign-offs + embeddings provider swap (this
 session; all on `claude/focused-wright-kj3gyr`, NOT yet merged to `main`):_
