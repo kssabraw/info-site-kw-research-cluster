@@ -65,9 +65,12 @@ noted; build path resumes at M12=SIE:_
   generator" means either **(a)** Gemini as one of the 4 Step-2D fan-out LLMs (DataForSEO
   "LLM Responses" — Gemini-the-LLM, already in the M13 plan, untouched by the rollback),
   and/or **(b)** Gemini *embeddings* inside the brief module (a per-module choice made at
-  M13 build time). The app-wide embeddings rollback constrains neither. **TODO:** the
-  brief-plan §7.3 sign-off note marks `text-embedding-3-large` as "superseded by the Gemini
-  swap" — now stale (the swap was rolled back); re-open it as an M13 embedding-model decision.
+  M13 build time). The app-wide embeddings rollback constrains neither. **Done
+  2026-06-16:** the brief-plan §7.3 note (which had marked `text-embedding-3-large` as
+  "superseded by the Gemini swap") is un-staled and **re-opened as an M13 embedding-model
+  decision** — choose at build time among 3-large (original exception, keeps the
+  PRD-calibrated gates; recommended), 3-small (app default, recalibrate the 4 gates), or
+  Gemini with `RETRIEVAL_*` task types once validated.
 - **Logging — exists, with one worthwhile gap.** Structured JSON logging is in place (§16.3:
   `step_complete` / `degraded` / `external_call` with cost+latency / `llm_call`, every entry
   carrying `session_id` + `correlation_id`, secrets redacted; visible in Railway logs + the

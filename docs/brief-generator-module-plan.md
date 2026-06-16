@@ -152,13 +152,18 @@ article batch.
 > 2. **No degraded fallback brief — confirmed.** A Brief Gen abort FAILS the
 >    article run (process-identical articles). The M14 stub survives only as a
 >    test fixture.
-> 3. ~~**`text-embedding-3-large` inside Brief Gen — exception GRANTED.**~~
->    **SUPERSEDED 2026-06-15:** the app-wide embeddings lock moved OpenAI →
->    **Google `gemini-embedding-001` @ 1536-dim** (whole-app owner override), so
->    Brief Gen uses Gemini like everything else — the 3-large carve-out is moot.
->    The selection gates (0.55/0.78/0.65/0.75) were calibrated for 3-large and
->    **must be recalibrated for Gemini** on live runs (tracked with the app-wide
->    threshold recalibration, not a Brief-Gen-only exception).
+> 3. **`text-embedding-3-large` inside Brief Gen — RE-OPENED as an M13 decision
+>    (2026-06-16).** History: granted 2026-06-15 as a scoped exception to the app's
+>    3-small lock (the PRD's selection gates 0.55/0.78/0.65/0.75 are calibrated for
+>    3-large); then briefly marked "superseded" when the app went whole-app Gemini
+>    — but **that Gemini swap was rolled back 2026-06-16** (Embedding 2 gave poor
+>    write-time relevance discrimination), so the app is back on OpenAI
+>    `text-embedding-3-small` and this is an open choice again. Decide at M13 build
+>    time among: **(a)** `text-embedding-3-large` inside Brief Gen (the original
+>    exception — keeps the PRD-calibrated gates as-is; recommended default), **(b)**
+>    the app default `text-embedding-3-small` (one model, but recalibrate the 4
+>    gates), or **(c)** revisit Gemini with `RETRIEVAL_*` task types once that path
+>    is validated. The Gemini-everywhere option is **off the table** for now.
 > 4. **Low-intent (<0.75) articles BLOCK — stricter path chosen.** An article with
 >    intent confidence <0.75 does NOT auto-generate; it parks in an
 >    `intent_review_required` state until an owner sets a manual intent override,
