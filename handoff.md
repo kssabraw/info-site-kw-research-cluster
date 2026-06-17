@@ -92,6 +92,16 @@ to `main`, no code touched):_
   stopping rule, Gemini task type (`RETRIEVAL_*`), AIO TTL (shared 7-day), v2.6
   rebase (directive-now), gates-as-pre-filter, ChatGPT (accept + validate via X.6),
   and **H3 generation = HYBRID** (the late-caught item). See the doc's §0/§4/§6.
+- **Decision-fit mapping fully specced on the brief side** (doc §3.1–§3.4). Mechanism
+  A1–A5: A1 detect (Step-3 intent fold-in, LLM-judged, gate = `confidence ≥ 0.7` AND
+  ≥2 distinct conditions) → A2 reserve an anchor H2 (MCS won't drop it; X.4 still
+  form-enforces) → A3 source conditions+default (persona-gap/PAA/Reddit) → A4
+  pairing/gating co-occurrence check → A5 emit a typed `format_directive`. Writer-side
+  render+validate (B1/B2) deferred to M14. **Three spec gaps closed 2026-06-17:** A1
+  detector (§3.2) + A5 directive schema (§3.3) specced; **Commercial Page Gating
+  DEFERRED** (§3.4 — source not in our excerpt; A4 gates on the three general partner
+  factors only, `multiple_languages` dropped from the directive enum; revisit when the
+  owner supplies the section).
 - **Pre-build blockers before ANY M13 AIO code** are now just **verifications**
   (not decisions): (1) a real **MCS cost estimate** (hundreds of candidates/slot ×
   two embedding providers); (2) **verify DataForSEO returns the AIO block** on the
