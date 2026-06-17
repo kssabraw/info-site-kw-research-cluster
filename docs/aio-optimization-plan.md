@@ -555,6 +555,57 @@ decisions (see §6):
 
 ---
 
+## 5.5 MCS cost estimate ✅ (2026-06-17) — headline: embeddings are NOT the driver
+
+**Rates (real, `backend/app/cost_meter.py`; the $/token rates are themselves
+flagged estimates pending calibration):** `text-embedding-3-large` **$0.13/1M**,
+`gemini-embedding-2` **$0.20/1M**, LLM default **$5 in / $15 out per 1M**; Haiku
+tier modeled at ~**$1 in / $5 out** (realistic for a short generation call).
+
+**Key insight that reverses the earlier "hundreds × two providers = expensive"
+framing:** a heading is **~12 tokens**, so embedding one candidate in *both* spaces
+costs `12 × ($0.13+$0.20)/1M ≈ $0.000004`. Embeddings stay in the **single-digit
+cents** even at thousands of candidates. **The real cost driver is the LLM
+*generation* of the candidate pool (output tokens).**
+
+**Assumptions (flag for build-time calibration):** ~12 heading slots (title + H1 +
+8–12 H2s); heading ≈ 12 tok; generation prompt ≈ 800 input tok/call; beam = initial
+pool + ~2 variation rounds. Two readings of "hundreds of candidates per slot":
+
+| Reading | Total candidates | Embeddings | LLM gen (Haiku) | LLM gen (default 5/15) | **MCS total** |
+|---|---|---|---|---|---|
+| **Shared pool** (~1.2k, set-selected) | ~1,200 | ~$0.005 | ~$0.08 | ~$0.26 | **~$0.09 – $0.27** |
+| **Per-slot** (literal "hundreds/slot") | ~4,800 | ~$0.02 | ~$0.32 | ~$1.01 | **~$0.34 – $1.03** |
+
+**Budget impact.** Brief Gen budget = **$0.37–$0.91/brief, $1.00 ceiling** (PRD §9).
+MCS *replaces* the old organic selection (≈$0.03 of mostly-deterministic math), so
+it ~net-adds:
+- **Shared pool + Haiku (~$0.10):** new brief ≈ **$0.44–$0.98** — under the ceiling ✓
+- **Per-slot + default tier (~$1.0):** new brief ≈ **$1.34–$1.88** — **blows the
+  $1.00 ceiling** ✗
+
+**Recommendation (proposed, for owner):**
+1. **Use a bounded *shared* candidate pool** (~150–300 total, set-selected for
+   coverage), **not** literal hundreds-per-slot. Keeps MCS ≈ **$0.09–$0.27**.
+2. **Generate candidates with Haiku** (entity+one-point headings are a short,
+   formulaic task; Sonnet would ~3× the output cost for little gain).
+3. **Cap beam at ~2 variation rounds** (the research's "diminishing returns").
+4. Even bounded, the brief's high end (~$1.18 with a big pool) can **nudge the
+   $1.00 ceiling** → flag: either keep the pool small or **raise the brief ceiling
+   to ~$1.25**. Owner call.
+
+**Embeddings are a latency/rate-limit concern, not a cost one:** ~1.2k candidates ×
+2 providers = ~24 embedding requests (100/req chunking) per article + ~2 beam
+rounds. With LLM generation calls this likely adds **~30–90s** to the brief —
+within the ~1–3 min brief budget, but at its upper end. Flag for the cost preview.
+
+**Net:** MCS is **affordable if bounded** (shared pool + Haiku ≈ $0.10–$0.27/article);
+the literal per-slot reading risks the brief ceiling. The dual-embedding decision
+(Gemini + 3-large) carries **no meaningful cost** — its real cost was always the
+candidate *generation*, which the pool-size lever controls.
+
+---
+
 ## 6. Next actions (not yet done)
 
 **Section-1 decisions — ✅ all RESOLVED 2026-06-17** (see §0 sub-decisions + §4):
@@ -564,8 +615,11 @@ AIO TTL (shared 7-day), **H3 generation = HYBRID** (§0 #7; H3 *form* enforcemen
 deferred — distinct things), gates-as-pre-filter, ChatGPT (accept + validate via
 X.6). **Remaining = the Section-2 verifications/spikes + the build.**
 
-- [ ] **MCS cost estimate** — the one open Section-1 item that's really a
-      verification (hundreds of candidates/slot × two embedding providers).
+- [x] **MCS cost estimate** — done (§5.5). Finding: embeddings are negligible
+      (~cents); LLM candidate *generation* is the driver. Bounded shared pool +
+      Haiku ≈ **$0.09–$0.27/article** (under the brief budget); literal
+      per-slot×hundreds ≈ $0.34–$1.03 (risks the $1.00 ceiling). **Open owner call:
+      cap the pool small, or raise the brief ceiling to ~$1.25.**
 - [ ] Verify DataForSEO surfaces the AIO block on the depth-20 SERP call.
 - [ ] Confirm the Writer never re-derives headings (X.7 propagation N/A check).
 - [ ] **At the v2.6 rebase: map authority gaps to H3** (resolved 2026-06-17, §0 #7
