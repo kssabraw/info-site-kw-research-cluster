@@ -68,28 +68,39 @@ combines **scalar cosine scores, not vectors**: embed each candidate heading in
 answer *in 3-large space*, then blend the two **scalars**. Legal; never compares a
 Gemini cosine threshold to a 3-large one.
 
-### Open sub-decisions this forces (defaults proposed; flag for owner)
+### Sub-decisions — ✅ RESOLVED 2026-06-17 (owner, batch)
 
-1. **Engine set.** Primary targets = **Google AIO** (Gemini) + **ChatGPT**
-   (3-large). Perplexity/Claude from the fan-out stay candidate *sources*, not
-   targets. *Default; promote them to targets if wanted.*
-2. **AIO vs ChatGPT weighting** when the two answers diverge. *Default: 0.5/0.5
-   blended score, with eligibility = clears a floor on at least one engine (don't
-   drop a heading that's great for ChatGPT but mid for AIO).* Tunable.
-3. **Candidate-pool cost.** MCS generates *hundreds* of candidates per slot, each
-   embedded **twice** (Gemini + OpenAI) → materially more LLM + embedding spend
-   than today's selection. *Default: bound the pool, cache per (keyword,location),
-   meter under `brief_generation`.* Needs a real cost estimate before build.
-4. **Stopping rule / heading count.** MCS climbs "to diminishing returns" → count
-   is data-driven, not fixed. *Keep the "honest shortfall, never padded" principle:
-   min/max bounds, but never invent a heading to hit a number.*
-5. **Gates stay as eligibility pre-filter** (on-topic + non-bare-restatement). The
-   **0.20 information-gain weight is removed** (it pulls away from the answer).
-   EMQ-stuffing avoidance becomes default.
-6. **ChatGPT methodology is extrapolated, not validated.** The source research is
-   **AIO-only**; promoting the ChatGPT fan-out answer to a target applies the AIO
-   playbook to a different engine (GPT-judged, Bing-retrieved) on assumption.
-   Flag — wants its own validation / the X.6 measurement loop extended to ChatGPT.
+1. **Engine set — RESOLVED: AIO + ChatGPT only.** Targets = **Google AIO**
+   (Gemini) + **ChatGPT** (3-large). Perplexity/Claude stay candidate *sources*.
+2. **AIO vs ChatGPT weighting — RESOLVED: 0.5/0.5** blended score, eligibility =
+   clears a floor on **at least one** engine. Recalibrate after X.6 has citation
+   data.
+3. **Candidate-pool cost — STILL OPEN (verification, not a decision).** Needs a
+   real estimate before build (hundreds of candidates/slot × two embedding
+   providers). *Default approach: bound the pool, cache per (keyword,location),
+   meter under `brief_generation`.* → §6 / Section 2.
+4. **Stopping rule / heading count — RESOLVED.** Climb until marginal cosine gain
+   < ε **or** a max is hit; **floor = the intent template's required anchor slots**;
+   cap ≈ **8–12 H2s**; **never pad** to hit a number (honest shortfall).
+5. **Gates stay as eligibility pre-filter — RESOLVED** (on-topic + non-bare-
+   restatement). The **0.20 information-gain weight is removed**; EMQ-stuffing
+   avoidance is default.
+6. **ChatGPT methodology — RESOLVED: accept the extrapolation, build both now;
+   validate via X.6.** ChatGPT is promoted from a fan-out *source* to a *target* on
+   the assumption the AIO playbook transfers (GPT-judged, Bing-retrieved). The X.6
+   measurement loop is **extended to ChatGPT** to confirm/refute it on our data.
+
+> **Also resolved 2026-06-17 (defaults, no separate question):**
+> - **Gemini task type** = `RETRIEVAL_DOCUMENT` for the AIO answer + `RETRIEVAL_QUERY`
+>   for the heading (asymmetric retrieval); **not** `SEMANTIC_SIMILARITY` (the 06-16
+>   culprit). Validate discrimination on a live run.
+> - **H3 form enforcement** = deferred; **H2-only** this version (X.7 #3).
+> - **v2.6 rebase** = *directive now, full plan-doc reconciliation at M13 build time*
+>   (it's two milestones out; v2.6 details may shift). See §4 #2.
+> - **AIO target TTL** = **shared 7-day brief cache** (owner chose simplest over the
+>   shorter AIO-only refresh). **Accepted risk:** MCS may climb toward an AIO answer
+>   that has since changed; `force_refresh` re-fetches, and revisit a shorter
+>   AIO-only TTL if the X.6 loop shows staleness hurting citation. See X.7.
 
 ### Acknowledged risk (owner accepted)
 
@@ -205,8 +216,10 @@ only the rendered prose is writer-side.**
    `graph.py`, `framing.py`, `assembly.py`). Our M13 plan targets **v2.3** with a
    different layout (`sources.py`, `intent.py`, `graph.py`, `select.py`,
    `authority.py`, `faq.py`, `assemble.py`). Per `blog-writer-live-contract.md`,
-   **prod v2.6 wins over PRD v2.3.** → Adopting this likely means **rebasing M13
-   onto v2.6 first**, then layering 2.7. Bigger than a feature add.
+   **prod v2.6 wins over PRD v2.3.** → **RESOLVED 2026-06-17 (owner): target v2.6
+   as a directive now; do the full plan-doc reconciliation (filenames, schema,
+   `EXPECTED_MODULE_VERSIONS`) when M13 build actually starts** — it's two
+   milestones out and v2.6 details may shift, so don't churn the plan early.
 3. **X.7 "Research-enrichment propagation" flag — likely N/A for us, but verify.**
    It worries a *Research* stage prefers its own enriched `heading_structure`,
    voiding brief-side entity enforcement. Our Writer consumes
@@ -347,10 +360,14 @@ MCS *is* the selection layer now, so it can't be deferred. New slicing:
 
 ## 6. Next actions (not yet done)
 
-- [ ] Owner sign-off on the §4 conflicts (esp. the v2.6 rebase). [Embeddings
-      resolved 2026-06-17: dual-space, Gemini 2 for proximity only — §4 #1.]
-- [ ] Decide the **Gemini task type** for the proximity embeddings (avoid
-      `SEMANTIC_SIMILARITY`, the 06-16 suspect; evaluate `RETRIEVAL_*`).
+**Section-1 decisions — ✅ all RESOLVED 2026-06-17** (see §0 sub-decisions + §4):
+embeddings (dual/triple-space), v2.6 rebase (directive-now), engine set (AIO +
+ChatGPT), weighting (0.5/0.5), stopping rule, Gemini task type (`RETRIEVAL_*`),
+AIO TTL (shared 7-day), H3 (deferred), gates-as-pre-filter, ChatGPT (accept +
+validate via X.6). **Remaining = the Section-2 verifications/spikes + the build.**
+
+- [ ] **MCS cost estimate** — the one open Section-1 item that's really a
+      verification (hundreds of candidates/slot × two embedding providers).
 - [ ] Verify DataForSEO surfaces the AIO block on the depth-20 SERP call.
 - [ ] Confirm the Writer never re-derives headings (X.7 propagation N/A check).
 - [ ] **Verify Step 9b (authority-H2 generation) invokes the FULL Step-11 framing
