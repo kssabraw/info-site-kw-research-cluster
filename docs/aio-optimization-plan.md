@@ -212,6 +212,67 @@ Pattern = brief-emits-directive / writer-enforces — the same one the research
 itself uses for the Writer-side snippet rule. **Trigger + gating are brief-side;
 only the rendered prose is writer-side.**
 
+### 3.1 Detailed mechanism (end-to-end)
+
+**Status:** design synthesized from the research requirements (Appendix §4.X) +
+the ownership split above. **Not built.** The research gives requirements +
+acceptance criteria, *not* an algorithm — so A1 (detector) and A5 (directive
+schema) are decided-in-principle but spec-level; flagged in §6.
+
+**When it fires.** Only on **multi-answer queries** — where the best answer
+genuinely depends on reader context (comparisons, "best X for [different users]",
+"should I…", "which X should I choose"). Secondary contributor; **never stands
+alone** (A4). Complements MCS rather than duplicating it: **MCS optimizes the
+heading set toward the consensus answer; decision-fit governs one section's *body*
+content** to deliver conditional guidance — different levels.
+
+**STAGE A — Brief Generator (M13): detect → reserve → source → gate → emit**
+
+- **A1. Detect "multi-answer query?"** *(brief-side decided; detector to build.)*
+  Extend the **Step 3** two-pass intent classifier (+ `intent_format_template`)
+  with an LLM-judged flag: *does answering this well require branching by reader
+  situation, and what are the candidate conditions?* Corroborate with intent shape
+  (comparison/recommendation/decision), SERP/PAA signals, and whether the candidate
+  subtopic pool splits into distinct reader segments. Output: boolean + candidate
+  condition list.
+- **A2. Reserve the decision-fit H2** *(decided; MCS-integration is the subtle bit.)*
+  Reserve an H2 slot (e.g. *"Which [option] is right for your situation?"*) **via
+  the existing anchor-slot reservation machinery, NOT a parallel system** (the
+  §4.5-C collision). Under full-MCS: the decision-fit H2 is a **reserved anchor** —
+  MCS does *not* drop it and fills only the *remaining* slots — but its **heading
+  form is still enforced** (entity + one point, X.4). Selection forced, form
+  enforced: exactly how templated-intent anchors already behave.
+- **A3. Source the branch material** *(decided.)* The brief assembles raw material
+  (not prose): the **branch conditions** (reader situations) + **condition→option**
+  map + the **overarching default/priority statement**, drawn from **Step 6
+  persona-gap questions**, **PAA**, and **Reddit**.
+- **A4. Pairing/gating — "never standalone"** *(decided; structural check.)*
+  Decision-fit underperforms alone and **must be paired**. Before emitting, run a
+  **co-occurrence check** over the *selected* sections: is ≥1 qualifying partner
+  factor present — **comparative depth**, **edge-case detail**, or **direct
+  definitions**? No partner → don't emit (or add a partner first). Commercial/
+  transactional pages may instead pair with **multiple-languages** or
+  **direct-definitions**. ⚠️ **Spec gap:** that "Commercial Page Gating" rule is
+  cross-referenced but **not in our research excerpt** — partner logic for
+  commercial pages is under-specified; fetch the source before building A4.
+- **A5. Emit the `format_directive`** *(decided; schema TBD.)* Attach a
+  `format_directive` to the `heading_structure` section (metadata, not prose):
+  render-as-decision-fit + the conditions + condition→option map + default + the
+  "condition named first" requirement. Same pattern as the Writer-side snippet
+  directive.
+
+**STAGE B — Writer (M14, DEFERRED): render → validate**
+
+- **B1. Render** the if/then prose: per condition, *"If you're [situation], choose
+  [option]"* (**condition first, then action**), then the **overarching default**.
+- **B2. Validate** (validator sibling to Writer **Step 6.7**, following the
+  `min_h2_body_words` precedent): ≥1 branch + a stated default; branches mutually
+  distinct, each a clear condition→action; condition stated first.
+
+**Acceptance criteria** (research §4.X): multi-answer queries render ≥1 conditional
+branch + stated default; branches mutually distinct (condition→action); section
+never emitted standalone (A4 guarantees a partner factor).
+
 ---
 
 ## 4. Open conflicts to resolve before this slots in
@@ -424,6 +485,12 @@ X.6). **Remaining = the Section-2 verifications/spikes + the build.**
       5 → form enforce 11) so entity tokens never reach MMR/the restatement ceiling
       (collision §4.5-A). Add a regression test: entity-free brief = byte-identical
       Step 5 + Step 11 output.
+- [ ] **Decision-fit spec gaps (§3.1)** before building it: (a) the **A1 detector**
+      algorithm (decided brief-side, but the research gives no mechanism — spec the
+      multi-answer-query + condition-extraction logic); (b) the **A5
+      `format_directive` schema**; (c) **fetch the "Commercial Page Gating" rule**
+      (cross-referenced in the research but not in our excerpt — A4's commercial
+      partner logic is under-specified without it).
 - [ ] Once signed off: write the concrete Brief Gen addendum mapping §5 ship-now
       slice onto the (rebased) file layout, with pure-module tests per §13.X.8 /
       X.9 acceptance.
