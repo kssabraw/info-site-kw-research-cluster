@@ -52,9 +52,13 @@ Step 5   ELIGIBILITY GATES become a PRE-FILTER, not selectors:
            - relevance floor (on-topic to keyword)        [3-large]
            - entity-stripped restatement ceiling (X.3)     [3-large]
          → produces the eligible candidate set MCS climbs within.
-Step 7-8 REPLACED by MCS: per slot, LLM generates a candidate pool (heading
-         FORM = entity + one point, X.4 baked in at generation), each candidate
-         scored in BOTH spaces, blended, beam-climb for set coverage.
+Step 7-8 H2 SKELETON — REPLACED by MCS: per slot, LLM generates a candidate
+         pool (heading FORM = entity + one point, X.4 baked in at generation),
+         each candidate scored in BOTH spaces, blended, beam-climb for coverage.
+Step 8.7 H3s — ORGANIC, beneath each MCS-selected H2 (hybrid; see H3 decision):
+         parent-band [0.65,0.85] + same-region + parent-fit LLM check, ≤2/H2,
+         PLUS authority-gap H3s (3-5 SME topics competitors miss). NOT MCS;
+         NOT form-enforced (H2-only). Where info-gain/differentiation re-enters.
 Step 11  Form re-validation + title-case (residual safety).
 Out      aio_insights + chatgpt_insights proximity readouts (now first-class,
          not advisory afterthoughts).
@@ -89,6 +93,24 @@ Gemini cosine threshold to a 3-large one.
    validate via X.6.** ChatGPT is promoted from a fan-out *source* to a *target* on
    the assumption the AIO playbook transfers (GPT-judged, Bing-retrieved). The X.6
    measurement loop is **extended to ChatGPT** to confirm/refute it on our data.
+7. **H3 generation under MCS — RESOLVED 2026-06-17: HYBRID (the Section-1 item the
+   first batch missed).** The full-MCS pivot replaced the H2 *selection* layer and
+   removed the region/info-gain machinery the original H3 mechanism leaned on,
+   leaving H3 *generation* under-specified. Resolution: **MCS owns the H2 skeleton;
+   H3s are generated organically beneath each MCS-selected H2** —
+   - **Regular H3s** (`select.py`, Step 8.7): parent-relevance band **[0.65, 0.85]**
+     (cosine to parent H2), **same-region**, **≤2/H2**, + the parent-fit LLM check.
+   - **Sub-choice RESOLVED: keep building the Step 4–5 coverage-graph + Louvain
+     regions** purely to feed the H3 "same-region" constraint (cheap; keeps the
+     original mechanism intact) rather than dropping regions.
+   - **Authority-gap H3s** (`authority.py`, Step 9): unchanged — 3–5 SME topics
+     competitors miss, displacement rules, `authority_gap_sme` tag.
+   - **Why this matters:** authority-gap H3s are the **information-gain /
+     differentiation we removed at the H2 level** (MCS pulls H2s *toward*
+     consensus). H3s are where genuine differentiation re-enters — the guard
+     against an all-proximity page being pure consensus-restatement.
+   - H3 **form** enforcement stays **deferred** (H2-only, decision in the box
+     below) — this decision is about H3 *selection/generation*, not phrasing.
 
 > **Also resolved 2026-06-17 (defaults, no separate question):**
 > - **Gemini task type** = `RETRIEVAL_DOCUMENT` for the AIO answer + `RETRIEVAL_QUERY`
