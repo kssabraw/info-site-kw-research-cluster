@@ -178,7 +178,7 @@ framing retained for context:
 |---|---|---|---|
 | §4.X Decision-Fit Mapping | Brief Gen (trigger/gating) + Writer (render) | ❌ Missing | Co-owned — see §3. |
 | §4.X Max Cosine Synthesis (candidate-pool + greedy/beam cosine climb) | Brief Gen | ❌ Missing | **CORE per §0 (un-deferred 2026-06-17)** — now *replaces* organic selection, multi-target (AIO+ChatGPT). |
-| X.1 AIO target capture (answer_text, cited_sources, fanout) | Brief Gen Step 1 | ❌ Missing | Plan's SERP scrape gets headings/titles/metas + feature flags, **not** the AIO block. Research claims it rides the existing depth-20 DataForSEO call — **verify DataForSEO returns the AIO block.** |
+| X.1 AIO target capture (answer_text, cited_sources, fanout) | Brief Gen Step 1 | ✅ Feasibility CONFIRMED (§5.6) | DataForSEO **does** return `ai_overview` on the advanced endpoint we already use; synchronous AIOs free on the existing call, async needs one param (+$0.0006, refunded if absent). Capture itself still to build. |
 | §13.X.8 / X.2 Main-entity derivation (`entity.py`, new Step 3.6) | Brief Gen | ❌ Missing as a feature; ✅ deps already present | **spaCy `en_core_web_sm` already locked** (SIE §9, shared dep). **3-large already in Brief Gen** for the tie-break/sanity embeddings. Building blocks exist; module doesn't. Deterministic, no LLM in default path → free + testable. |
 | X.3 Residual restatement gate (apply 0.78 ceiling to entity-stripped residual) | Brief Gen Step 5 (`graph.py`) | ⚠️ Partial | The **0.55 floor / 0.78 ceiling already exist**. This is a refinement (strip entity first), not a new gate. |
 | X.4 Heading-form enforcement (entity + one point, every H2) | Brief Gen Step 11 framing (`assemble.py`) | ⚠️ Partial | The **framing validator + title-case stage already exists**. New rule rides its existing rewrite-and-re-embed path. The high-confidence core. |
@@ -606,6 +606,39 @@ candidate *generation*, which the pool-size lever controls.
 
 ---
 
+## 5.6 DataForSEO AIO-block availability ✅ (2026-06-17) — CONFIRMED
+
+**Verdict: X.1 is feasible as designed.** DataForSEO's Google Organic SERP
+**Advanced** endpoint — the exact `/v3/serp/google/organic/live/advanced` we already
+call at depth 20 (`backend/app/dataforseo/client.py:174`) — returns the AI Overview
+as a structured **`ai_overview`** item in `items[]`, containing AI-generated text,
+tables, and a list of **quoted sources** → maps directly onto X.1's
+`aio_target.answer_text` + `cited_sources[]`.
+
+**Two flavors (the detail that matters for our inline write-time flow):**
+- **Synchronous** (Google-cached): present in the **base response — no extra call,
+  no extra cost.** The research's "rides the existing depth-20 SERP call" holds for
+  these.
+- **Asynchronous**: NOT in the base response; needs **`load_async_ai_overview:
+  true`**, which makes DataForSEO do a second fetch. Cost **+$0.0006** (base $0.0006
+  → $0.0012 total), **refunded** if no async AIO is present or a cached one exists.
+  So you only pay the extra when an async AIO is actually retrieved.
+
+**Integration:** to capture *all* AIOs (not just cached), add
+`load_async_ai_overview: true` to the **Step-1** SERP call — a one-parameter change,
+trivial cost (≤ +$0.0006/article; ~$0.19 worst-case across a 315-article session;
+auto-metered via the DataForSEO task envelope). The async fetch adds a round-trip
+inside DataForSEO when triggered — minor latency.
+
+**Absence is normal & already handled:** AIO appears only when Google shows one →
+`aio_target.present: false` is a real, common case the design covers (X.1 degrades
+to `available=False`; entity derivation falls back to the title).
+
+**Caveat:** sourced from DataForSEO docs/help-center (a live API call wasn't run in
+the sandbox); confirm field shapes on the first deployed brief run.
+
+---
+
 ## 6. Next actions (not yet done)
 
 **Section-1 decisions — ✅ all RESOLVED 2026-06-17** (see §0 sub-decisions + §4):
@@ -620,7 +653,9 @@ X.6). **Remaining = the Section-2 verifications/spikes + the build.**
       Haiku ≈ **$0.09–$0.27/article** (under the brief budget); literal
       per-slot×hundreds ≈ $0.34–$1.03 (risks the $1.00 ceiling). **Open owner call:
       cap the pool small, or raise the brief ceiling to ~$1.25.**
-- [ ] Verify DataForSEO surfaces the AIO block on the depth-20 SERP call.
+- [x] **DataForSEO AIO-block availability** — CONFIRMED (§5.6): `ai_overview` item
+      is returned on the advanced endpoint we already use; add `load_async_ai_overview:
+      true` to the Step-1 call for full (incl. async) coverage. Trivial cost.
 - [ ] Confirm the Writer never re-derives headings (X.7 propagation N/A check).
 - [ ] **At the v2.6 rebase: map authority gaps to H3** (resolved 2026-06-17, §0 #7
       — authority gaps are H3s, deliberately not entity-form-enforced). If v2.6 prod
