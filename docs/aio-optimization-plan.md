@@ -337,8 +337,9 @@ format_directive = {
     ...                                        # ≥ 2, mutually distinct
   ],
   default_statement: str,                       # priority holding across branches
-  partner_factor:    "comparative_depth"|"edge_case_detail"|"direct_definitions"
-                     |"multiple_languages",     # WHICH partner satisfied A4 (must be present)
+  partner_factor:    "comparative_depth"|"edge_case_detail"|"direct_definitions",
+                     # WHICH partner satisfied A4 (must be present). NB: "multiple_languages"
+                     # deferred with commercial gating (§3.4) — re-add when that lands.
   constraints: { condition_first: true, min_branches: 2, distinct_branches: true },
   detector:    { confidence: float, rationale: str },   # A1 audit echo
 }
@@ -349,15 +350,19 @@ Carries everything the Writer needs to **render (B1)** and the validator to **ch
 just that one is) and the A1 audit echo. `branches[].source` keeps per-condition
 provenance, consistent with the brief's general provenance practice.
 
-### 3.4 Open: Commercial Page Gating (A4 commercial partner logic)
+### 3.4 Commercial Page Gating — DEFERRED (owner, 2026-06-17)
 
-⚠️ **STILL BLOCKED — needs the source.** The research's §4.X cross-references a
-**"Commercial Page Gating"** section (for transactional/commercial pages,
-decision-fit may pair with `multiple_languages` or `direct_definitions`) that is
-**not in the excerpt we hold**. A4's commercial-page branch can't be specced without
-it. → Owner to supply that section (or confirm we defer commercial-page decision-fit
-and gate only on the three general partners: comparative-depth / edge-case /
-direct-definitions). Tracked in §6.
+**Resolved: defer commercial-page decision-fit for now.** A4 gates only on the
+**three general partner factors** — `comparative_depth` / `edge_case_detail` /
+`direct_definitions`. The `partner_factor` enum in §3.3 therefore **drops
+`multiple_languages`** for this version (re-add when commercial gating lands).
+Consequence: on a transactional/commercial page whose only candidate partner would
+have been multiple-languages or direct-definitions, decision-fit simply **won't
+emit** (A4 fails) rather than mis-firing — the conservative, correct default.
+
+**Revisit trigger:** owner supplies the research's "§[Commercial Page Gating]"
+section (not in our excerpt). Until then, commercial-page decision-fit is out of
+scope, not broken.
 
 ---
 
@@ -575,10 +580,9 @@ X.6). **Remaining = the Section-2 verifications/spikes + the build.**
       contract, τ=0.7 gate, ≥2 distinct conditions). 2026-06-17.
 - [x] **Decision-fit A5 `format_directive` schema** — specced in §3.3 (typed
       directive, branches+default+partner_factor+detector echo). 2026-06-17.
-- [ ] **Commercial Page Gating (§3.4)** — STILL BLOCKED on the source: the research
-      cross-references it but it's not in our excerpt. Owner to supply the section,
-      or confirm we defer commercial-page decision-fit and gate only on the three
-      general partner factors.
+- [x] **Commercial Page Gating (§3.4)** — DEFERRED 2026-06-17 (owner): A4 gates on
+      the three general partner factors only; `multiple_languages` dropped from the
+      directive enum. Revisit when the owner supplies the source section.
 - [ ] Once signed off: write the concrete Brief Gen addendum mapping §5 ship-now
       slice onto the (rebased) file layout, with pure-module tests per §13.X.8 /
       X.9 acceptance.
