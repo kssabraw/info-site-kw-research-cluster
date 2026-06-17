@@ -46,8 +46,7 @@ to `main`, no code touched):_
   ChatGPT citation**, the gap analysis against the current plans, the collision
   analysis, all owner decisions below, and the source research verbatim
   (Appendix). This is the single source of truth for the AIO/answer-engine work.
-  **Still pending: register it in CLAUDE.md "Key file locations"** (offered, not
-  yet done) so it auto-loads each session.
+  **Registered in CLAUDE.md "Key file locations"** (auto-loads each session).
 - **Gap analysis.** The AIO research is **~85% net-new** — `grep` across all of
   `docs/` returns zero prior matches for `AIO`/`main_entity`/`Max Cosine`/
   `decision-fit`. It lands **almost entirely on Brief Gen (M13)**; **nothing on
@@ -88,14 +87,17 @@ to `main`, no code touched):_
   MCS already computes the signals) was scoped + pros/cons weighed; **owner chose
   to hold off for now.** Revisit when MCS is being built/validated (it's the
   natural instrument for the X.6 loop).
-- **Pre-build blockers before ANY M13 AIO code** (all in the doc's §0/§5):
-  (1) the v2.3→**v2.6 rebase** (prod brief runs v2.6; research is written against
-  v2.6→2.7); (2) a real **MCS cost estimate** (hundreds of candidates/slot ×
-  two embedding providers — materially pricier than today's selection);
-  (3) the §0 open **sub-decisions** (engine set, AIO-vs-ChatGPT weighting,
-  candidate-pool bound, stopping rule, the unvalidated **ChatGPT methodology**
-  assumption); (4) **verify DataForSEO returns the AIO block** on the depth-20
-  SERP call; (5) the Gemini task type.
+- **Section-1 design decisions are now all RESOLVED** (owner batch 2026-06-17,
+  after this entry's first draft): engine set (AIO + ChatGPT), weighting (0.5/0.5),
+  stopping rule, Gemini task type (`RETRIEVAL_*`), AIO TTL (shared 7-day), v2.6
+  rebase (directive-now), gates-as-pre-filter, ChatGPT (accept + validate via X.6),
+  and **H3 generation = HYBRID** (the late-caught item). See the doc's §0/§4/§6.
+- **Pre-build blockers before ANY M13 AIO code** are now just **verifications**
+  (not decisions): (1) a real **MCS cost estimate** (hundreds of candidates/slot ×
+  two embedding providers); (2) **verify DataForSEO returns the AIO block** on the
+  depth-20 SERP call; (3) the v2.6 **plan-doc reconciliation** at M13 build start
+  (directive already locked). Plus the unreconciled **authority-gap H2-vs-H3**
+  question flagged for the rebase (§0 #7).
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_

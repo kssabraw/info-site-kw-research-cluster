@@ -105,6 +105,15 @@ Gemini cosine threshold to a 3-large one.
      original mechanism intact) rather than dropping regions.
    - **Authority-gap H3s** (`authority.py`, Step 9): unchanged — 3–5 SME topics
      competitors miss, displacement rules, `authority_gap_sme` tag.
+     - **⚠️ UNRECONCILED v2.3↔v2.6 (flag for the rebase):** our v2.3 plan places
+       authority gaps at the **H3** level (`brief-generator-module-plan.md:57`),
+       but the research's PRD §X.4/§X.9 (Appendix) calls them **"Authority H2s
+       (Step 9b)"** and **requires them entity-form-enforced**. These can't both
+       hold: if authority gaps are H3s, H3 form enforcement is deferred → they are
+       **not** entity-enforced (the opposite of X.9). Decide at the v2.6 rebase
+       whether authority gaps are H2s (→ form-enforced, per research) or H3s (→ not,
+       per our plan). The §4.5-C / §6 "Step 9b" verification item assumes the H2
+       reading; this bullet assumes the H3 reading — that gap is the open question.
    - **Why this matters:** authority-gap H3s are the **information-gain /
      differentiation we removed at the H2 level** (MCS pulls H2s *toward*
      consensus). H3s are where genuine differentiation re-enters — the guard
@@ -168,7 +177,7 @@ framing retained for context:
 | X.3 Residual restatement gate (apply 0.78 ceiling to entity-stripped residual) | Brief Gen Step 5 (`graph.py`) | ⚠️ Partial | The **0.55 floor / 0.78 ceiling already exist**. This is a refinement (strip entity first), not a new gate. |
 | X.4 Heading-form enforcement (entity + one point, every H2) | Brief Gen Step 11 framing (`assemble.py`) | ⚠️ Partial | The **framing validator + title-case stage already exists**. New rule rides its existing rewrite-and-re-embed path. The high-confidence core. |
 | X.5 AIO proximity (+ ChatGPT) | Brief Gen assembly | ❌ Missing | **Promoted to first-class per §0** — drives MCS selection, not just a readout. |
-| X.6 Measurement loop (post-publish AIO citation + GSC) | Beyond M13 — needs publish telemetry | ❌ Missing entirely | Graduation criterion before any "active" proximity mode. We have no published-article telemetry anywhere yet. |
+| X.6 Measurement loop (post-publish AIO + ChatGPT citation + GSC) | Beyond M13 — needs publish telemetry | ❌ Missing entirely | **Now REQUIRED per §0** (validates the proximity-driven MCS bet, incl. ChatGPT), not a gate on a future "active mode." We have no published-article telemetry anywhere yet. |
 | X.8 Schema 2.7 + metadata fields | Brief Gen | ❌ Missing | Implies the version rebase — see §4. |
 
 **One-line summary:** ~85% net-new; almost all on Brief Gen (M13); **none on
@@ -258,11 +267,14 @@ v2.3** (not built); **prod runs v2.6** (live contract). The research is written
 against v2.6 → 2.7. The collisions below are against *mechanisms both versions
 share*, except #D which is plan-level.
 
-**Headline:** nothing collides **if you take the curated PRD §X path** — §X was
-engineered to slot in beside the existing selection machinery (additive capture,
-post-gate form enforcement, non-gating proximity). Collisions are real only when
-(A) the implementation order is wrong, (B) the raw §4.X MCS is taken literally as
-a selection driver, or (C) the Gemini embedding requirement is honored.
+**Headline — NB: §0 (2026-06-17) reframes this section.** As *originally* written,
+the safe path was the curated PRD §X (additive capture, post-gate form enforcement,
+non-gating proximity), and collisions (B) MCS-as-selection / (C) Gemini were things
+to avoid. **§0 deliberately adopted both (B) and (C)** — full MCS selection + Gemini
+for AIO proximity — and resolved their collisions (objective-flip for B; dual-space
+scalar-blend for C; see §4.5-B and §4 #1). So of the original three, only **(A) the
+X.3→X.4 implementation ordering** remains a live "don't get it wrong." The analysis
+below is kept as the reasoning trail.
 
 > **Partly superseded by §0 (2026-06-17):** MMR is *removed* in the full-MCS
 > design, so its 0.75 anti-redundancy guard no longer exists — MCS's own "set
@@ -365,18 +377,21 @@ MCS *is* the selection layer now, so it can't be deferred. New slicing:
 - X.2 Main-entity derivation (Step 3.6, `entity.py`) — feeds form + the residual
   gate; 3-large.
 - X.6 measurement loop — **now REQUIRED** (the only validation that proximity-driven
-  selection actually earns citations; extend it to ChatGPT, sub-decision §0.6).
+  selection actually earns citations; extend it to ChatGPT, §0 sub-decision #6).
 - X.8 metadata + schema bump (gated on the v2.6 rebase, §4 #2).
 
 **Still genuinely deferred:**
 - Decision-fit **rendering + validator** (Writer / M14).
 - Writer-side extractable-snippet directive (separate spec, M14).
 
-**Pre-build blockers (must resolve before code):**
-- The §0 open sub-decisions (engine set, AIO/ChatGPT weighting, candidate-pool
-  cost bound, stopping rule, ChatGPT-methodology assumption).
-- v2.3→v2.6 rebase (§4 #2). Gemini task type (§4 #1).
-- A real cost estimate — MCS is materially pricier than today's selection.
+**Pre-build blockers (must resolve before code):** — the §0 decision batch
+(2026-06-17) cleared the design forks; what remains is **verifications**, not
+decisions (see §6):
+- A real **MCS cost estimate** (the one open Section-1 item — materially pricier
+  than today's selection; candidate-pool bound depends on it).
+- **DataForSEO AIO-block availability** on the depth-20 SERP call.
+- The **v2.6 plan-doc reconciliation** — directive locked (§4 #2); the detailed
+  filename/schema mapping happens at M13 build start, not now.
 
 ---
 
@@ -385,8 +400,9 @@ MCS *is* the selection layer now, so it can't be deferred. New slicing:
 **Section-1 decisions — ✅ all RESOLVED 2026-06-17** (see §0 sub-decisions + §4):
 embeddings (dual/triple-space), v2.6 rebase (directive-now), engine set (AIO +
 ChatGPT), weighting (0.5/0.5), stopping rule, Gemini task type (`RETRIEVAL_*`),
-AIO TTL (shared 7-day), H3 (deferred), gates-as-pre-filter, ChatGPT (accept +
-validate via X.6). **Remaining = the Section-2 verifications/spikes + the build.**
+AIO TTL (shared 7-day), **H3 generation = HYBRID** (§0 #7; H3 *form* enforcement
+deferred — distinct things), gates-as-pre-filter, ChatGPT (accept + validate via
+X.6). **Remaining = the Section-2 verifications/spikes + the build.**
 
 - [ ] **MCS cost estimate** — the one open Section-1 item that's really a
       verification (hundreds of candidates/slot × two embedding providers).
