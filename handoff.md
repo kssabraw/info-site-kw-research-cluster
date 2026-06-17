@@ -37,6 +37,66 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
 
+_2026-06-17 — Brief Generator (M13) re-aimed ANSWER-ENGINE-FIRST; new AIO
+planning doc. Docs-only, on branch `claude/optimistic-brown-9wijtx` (NOT merged
+to `main`, no code touched):_
+
+- **New planning doc: `docs/aio-optimization-plan.md`** — captures a body of
+  owner-supplied research on optimizing content for **Google AI Overview (AIO) +
+  ChatGPT citation**, the gap analysis against the current plans, the collision
+  analysis, all owner decisions below, and the source research verbatim
+  (Appendix). This is the single source of truth for the AIO/answer-engine work.
+  **Still pending: register it in CLAUDE.md "Key file locations"** (offered, not
+  yet done) so it auto-loads each session.
+- **Gap analysis.** The AIO research is **~85% net-new** — `grep` across all of
+  `docs/` returns zero prior matches for `AIO`/`main_entity`/`Max Cosine`/
+  `decision-fit`. It lands **almost entirely on Brief Gen (M13)**; **nothing on
+  SIE (M12)** (SIE only contributes its already-locked spaCy `en_core_web_sm`
+  dep); one piece (decision-fit *rendering*) on the Writer (M14). Decision-fit
+  mapping is **co-owned** — brief-side trigger/gating + a `format_directive`,
+  writer-side prose render.
+- **Owner decision #1 — embeddings (DUAL/TRIPLE-SPACE).** Resolves the M13
+  embedding-model choice the 2026-06-16 entry re-opened. **Gemini Embedding 2 for
+  the AIO-proximity path ONLY**; **`text-embedding-3-large` for the organic
+  eligibility gates AND ChatGPT-proximity** (matches GPT's judge). Safe because
+  proximity is self-contained and **scalar cosines are blended, never vectors** —
+  the "never mix vector spaces" lock holds. Invoke the dormant `GeminiEmbedder`
+  directly (independent of the app-wide `EMBEDDING_PROVIDER=openai`, which stays).
+  Open: Gemini **task type** (avoid `SEMANTIC_SIMILARITY`, the 06-16 suspect; try
+  `RETRIEVAL_*`) — now higher-stakes since proximity drives selection.
+- **Owner decision #2 — STRATEGIC PIVOT: answer-engine-first.** The brief
+  generator now optimizes **AIO + ChatGPT citation as the PRIMARY target; organic
+  ranking is the floor, not the goal.** **Divergence from the PRD/organic-first
+  brief-gen design — flagged.** Organic is kept only as the "entry ticket" (AIO/
+  ChatGPT pull from the ranked/retrieved set; you must be in it to be cited).
+- **Owner decision #3 — FULL MCS selection.** Max Cosine Synthesis **replaces**
+  the organic priority/MMR/region/information-gain selection layer: per heading
+  slot, generate a large candidate pool (entity+one-point form baked in), score
+  by cosine to the AIO + ChatGPT answers (dual-space, scalar-blended), beam-climb
+  for set coverage. The eligibility gates (relevance floor + entity-stripped
+  restatement ceiling) **demote to a pre-filter**; the 0.20 information-gain
+  weight is **removed**; no-EMQ-stuffing becomes default. The ChatGPT answer is
+  **promoted from a Step-2D fan-out source to a selection target**. **Accepted
+  risk (owner):** proximity is the research's own *low-confidence* citation signal
+  ("necessary-not-sufficient") — the X.6 measurement loop is **now required**, not
+  deferred, to find out if it pays.
+- **Heading-selection rationale "orchestrator" — considered, HELD OFF (owner,
+  2026-06-17).** MCS makes selection opaque (pure numeric proximity); there is **no
+  component that explains *why* a heading was measured/chosen** (only a
+  `discarded_headings` "why-not" record + `title_rationale` for the title +
+  aggregate §X.8 metadata). A deterministic "selection rationale ledger" (cheap —
+  MCS already computes the signals) was scoped + pros/cons weighed; **owner chose
+  to hold off for now.** Revisit when MCS is being built/validated (it's the
+  natural instrument for the X.6 loop).
+- **Pre-build blockers before ANY M13 AIO code** (all in the doc's §0/§5):
+  (1) the v2.3→**v2.6 rebase** (prod brief runs v2.6; research is written against
+  v2.6→2.7); (2) a real **MCS cost estimate** (hundreds of candidates/slot ×
+  two embedding providers — materially pricier than today's selection);
+  (3) the §0 open **sub-decisions** (engine set, AIO-vs-ChatGPT weighting,
+  candidate-pool bound, stopping rule, the unvalidated **ChatGPT methodology**
+  assumption); (4) **verify DataForSEO returns the AIO block** on the depth-20
+  SERP call; (5) the Gemini task type.
+
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_
 
