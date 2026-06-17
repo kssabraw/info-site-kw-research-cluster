@@ -96,8 +96,9 @@ to `main`, no code touched):_
   (not decisions): (1) a real **MCS cost estimate** (hundreds of candidates/slot ×
   two embedding providers); (2) **verify DataForSEO returns the AIO block** on the
   depth-20 SERP call; (3) the v2.6 **plan-doc reconciliation** at M13 build start
-  (directive already locked). Plus the unreconciled **authority-gap H2-vs-H3**
-  question flagged for the rebase (§0 #7).
+  (directive already locked) — which must **map authority gaps to H3** (resolved
+  2026-06-17: authority gaps are H3s, deliberately NOT entity-form-enforced — a
+  flagged divergence from the research's X.4/X.9 "Authority H2s entity-enforced").
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_

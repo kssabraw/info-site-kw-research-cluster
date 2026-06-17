@@ -105,15 +105,21 @@ Gemini cosine threshold to a 3-large one.
      original mechanism intact) rather than dropping regions.
    - **Authority-gap H3s** (`authority.py`, Step 9): unchanged — 3–5 SME topics
      competitors miss, displacement rules, `authority_gap_sme` tag.
-     - **⚠️ UNRECONCILED v2.3↔v2.6 (flag for the rebase):** our v2.3 plan places
-       authority gaps at the **H3** level (`brief-generator-module-plan.md:57`),
-       but the research's PRD §X.4/§X.9 (Appendix) calls them **"Authority H2s
-       (Step 9b)"** and **requires them entity-form-enforced**. These can't both
-       hold: if authority gaps are H3s, H3 form enforcement is deferred → they are
-       **not** entity-enforced (the opposite of X.9). Decide at the v2.6 rebase
-       whether authority gaps are H2s (→ form-enforced, per research) or H3s (→ not,
-       per our plan). The §4.5-C / §6 "Step 9b" verification item assumes the H2
-       reading; this bullet assumes the H3 reading — that gap is the open question.
+     - **✅ RESOLVED 2026-06-17 (owner): authority gaps are H3s** — our v2.3 plan's
+       level (`brief-generator-module-plan.md:57`), **not** the research's "Authority
+       H2s (Step 9b)." Consequence: since H3 form enforcement is deferred, authority
+       gaps are **NOT entity-form-enforced** → a **deliberate divergence from the
+       research's X.4/X.9** ("Authority H2s (9b) MUST be entity-enforced"). Flagged.
+     - **Why this is the *more* coherent choice (not just the conservative one):**
+       authority-gap content is, by definition, *what competitors miss* — so it is
+       **absent from the AIO answer** (which is synthesized from what ranking pages
+       *do* cover). Form-enforcing it *toward* the AIO answer would be self-
+       contradictory (you can't make "content nobody else has" close to the
+       consensus answer). Leaving it as non-enforced H3s is exactly the
+       answer-engine-first split: **H2s chase the consensus answer; H3s carry the
+       differentiation that should *not* match it.**
+     - **Rebase note:** if v2.6 prod places authority gaps at H2/Step-9b, the v2.6
+       reconciliation must **map them down to H3** in our build.
    - **Why this matters:** authority-gap H3s are the **information-gain /
      differentiation we removed at the H2 level** (MCS pulls H2s *toward*
      consensus). H3s are where genuine differentiation re-enters — the guard
@@ -340,9 +346,11 @@ split, not by rejecting Gemini outright.
 - **X.3 modifies Step 5** (existing gate) but is byte-identical for entity-absent
   candidates ("entity-free briefs produce byte-identical Step 5 output").
 - **X.4 rides the existing Step 11 framing rewrite path** (composes, doesn't
-  replace). **Open gap it flags itself:** does **authority-H2 generation (Step
-  9b)** invoke the *full* framing rule set or a subset? If a subset, authority H2s
-  **bypass entity enforcement** — a real hole to verify (→ §6).
+  replace). **The "do authority H2s inherit the form rule?" worry is now MOOT**
+  (resolved 2026-06-17, §0 #7): authority gaps are **H3s**, and H3 form enforcement
+  is deferred — they are deliberately *not* entity-enforced, so there is no
+  authority-H2 enforcement path to verify. (X.4 enforcement applies only to the
+  MCS-built H2 skeleton.)
 - **Anchor-slot reservation:** decision-fit mapping wants a *guaranteed* section,
   but MMR only selects what scores well. A reserved decision-fit slot must
   integrate with the **existing anchor-slot reservation** (intent-template
@@ -408,10 +416,10 @@ X.6). **Remaining = the Section-2 verifications/spikes + the build.**
       verification (hundreds of candidates/slot × two embedding providers).
 - [ ] Verify DataForSEO surfaces the AIO block on the depth-20 SERP call.
 - [ ] Confirm the Writer never re-derives headings (X.7 propagation N/A check).
-- [ ] **Verify Step 9b (authority-H2 generation) invokes the FULL Step-11 framing
-      rule set, not a subset** — otherwise authority H2s bypass entity enforcement
-      (collision §4.5-C). Trace the 9b "scope verification + framing" path before
-      building X.4.
+- [ ] **At the v2.6 rebase: map authority gaps to H3** (resolved 2026-06-17, §0 #7
+      — authority gaps are H3s, deliberately not entity-form-enforced). If v2.6 prod
+      places them at H2/Step-9b, move them down. *(The earlier "verify Step 9b
+      framing rule set" check is moot — there is no authority-H2 enforcement path.)*
 - [ ] **Enforce the X.3→X.4 implementation ordering** (derive 3.6 → residual gate
       5 → form enforce 11) so entity tokens never reach MMR/the restatement ceiling
       (collision §4.5-A). Add a regression test: entity-free brief = byte-identical
