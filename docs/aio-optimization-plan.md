@@ -86,14 +86,35 @@ only the rendered prose is writer-side.**
 
 ## 4. Open conflicts to resolve before this slots in
 
-1. **Gemini vs OpenAI embeddings — research self-contradicts; we rolled Gemini
-   back.** MCS (§4.X) says "MUST be Gemini (Vertex)"; the drop-in PRD §X.5/X.7
-   walks it back to "3-large only, no Gemini track." **We rolled Gemini back
-   2026-06-16** (poor relevance discrimination) and are locked on OpenAI
-   `text-embedding-3-small` app-wide / `3-large` inside Brief Gen. → **Adopt the
-   3-large advisory framing; drop the "MUST be Gemini" line.** Caveat the research
-   itself raises: 3-large is a *proxy* for the model judging AIO, which is exactly
-   why proximity stays advisory/non-gating.
+1. **Gemini vs OpenAI embeddings — ✅ RESOLVED 2026-06-17 (owner): DUAL-SPACE.**
+   Background: MCS (§4.X) says "MUST be Gemini (Vertex)"; the drop-in PRD §X.5/X.7
+   walks it back to "3-large only, no Gemini track." We **rolled Gemini back
+   app-wide 2026-06-16** (poor write-time relevance discrimination) and are locked
+   on OpenAI `text-embedding-3-small` app-wide / `3-large` inside Brief Gen.
+   **Owner decision (2026-06-17): use Gemini Embedding 2 for the AIO-proximity path
+   ONLY**, keeping `text-embedding-3-large` for every organic gate + entity
+   derivation. Rationale: proximity is about matching Google's AIO judging model
+   (Gemini), so Gemini is the *right* model there; the organic gates are where
+   Gemini just failed, so they stay 3-large.
+   - **This OVERRIDES PRD §X.5's "3-large only, no second model" stance** — a
+     deliberate, scoped divergence (flagged).
+   - **Vector-space safety holds** *because the proximity score is non-gating and
+     self-contained*: `cosine(heading, aio_answer)` is computed entirely in Gemini
+     space and **never compared to any 3-large gate value**. Two isolated spaces,
+     not a mixed one — the CLAUDE.md "never mix vector spaces" lock is respected so
+     long as no Gemini cosine is ever compared against a 3-large cosine.
+   - **Implementation notes / open items:**
+     - Entity derivation (X.2): tie-break + the 0.45 keyword sanity check **stay
+       3-large** (they feed organic selection, not AIO matching).
+     - Brief Gen must invoke the **dormant `GeminiEmbedder` directly** for the
+       proximity path, independent of the global `EMBEDDING_PROVIDER=openai` (which
+       stays OpenAI). `GEMINI_API_KEY` already provisioned (from the 06-15 cutover).
+     - **Gemini task type is an open decision** — `SEMANTIC_SIMILARITY` was the
+       suspected culprit in the 06-16 gate failure; for a non-gating proximity
+       score it matters less, but pick deliberately (try `RETRIEVAL_*`). Flag.
+     - Extra cost: a second embedding pass over the few selected headings + the AIO
+       answer, in Gemini. Small; metered under `brief_generation`.
+     - **No gate recalibration needed** (the gates never touch Gemini).
 2. **Version + module-name mismatch.** Research is written against **prod v2.6 →
    2.7** with prod filenames (`dataforseo.py`, `parsers.py`, `entity.py`,
    `graph.py`, `framing.py`, `assembly.py`). Our M13 plan targets **v2.3** with a
@@ -160,9 +181,14 @@ conflicts:
    Gemini score compared against 3-large selection is an illegal cross-space
    comparison. (We also **rolled Gemini back 2026-06-16**.)
 
-→ PRD §X already neutralizes both: keeps organic selection **intact**, demotes
-proximity to a **non-gating side-channel**, mandates **"3-large only, no Gemini
-track."** **Adopt §X's framing, not §4.X's literal one.**
+→ PRD §X neutralizes conflict #1 (selection objective): keeps organic selection
+**intact** and demotes proximity to a **non-gating side-channel**. **Adopt §X's
+framing for selection, not §4.X's literal "climb-to-AIO" one.** On conflict #2
+(embedding model): **owner override 2026-06-17 (§4 #1)** — Gemini Embedding 2 IS
+used, but **only** in the non-gating proximity path, in an isolated space never
+compared to the 3-large gates. So §4.X's "must be Gemini" is honored *for
+proximity*; the gates stay 3-large. The collision is dissolved by the dual-space
+split, not by rejecting Gemini outright.
 
 ### C. Controlled collisions (designed regression-safe)
 
@@ -204,7 +230,8 @@ collision, but a collision between this research and the *current written plan*.
 
 **Deferred (low-confidence / advisory / needs telemetry):**
 - §4.X MCS candidate-pool generation + greedy/beam cosine climbing.
-- X.5 advisory AIO proximity side-channel.
+- X.5 advisory AIO proximity side-channel — **uses Gemini Embedding 2** (owner
+  decision 2026-06-17, §4 #1), isolated from the 3-large gate space.
 - X.6 measurement loop (and any future "active" proximity mode).
 - Decision-fit **rendering + validator** (Writer / M14).
 - Writer-side extractable-snippet directive (separate spec, M14).
@@ -213,7 +240,10 @@ collision, but a collision between this research and the *current written plan*.
 
 ## 6. Next actions (not yet done)
 
-- [ ] Owner sign-off on the §4 conflicts (esp. the v2.6 rebase).
+- [ ] Owner sign-off on the §4 conflicts (esp. the v2.6 rebase). [Embeddings
+      resolved 2026-06-17: dual-space, Gemini 2 for proximity only — §4 #1.]
+- [ ] Decide the **Gemini task type** for the proximity embeddings (avoid
+      `SEMANTIC_SIMILARITY`, the 06-16 suspect; evaluate `RETRIEVAL_*`).
 - [ ] Verify DataForSEO surfaces the AIO block on the depth-20 SERP call.
 - [ ] Confirm the Writer never re-derives headings (X.7 propagation N/A check).
 - [ ] **Verify Step 9b (authority-H2 generation) invokes the FULL Step-11 framing
