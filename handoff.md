@@ -102,13 +102,22 @@ to `main`, no code touched):_
   DEFERRED** (§3.4 — source not in our excerpt; A4 gates on the three general partner
   factors only, `multiple_languages` dropped from the directive enum; revisit when the
   owner supplies the section).
-- **Pre-build blockers before ANY M13 AIO code** are now just **verifications**
-  (not decisions): (1) a real **MCS cost estimate** (hundreds of candidates/slot ×
-  two embedding providers); (2) **verify DataForSEO returns the AIO block** on the
-  depth-20 SERP call; (3) the v2.6 **plan-doc reconciliation** at M13 build start
-  (directive already locked) — which must **map authority gaps to H3** (resolved
-  2026-06-17: authority gaps are H3s, deliberately NOT entity-form-enforced — a
-  flagged divergence from the research's X.4/X.9 "Authority H2s entity-enforced").
+- **Pre-build verifications — both do-now ones now DONE (2026-06-17):**
+  - ✅ **MCS cost estimate** (doc §5.5): embeddings are negligible (~cents; a heading
+    is ~12 tok), the driver is LLM candidate *generation*. Bounded shared pool + Haiku
+    ≈ **$0.09–$0.27/article** (under the brief budget); literal per-slot×hundreds ≈
+    $0.34–$1.03 (risks the $1.00 ceiling). **One open tuning call: cap the pool small
+    or raise the brief ceiling to ~$1.25.**
+  - ✅ **DataForSEO AIO block** (doc §5.6): CONFIRMED — the advanced endpoint we
+    already call at depth 20 returns a structured `ai_overview` item (text + quoted
+    sources → X.1's `answer_text`/`cited_sources`). Synchronous AIOs free on the
+    existing call; async needs `load_async_ai_overview: true` (+$0.0006, refunded if
+    absent/cached). X.1 rides the Step-1 SERP call with one added param. (Docs-sourced;
+    confirm field shapes on first deployed run.)
+  - ⏳ **Still gated:** the v2.6 **plan-doc reconciliation** at M13 build start
+    (directive locked) — must **map authority gaps to H3** (resolved 2026-06-17:
+    authority gaps are H3s, deliberately NOT entity-form-enforced — flagged divergence
+    from the research's X.4/X.9). Then the build itself, behind M12/SIE.
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_
