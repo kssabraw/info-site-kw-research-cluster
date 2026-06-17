@@ -24,6 +24,85 @@ all three module plans, live contract) returns **zero** matches for `AIO` /
 
 ---
 
+## 0. Strategic direction — ANSWER-ENGINE-FIRST (owner decision 2026-06-17)
+
+**The brief generator is being re-aimed: AIO + ChatGPT citation is the PRIMARY
+optimization target; organic ranking is the floor, not the goal.** This
+supersedes the "organic-first, AIO-as-additive-layer" framing that the rest of
+this doc (§1–§5, written 2026-06-16) was built on. Where they conflict, this
+section wins.
+
+**Two owner decisions that set the architecture:**
+1. **Embeddings (2026-06-17): dual/triple-space.** Gemini Embedding 2 for AIO
+   proximity, OpenAI `text-embedding-3-large` for ChatGPT proximity *and* the
+   eligibility gates. (Detail in §4 #1.)
+2. **Selection model (2026-06-17): FULL MCS.** The organic priority/MMR/
+   region/information-gain selection is **replaced** by Max Cosine Synthesis —
+   generate a large candidate pool per heading slot, score by cosine to the
+   answer-engine target(s), and climb (greedy/beam) to the set that collectively
+   lands closest. Chosen with the evidence caveats in front of us (see below).
+
+### Target architecture (answer-engine-first brief gen)
+
+```
+Step 1   SERP + AIO capture (X.1)  + ChatGPT answer promoted from the Step-2D
+         LLM fan-out (already pulled today as a *source* → now a *target*)
+Step 3.6 Main-entity derivation (X.2)            [stays 3-large; organic-side]
+Step 5   ELIGIBILITY GATES become a PRE-FILTER, not selectors:
+           - relevance floor (on-topic to keyword)        [3-large]
+           - entity-stripped restatement ceiling (X.3)     [3-large]
+         → produces the eligible candidate set MCS climbs within.
+Step 7-8 REPLACED by MCS: per slot, LLM generates a candidate pool (heading
+         FORM = entity + one point, X.4 baked in at generation), each candidate
+         scored in BOTH spaces, blended, beam-climb for set coverage.
+Step 11  Form re-validation + title-case (residual safety).
+Out      aio_insights + chatgpt_insights proximity readouts (now first-class,
+         not advisory afterthoughts).
+```
+
+### Cross-space rule (critical, keeps the "never mix vectors" lock)
+
+You **cannot** average a Gemini vector with a 3-large vector. So multi-target MCS
+combines **scalar cosine scores, not vectors**: embed each candidate heading in
+**both** spaces, score it against the AIO answer *in Gemini space* and the ChatGPT
+answer *in 3-large space*, then blend the two **scalars**. Legal; never compares a
+Gemini cosine threshold to a 3-large one.
+
+### Open sub-decisions this forces (defaults proposed; flag for owner)
+
+1. **Engine set.** Primary targets = **Google AIO** (Gemini) + **ChatGPT**
+   (3-large). Perplexity/Claude from the fan-out stay candidate *sources*, not
+   targets. *Default; promote them to targets if wanted.*
+2. **AIO vs ChatGPT weighting** when the two answers diverge. *Default: 0.5/0.5
+   blended score, with eligibility = clears a floor on at least one engine (don't
+   drop a heading that's great for ChatGPT but mid for AIO).* Tunable.
+3. **Candidate-pool cost.** MCS generates *hundreds* of candidates per slot, each
+   embedded **twice** (Gemini + OpenAI) → materially more LLM + embedding spend
+   than today's selection. *Default: bound the pool, cache per (keyword,location),
+   meter under `brief_generation`.* Needs a real cost estimate before build.
+4. **Stopping rule / heading count.** MCS climbs "to diminishing returns" → count
+   is data-driven, not fixed. *Keep the "honest shortfall, never padded" principle:
+   min/max bounds, but never invent a heading to hit a number.*
+5. **Gates stay as eligibility pre-filter** (on-topic + non-bare-restatement). The
+   **0.20 information-gain weight is removed** (it pulls away from the answer).
+   EMQ-stuffing avoidance becomes default.
+6. **ChatGPT methodology is extrapolated, not validated.** The source research is
+   **AIO-only**; promoting the ChatGPT fan-out answer to a target applies the AIO
+   playbook to a different engine (GPT-judged, Bing-retrieved) on assumption.
+   Flag — wants its own validation / the X.6 measurement loop extended to ChatGPT.
+
+### Acknowledged risk (owner accepted)
+
+- **Proximity is the research's LOW-confidence citation signal** — "necessary not
+  sufficient"; closeness gets you *into contention* but link factors + stacking
+  win the cite. Full-MCS selection bets the selection layer on it. The X.6
+  measurement loop (now **required, not deferred**) is how we find out if it pays.
+- **Organic is the entry ticket.** AIO/ChatGPT pull from the ranked/retrieved set;
+  the eligibility gates + keeping pages in the top-20 set remain the floor that
+  makes citation *possible* at all.
+
+---
+
 ## 1. What this is
 
 An **AI-Overview eligibility layer**. Both existing content modules (SIE, Brief
@@ -33,12 +112,15 @@ AI Overview**. This research adds that: capture the live AIO answer, derive the
 single main entity it repeats, and construct/enforce headings that sit close to
 that answer in embedding space.
 
-Two evidence levels, kept strictly separate (the research's own framing, which we
-adopt):
+Two evidence levels — **NB: the §0 answer-engine-first pivot (2026-06-17)
+overrides the "advisory/deferred" treatment of proximity below.** Original
+framing retained for context:
 - **Heading FORM** (entity + exactly one answer-derived point per heading) —
-  **high confidence → hard rule.**
-- **AIO-answer PROXIMITY** (cosine scoring, MCS climbing) — **low confidence →
-  advisory, non-gating, deferred behind a measurement loop.**
+  **high confidence → hard rule.** (Unchanged; now baked into MCS candidate
+  generation.)
+- **Answer-engine PROXIMITY** (cosine scoring, MCS climbing) — low confidence as
+  a *citation predictor*, but **per §0 it is now the PRIMARY selection driver**
+  (owner accepted the risk; the X.6 loop is the check). No longer advisory.
 
 ---
 
@@ -47,12 +129,12 @@ adopt):
 | Research element | Lands on | Status | Note |
 |---|---|---|---|
 | §4.X Decision-Fit Mapping | Brief Gen (trigger/gating) + Writer (render) | ❌ Missing | Co-owned — see §3. |
-| §4.X Max Cosine Synthesis (candidate-pool + greedy/beam cosine climb) | Brief Gen | ❌ Missing | The low-confidence, most ambitious piece. Defer. |
+| §4.X Max Cosine Synthesis (candidate-pool + greedy/beam cosine climb) | Brief Gen | ❌ Missing | **CORE per §0 (un-deferred 2026-06-17)** — now *replaces* organic selection, multi-target (AIO+ChatGPT). |
 | X.1 AIO target capture (answer_text, cited_sources, fanout) | Brief Gen Step 1 | ❌ Missing | Plan's SERP scrape gets headings/titles/metas + feature flags, **not** the AIO block. Research claims it rides the existing depth-20 DataForSEO call — **verify DataForSEO returns the AIO block.** |
 | §13.X.8 / X.2 Main-entity derivation (`entity.py`, new Step 3.6) | Brief Gen | ❌ Missing as a feature; ✅ deps already present | **spaCy `en_core_web_sm` already locked** (SIE §9, shared dep). **3-large already in Brief Gen** for the tie-break/sanity embeddings. Building blocks exist; module doesn't. Deterministic, no LLM in default path → free + testable. |
 | X.3 Residual restatement gate (apply 0.78 ceiling to entity-stripped residual) | Brief Gen Step 5 (`graph.py`) | ⚠️ Partial | The **0.55 floor / 0.78 ceiling already exist**. This is a refinement (strip entity first), not a new gate. |
 | X.4 Heading-form enforcement (entity + one point, every H2) | Brief Gen Step 11 framing (`assemble.py`) | ⚠️ Partial | The **framing validator + title-case stage already exists**. New rule rides its existing rewrite-and-re-embed path. The high-confidence core. |
-| X.5 Advisory AIO proximity side-channel | Brief Gen assembly | ❌ Missing | Net-new, explicitly non-gating. Defer. |
+| X.5 AIO proximity (+ ChatGPT) | Brief Gen assembly | ❌ Missing | **Promoted to first-class per §0** — drives MCS selection, not just a readout. |
 | X.6 Measurement loop (post-publish AIO citation + GSC) | Beyond M13 — needs publish telemetry | ❌ Missing entirely | Graduation criterion before any "active" proximity mode. We have no published-article telemetry anywhere yet. |
 | X.8 Schema 2.7 + metadata fields | Brief Gen | ❌ Missing | Implies the version rebase — see §4. |
 
@@ -110,11 +192,14 @@ only the rendered prose is writer-side.**
        proximity path, independent of the global `EMBEDDING_PROVIDER=openai` (which
        stays OpenAI). `GEMINI_API_KEY` already provisioned (from the 06-15 cutover).
      - **Gemini task type is an open decision** — `SEMANTIC_SIMILARITY` was the
-       suspected culprit in the 06-16 gate failure; for a non-gating proximity
-       score it matters less, but pick deliberately (try `RETRIEVAL_*`). Flag.
-     - Extra cost: a second embedding pass over the few selected headings + the AIO
-       answer, in Gemini. Small; metered under `brief_generation`.
-     - **No gate recalibration needed** (the gates never touch Gemini).
+       suspected culprit in the 06-16 gate failure; **now matters MORE** because
+       (per §0) proximity *drives MCS selection*, not just a readout. Pick
+       deliberately (try `RETRIEVAL_*`); validate discrimination before trusting it.
+     - **Cost is no longer small** (per §0): MCS embeds *hundreds of candidates per
+       slot* in Gemini (AIO) **and** 3-large (ChatGPT). Bound the pool + cache;
+       meter under `brief_generation`. Needs a real estimate before build.
+     - **No gate recalibration needed** (the 3-large eligibility gates never touch
+       Gemini; Gemini only scores AIO proximity).
 2. **Version + module-name mismatch.** Research is written against **prod v2.6 →
    2.7** with prod filenames (`dataforseo.py`, `parsers.py`, `entity.py`,
    `graph.py`, `framing.py`, `assembly.py`). Our M13 plan targets **v2.3** with a
@@ -144,6 +229,11 @@ post-gate form enforcement, non-gating proximity). Collisions are real only when
 (A) the implementation order is wrong, (B) the raw §4.X MCS is taken literally as
 a selection driver, or (C) the Gemini embedding requirement is honored.
 
+> **Partly superseded by §0 (2026-06-17):** MMR is *removed* in the full-MCS
+> design, so its 0.75 anti-redundancy guard no longer exists — MCS's own "set
+> coverage" climbing replaces it. The restatement ceiling survives as a
+> **pre-filter** (X.3), so the entity-stripping/ordering point below still holds.
+
 ### A. THE one that bites: entity-in-every-heading vs. the redundancy/restatement math
 
 Two existing mechanisms exist specifically to *suppress* near-duplicate headings:
@@ -165,7 +255,15 @@ and won't select them).
 → Collision avoided **only** if implemented in sequence: derive at 3.6 → gate on
 residual at 5 → enforce form at 11. Wrong order breaks the selection math.
 
-### B. The one you must consciously REJECT: MCS-as-selection + Gemini
+### B. MCS-as-selection + Gemini — REVERSED by §0: now ADOPTED, not rejected
+
+> **Superseded by §0 (2026-06-17):** this subsection argued to *reject*
+> MCS-as-selection. The owner has since chosen **full MCS selection** + Gemini for
+> AIO proximity. So conflict #1 is resolved by *flipping the objective* (info-gain
+> removed; answer-proximity is now the goal), and conflict #2 by the **dual-space
+> scalar-blend** (§0 cross-space rule) — Gemini and 3-large cosines are blended as
+> scalars, never compared as a single space. The original analysis is kept below
+> for the reasoning trail.
 
 Raw **§4.X MCS** says to *select* headings via "greedy/beam monotonic climbing"
 toward the AIO answer. Taken literally this **replaces the current selection
@@ -216,25 +314,34 @@ collision, but a collision between this research and the *current written plan*.
 
 ---
 
-## 5. Proposed slicing (ship-now vs deferred)
+## 5. Proposed slicing — RE-SLICED for answer-engine-first (§0)
 
-**Ship-now (high-confidence, deterministic, rides existing seams):**
-- X.1 AIO target capture (Brief Gen Step 1) — pending the "does DataForSEO return
-  the AIO block?" verification.
-- X.2 / §13.X.8 Main-entity derivation (new Step 3.6, `entity.py`) — deterministic,
-  free, fully fixture-testable.
-- X.3 Residual restatement gate refinement (Step 5).
-- X.4 Heading-form enforcement (Step 11 framing) — the core hard rule.
-- Decision-fit **detection + `format_directive`** (Brief Gen side only).
-- X.8 metadata fields + schema bump (gated on the v2.6 rebase decision, §4 #2).
+The original organic-first slicing (ship form, defer MCS) **no longer applies** —
+MCS *is* the selection layer now, so it can't be deferred. New slicing:
 
-**Deferred (low-confidence / advisory / needs telemetry):**
-- §4.X MCS candidate-pool generation + greedy/beam cosine climbing.
-- X.5 advisory AIO proximity side-channel — **uses Gemini Embedding 2** (owner
-  decision 2026-06-17, §4 #1), isolated from the 3-large gate space.
-- X.6 measurement loop (and any future "active" proximity mode).
+**Core (the answer-engine-first build):**
+- X.1 AIO target capture (Step 1) + **promote the Step-2D ChatGPT answer to a
+  target** — pending the "does DataForSEO return the AIO block?" verification.
+- Eligibility gates as a **pre-filter** (relevance floor + entity-stripped
+  restatement ceiling, X.3) — 3-large; info-gain weight removed.
+- **MCS multi-target selection** (§4.X) — candidate-pool generation with the
+  entity+one-point form (X.4) baked in, dual-space scalar-blended scoring
+  (Gemini AIO + 3-large ChatGPT), beam-climb for set coverage. **The centerpiece.**
+- X.2 Main-entity derivation (Step 3.6, `entity.py`) — feeds form + the residual
+  gate; 3-large.
+- X.6 measurement loop — **now REQUIRED** (the only validation that proximity-driven
+  selection actually earns citations; extend it to ChatGPT, sub-decision §0.6).
+- X.8 metadata + schema bump (gated on the v2.6 rebase, §4 #2).
+
+**Still genuinely deferred:**
 - Decision-fit **rendering + validator** (Writer / M14).
 - Writer-side extractable-snippet directive (separate spec, M14).
+
+**Pre-build blockers (must resolve before code):**
+- The §0 open sub-decisions (engine set, AIO/ChatGPT weighting, candidate-pool
+  cost bound, stopping rule, ChatGPT-methodology assumption).
+- v2.3→v2.6 rebase (§4 #2). Gemini task type (§4 #1).
+- A real cost estimate — MCS is materially pricier than today's selection.
 
 ---
 
