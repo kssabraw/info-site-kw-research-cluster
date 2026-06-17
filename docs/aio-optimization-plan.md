@@ -110,6 +110,86 @@ only the rendered prose is writer-side.**
 
 ---
 
+## 4.5 Collision analysis — does this collide with the current brief generator?
+
+**Scope note.** "Current brief generator" is ambiguous: our **M13 plan targets
+v2.3** (not built); **prod runs v2.6** (live contract). The research is written
+against v2.6 → 2.7. The collisions below are against *mechanisms both versions
+share*, except #D which is plan-level.
+
+**Headline:** nothing collides **if you take the curated PRD §X path** — §X was
+engineered to slot in beside the existing selection machinery (additive capture,
+post-gate form enforcement, non-gating proximity). Collisions are real only when
+(A) the implementation order is wrong, (B) the raw §4.X MCS is taken literally as
+a selection driver, or (C) the Gemini embedding requirement is honored.
+
+### A. THE one that bites: entity-in-every-heading vs. the redundancy/restatement math
+
+Two existing mechanisms exist specifically to *suppress* near-duplicate headings:
+- the **0.78 restatement ceiling** (Step 5 gate), and
+- the **0.75 anti-redundancy hard constraint** inside MMR (Step 8).
+
+X.4's rule (*every H2 = main entity + one point*) prepends the **same entity token
+to every heading**, mechanically inflating pairwise heading cosine — exactly the
+signal those two constraints reject. Naive implementation = entity enforcement
+fights the redundancy guards (headings gated out, or MMR treats them as redundant
+and won't select them).
+
+**Resolved by ordering — and this is the part you cannot get wrong:**
+- **X.3** strips the entity off the residual *before* the 0.78 ceiling (judges the
+  differentiated point, not the shared entity).
+- **X.4** applies the entity *post-selection*, at Step 11 framing — so MMR and the
+  restatement gate never see the entity-bearing form.
+
+→ Collision avoided **only** if implemented in sequence: derive at 3.6 → gate on
+residual at 5 → enforce form at 11. Wrong order breaks the selection math.
+
+### B. The one you must consciously REJECT: MCS-as-selection + Gemini
+
+Raw **§4.X MCS** says to *select* headings via "greedy/beam monotonic climbing"
+toward the AIO answer. Taken literally this **replaces the current selection
+architecture** — fights MMR, the 5-term priority formula, the **0.20
+information-gain weight**, and Louvain region-uniqueness head-on. Two hard
+conflicts:
+1. **Selection objective:** cosine-climb-to-AIO vs. information-gain/coverage —
+   opposite directions (the research itself admits "active proximity mode… opposes
+   the information-gain weight").
+2. **Embedding model:** §4.X says proximity "MUST be Gemini (Vertex)." Collides
+   with TWO things — brief gen runs **`text-embedding-3-large`**, and CLAUDE.md
+   hard-locks ***"Vector spaces must never be mixed across providers/models."*** A
+   Gemini score compared against 3-large selection is an illegal cross-space
+   comparison. (We also **rolled Gemini back 2026-06-16**.)
+
+→ PRD §X already neutralizes both: keeps organic selection **intact**, demotes
+proximity to a **non-gating side-channel**, mandates **"3-large only, no Gemini
+track."** **Adopt §X's framing, not §4.X's literal one.**
+
+### C. Controlled collisions (designed regression-safe)
+
+- **X.3 modifies Step 5** (existing gate) but is byte-identical for entity-absent
+  candidates ("entity-free briefs produce byte-identical Step 5 output").
+- **X.4 rides the existing Step 11 framing rewrite path** (composes, doesn't
+  replace). **Open gap it flags itself:** does **authority-H2 generation (Step
+  9b)** invoke the *full* framing rule set or a subset? If a subset, authority H2s
+  **bypass entity enforcement** — a real hole to verify (→ §6).
+- **Anchor-slot reservation:** decision-fit mapping wants a *guaranteed* section,
+  but MMR only selects what scores well. A reserved decision-fit slot must
+  integrate with the **existing anchor-slot reservation** (intent-template
+  machinery), not bolt on beside it — else two competing reservation systems.
+- **EMQ vs. main-entity:** title generation (3.5) puts the keyword (EMQ) in the
+  title; the form rule wants the main-entity (which may ≠ EMQ) in every heading.
+  Managed by the `emq_identical` flag + per-SERP softening; minor.
+
+### D. Plan-level collision
+
+The research assumes **v2.6** filenames/schema (`framing.py`, `assembly.py`,
+`parsers.py`, `extra='forbid'`, `EXPECTED_MODULE_VERSIONS`). Our M13 plan is
+**v2.3** with a different layout. Live contract: **prod v2.6 wins** → integrating
+realistically means **rebasing M13 onto v2.6 first** (same as §4 #2). Not a runtime
+collision, but a collision between this research and the *current written plan*.
+
+---
+
 ## 5. Proposed slicing (ship-now vs deferred)
 
 **Ship-now (high-confidence, deterministic, rides existing seams):**
@@ -136,6 +216,14 @@ only the rendered prose is writer-side.**
 - [ ] Owner sign-off on the §4 conflicts (esp. the v2.6 rebase).
 - [ ] Verify DataForSEO surfaces the AIO block on the depth-20 SERP call.
 - [ ] Confirm the Writer never re-derives headings (X.7 propagation N/A check).
+- [ ] **Verify Step 9b (authority-H2 generation) invokes the FULL Step-11 framing
+      rule set, not a subset** — otherwise authority H2s bypass entity enforcement
+      (collision §4.5-C). Trace the 9b "scope verification + framing" path before
+      building X.4.
+- [ ] **Enforce the X.3→X.4 implementation ordering** (derive 3.6 → residual gate
+      5 → form enforce 11) so entity tokens never reach MMR/the restatement ceiling
+      (collision §4.5-A). Add a regression test: entity-free brief = byte-identical
+      Step 5 + Step 11 output.
 - [ ] Once signed off: write the concrete Brief Gen addendum mapping §5 ship-now
       slice onto the (rebased) file layout, with pure-module tests per §13.X.8 /
       X.9 acceptance.
