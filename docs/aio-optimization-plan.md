@@ -273,6 +273,92 @@ content** to deliver conditional guidance — different levels.
 branch + stated default; branches mutually distinct (condition→action); section
 never emitted standalone (A4 guarantees a partner factor).
 
+**Pipeline placement (clarifies A1–A5 ordering vs brief steps).** The A1–A5
+lettering is logical grouping, not step order. Actual order: **A1 detect at Step 3**
+(intent time — SERP+PAA available, persona gaps not yet); **A3 source** completes at
+**Step 6** (persona gaps); **A2 reserve / A4 gate / A5 emit** at **selection time
+(Step 7–8)**, since the partner-factor co-occurrence check (A4) needs the selected
+section set. The A1 flag + provisional conditions are produced early and enriched at
+A3.
+
+### 3.2 A1 detector — concrete spec ✅ (2026-06-17)
+
+**Placement:** fold into the **Step 3** intent-classification call (it already has
+query + SERP context; saves an LLM round-trip) — add the fields below to that call's
+strict-tool-use output schema. Fallback: a dedicated **Haiku** call (short/
+classification tier, house Anthropic client). **LLM-judged, not deterministic** —
+acceptable (it shapes content, doesn't gate vectors); flagged.
+
+**Inputs:** primary keyword/query; the intent label + `intent_format_template`;
+top-N SERP titles/H2s (Step 1); PAA questions (Step 2).
+
+**LLM task:** "Does answering this query well require *different* recommendations
+depending on the reader's situation (vs one best answer)? If so, list the distinct
+reader conditions that lead to different answers." Distinguish a *comparison the
+reader still has to choose from* (decision-fit) from a *flat comparison* (that's the
+`comparative_depth` partner factor, not decision-fit itself).
+
+**Output contract:**
+```
+decision_fit_detection = {
+  is_multi_answer:      bool,
+  confidence:           float,   # 0–1
+  candidate_conditions: [ { condition: str, distinguishing_factor: str } ],
+  rationale:            str,
+}
+```
+
+**Gate to proceed (reserve a section):** `is_multi_answer` **AND** `confidence ≥ τ`
+(**propose τ = 0.7**, tunable) **AND** ≥ **2 distinct** `candidate_conditions` (after
+dedup — one condition isn't a branch). Else: no decision-fit section.
+
+**Deterministic corroboration (optional, adjusts confidence):** comparison/
+recommendation/decision intent shapes bias up; PAA with conditional phrasing
+("best … for", "which … if", "should I"); use-case-segmented listicle SERPs.
+
+**Edge cases:** factual "what is X" → false; "X vs Y" → multi-answer *only if* the
+choice depends on reader priorities (else it's `comparative_depth`); near-duplicate
+conditions → dedup, drop if < 2 remain.
+
+### 3.3 A5 `format_directive` schema — concrete spec ✅ (2026-06-17)
+
+A **typed** directive (decision-fit is one `type`; the Writer-side snippet rule is
+another) attached to the target `heading_structure` H2. Added as a pydantic model
+under the **v2.7 schema bump (X.8)**; must satisfy `extra='forbid'`.
+
+```
+format_directive = {
+  type:              "decision_fit",          # discriminator
+  section_id:        <ref to the reserved H2 in heading_structure>,
+  branches: [
+    { condition: str,                          # reader situation (rendered FIRST)
+      option:    str,                          # recommended action for that condition
+      source:    "persona_gap"|"paa"|"reddit"|"llm" },   # provenance (A3)
+    ...                                        # ≥ 2, mutually distinct
+  ],
+  default_statement: str,                       # priority holding across branches
+  partner_factor:    "comparative_depth"|"edge_case_detail"|"direct_definitions"
+                     |"multiple_languages",     # WHICH partner satisfied A4 (must be present)
+  constraints: { condition_first: true, min_branches: 2, distinct_branches: true },
+  detector:    { confidence: float, rationale: str },   # A1 audit echo
+}
+```
+
+Carries everything the Writer needs to **render (B1)** and the validator to **check
+(B2)**, plus the A4 gate result (`partner_factor` — *which* partner is present, not
+just that one is) and the A1 audit echo. `branches[].source` keeps per-condition
+provenance, consistent with the brief's general provenance practice.
+
+### 3.4 Open: Commercial Page Gating (A4 commercial partner logic)
+
+⚠️ **STILL BLOCKED — needs the source.** The research's §4.X cross-references a
+**"Commercial Page Gating"** section (for transactional/commercial pages,
+decision-fit may pair with `multiple_languages` or `direct_definitions`) that is
+**not in the excerpt we hold**. A4's commercial-page branch can't be specced without
+it. → Owner to supply that section (or confirm we defer commercial-page decision-fit
+and gate only on the three general partners: comparative-depth / edge-case /
+direct-definitions). Tracked in §6.
+
 ---
 
 ## 4. Open conflicts to resolve before this slots in
@@ -485,12 +571,14 @@ X.6). **Remaining = the Section-2 verifications/spikes + the build.**
       5 → form enforce 11) so entity tokens never reach MMR/the restatement ceiling
       (collision §4.5-A). Add a regression test: entity-free brief = byte-identical
       Step 5 + Step 11 output.
-- [ ] **Decision-fit spec gaps (§3.1)** before building it: (a) the **A1 detector**
-      algorithm (decided brief-side, but the research gives no mechanism — spec the
-      multi-answer-query + condition-extraction logic); (b) the **A5
-      `format_directive` schema**; (c) **fetch the "Commercial Page Gating" rule**
-      (cross-referenced in the research but not in our excerpt — A4's commercial
-      partner logic is under-specified without it).
+- [x] **Decision-fit A1 detector** — specced in §3.2 (Step-3 fold-in, output
+      contract, τ=0.7 gate, ≥2 distinct conditions). 2026-06-17.
+- [x] **Decision-fit A5 `format_directive` schema** — specced in §3.3 (typed
+      directive, branches+default+partner_factor+detector echo). 2026-06-17.
+- [ ] **Commercial Page Gating (§3.4)** — STILL BLOCKED on the source: the research
+      cross-references it but it's not in our excerpt. Owner to supply the section,
+      or confirm we defer commercial-page decision-fit and gate only on the three
+      general partner factors.
 - [ ] Once signed off: write the concrete Brief Gen addendum mapping §5 ship-now
       slice onto the (rebased) file layout, with pure-module tests per §13.X.8 /
       X.9 acceptance.
