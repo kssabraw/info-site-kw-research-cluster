@@ -19,7 +19,10 @@ from app.cost_meter import record_cost
 
 logger = logging.getLogger(__name__)
 
-# PRD scopes out location/language inputs; default to US English.
+# Default locale = US English. Per-country locale (E1, 2026-06-17): the client is
+# now constructed with a session's location_code so the international client's
+# research runs in their market. DataForSEO localizes by location_code; the
+# language stays "en" for every supported English market (US/UK/CA/AU/NZ).
 _LOCATION_CODE = 2840
 _LANGUAGE_CODE = "en"
 
@@ -50,9 +53,18 @@ class DataForSEOError(Exception):
 
 
 class DataForSEOClient:
-    def __init__(self, base_url: str, login: str, password: str):
+    def __init__(
+        self,
+        base_url: str,
+        login: str,
+        password: str,
+        location_code: int = _LOCATION_CODE,
+        language_code: str = _LANGUAGE_CODE,
+    ):
         self._base_url = base_url.rstrip("/")
         self._auth = (login, password)
+        self._location_code = location_code
+        self._language_code = language_code
 
     def _post(self, path: str, payload: list[dict]) -> dict:
         # Cooperative cancellation: a /cancel request signalled while the worker
@@ -101,8 +113,8 @@ class DataForSEOClient:
             [
                 {
                     "keywords": [seed],
-                    "location_code": _LOCATION_CODE,
-                    "language_code": _LANGUAGE_CODE,
+                    "location_code": self._location_code,
+                    "language_code": self._language_code,
                     "limit": limit,
                 }
             ],
@@ -133,16 +145,16 @@ class DataForSEOClient:
     def keyword_ideas(self, anchor: str, limit: int = 1000) -> list[str]:
         task = self._post(
             "/v3/dataforseo_labs/google/keyword_ideas/live",
-            [{"keywords": [anchor], "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE, "limit": limit}],
+            [{"keywords": [anchor], "location_code": self._location_code,
+              "language_code": self._language_code, "limit": limit}],
         )
         return self._extract_labs_keywords(task)
 
     def keyword_suggestions(self, anchor: str, limit: int = 500) -> list[str]:
         task = self._post(
             "/v3/dataforseo_labs/google/keyword_suggestions/live",
-            [{"keyword": anchor, "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE, "limit": limit}],
+            [{"keyword": anchor, "location_code": self._location_code,
+              "language_code": self._language_code, "limit": limit}],
         )
         return self._extract_labs_keywords(task)
 
@@ -152,8 +164,8 @@ class DataForSEOClient:
         # array of strings — harvest both (the array is the bulk of the fan-out).
         task = self._post(
             "/v3/dataforseo_labs/google/related_keywords/live",
-            [{"keyword": anchor, "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE, "depth": 2, "limit": limit}],
+            [{"keyword": anchor, "location_code": self._location_code,
+              "language_code": self._language_code, "depth": 2, "limit": limit}],
         )
         items = (task.get("result") or [{}])[0].get("items") or []
         out: list[str] = []
@@ -172,8 +184,8 @@ class DataForSEOClient:
         """PAA questions from the SERP for `anchor` (one tier)."""
         task = self._post(
             "/v3/serp/google/organic/live/advanced",
-            [{"keyword": anchor, "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE, "depth": 20,
+            [{"keyword": anchor, "location_code": self._location_code,
+              "language_code": self._language_code, "depth": 20,
               "people_also_ask_click_depth": 1}],
         )
         items = (task.get("result") or [{}])[0].get("items") or []
@@ -190,8 +202,8 @@ class DataForSEOClient:
     def autocomplete(self, keyword: str) -> list[str]:
         task = self._post(
             "/v3/serp/google/autocomplete/live/advanced",
-            [{"keyword": keyword, "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE}],
+            [{"keyword": keyword, "location_code": self._location_code,
+              "language_code": self._language_code}],
         )
         items = (task.get("result") or [{}])[0].get("items") or []
         out: list[str] = []
@@ -207,8 +219,8 @@ class DataForSEOClient:
         mining. `top_n` is 5 in standard mode, 10 in comprehensive (§7.4)."""
         task = self._post(
             "/v3/serp/google/organic/live/advanced",
-            [{"keyword": keyword, "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE, "depth": max(top_n, 10)}],
+            [{"keyword": keyword, "location_code": self._location_code,
+              "language_code": self._language_code, "depth": max(top_n, 10)}],
         )
         items = (task.get("result") or [{}])[0].get("items") or []
         urls: list[str] = []
@@ -230,8 +242,8 @@ class DataForSEOClient:
         domain; results are filtered to the requested rank ceiling server-side."""
         task = self._post(
             "/v3/dataforseo_labs/google/ranked_keywords/live",
-            [{"target": target_domain, "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE, "limit": limit,
+            [{"target": target_domain, "location_code": self._location_code,
+              "language_code": self._language_code, "limit": limit,
               "filters": [
                   ["ranked_serp_element.serp_item.rank_absolute", "<=", max_position]
               ]}],
@@ -259,8 +271,8 @@ class DataForSEOClient:
             return {}
         task = self._post(
             "/v3/dataforseo_labs/google/keyword_overview/live",
-            [{"keywords": list(keywords), "location_code": _LOCATION_CODE,
-              "language_code": _LANGUAGE_CODE}],
+            [{"keywords": list(keywords), "location_code": self._location_code,
+              "language_code": self._language_code}],
         )
         items = (task.get("result") or [{}])[0].get("items") or []
         out: dict[str, dict] = {}
@@ -306,8 +318,8 @@ class DataForSEOClient:
             [
                 {
                     "keyword": seed,
-                    "location_code": _LOCATION_CODE,
-                    "language_code": _LANGUAGE_CODE,
+                    "location_code": self._location_code,
+                    "language_code": self._language_code,
                     "depth": max(top_n, 10),
                 }
             ],

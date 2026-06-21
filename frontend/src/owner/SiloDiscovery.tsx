@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
   createSession,
+  DEFAULT_LOCATION_CODE,
+  SUPPORTED_COUNTRIES,
   deleteTopic,
   disambiguateSession,
   editTopic,
@@ -49,6 +51,8 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
   const [disambHint, setDisambHint] = useState("");
   const [topicCount, setTopicCount] = useState(5);
   const [mode, setMode] = useState<"standard" | "comprehensive">("standard");
+  // Per-country locale (E1). Country -> DataForSEO location_code; default US.
+  const [locationCode, setLocationCode] = useState<number>(DEFAULT_LOCATION_CODE);
   // §7.8 metrics enrichment toggle (default on; user can opt out per run).
   const [enrichMetrics, setEnrichMetrics] = useState(true);
   const [showOptional, setShowOptional] = useState(false);
@@ -126,6 +130,7 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
       disambiguation_hint: disambHint.trim() || undefined,
       topic_count: topicCount,
       coverage_mode: mode,
+      location_code: locationCode,
       enrich_with_metrics: enrichMetrics,
     });
   }
@@ -166,6 +171,8 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
               setTopicCount,
               mode,
               setMode,
+              locationCode,
+              setLocationCode,
               enrichMetrics,
               setEnrichMetrics,
               showOptional,
@@ -565,6 +572,8 @@ function SeedForm(p: {
   setTopicCount: (v: number) => void;
   mode: "standard" | "comprehensive";
   setMode: (v: "standard" | "comprehensive") => void;
+  locationCode: number;
+  setLocationCode: (v: number) => void;
   enrichMetrics: boolean;
   setEnrichMetrics: (v: boolean) => void;
   showOptional: boolean;
@@ -585,6 +594,21 @@ function SeedForm(p: {
             maxLength={200}
             required
           />
+        </label>
+
+        <label className="field">
+          <span className="field-label">Country</span>
+          <select
+            className="select"
+            value={p.locationCode}
+            onChange={(e) => p.setLocationCode(Number(e.target.value))}
+          >
+            {SUPPORTED_COUNTRIES.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.label}
+              </option>
+            ))}
+          </select>
         </label>
 
         {!p.showOptional && (

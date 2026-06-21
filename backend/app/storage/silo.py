@@ -70,6 +70,20 @@ def resolve_project_id(user_id: str, project_id: str | None) -> str:
     return ensure_scratch_project(user_id)["id"]
 
 
+# Supported English-market location codes (E1, 2026-06-17). DataForSEO localizes
+# by location_code; language stays "en". Mirrors the DB check constraint in
+# 20260617000000_session_location.sql and the frontend dropdown map.
+SUPPORTED_LOCATION_CODES: frozenset[int] = frozenset({2840, 2826, 2124, 2036, 2554})
+DEFAULT_LOCATION_CODE = 2840
+
+
+def session_location_code(session: dict) -> int:
+    """The DataForSEO location_code for a session (E1). Defaults to US (2840) for
+    rows created before the column existed / any missing value."""
+    code = session.get("location_code")
+    return int(code) if code in SUPPORTED_LOCATION_CODES else DEFAULT_LOCATION_CODE
+
+
 def create_session(
     *,
     user_id: str,
@@ -78,6 +92,7 @@ def create_session(
     audience_hint: str | None,
     disambiguation_hint: str | None,
     settings: dict,
+    location_code: int = DEFAULT_LOCATION_CODE,
 ) -> dict:
     # Tag the session with the active embedding model so its stored vectors are
     # never compared against another provider's space (freeze-old-sessions guard,
@@ -96,6 +111,7 @@ def create_session(
                 "disambiguation_hint": disambiguation_hint,
                 "settings": settings,
                 "status": "running_pre_review",
+                "location_code": location_code,
                 "embedding_model": active_embedding_model(),
             }
         )

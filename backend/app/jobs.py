@@ -101,7 +101,7 @@ def _maybe_enrich_metrics(session: dict, per_topic_gated) -> None:
         return
     result = enrich_keywords(
         keywords=active_keywords,
-        dfs=get_dataforseo(),
+        dfs=get_dataforseo(store.session_location_code(session)),
         batch_size=s.metrics_batch_size,
         max_workers=s.metrics_max_workers,
         time_budget_s=float(s.metrics_time_budget_s),
@@ -245,7 +245,7 @@ def run_expand_job(session_id: str) -> None:
                 )
                 for t in topics
             ],
-            dfs=get_dataforseo(),
+            dfs=get_dataforseo(store.session_location_code(session)),
             embed_fn=get_llm().embed,
             seed_terms=[seed, *(session.get("aliases") or [])],
             peer_terms=session.get("peer_entities") or [],
@@ -333,7 +333,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
         s = get_settings()
         result = run_article_planning(
             topics=topic_inputs,
-            dfs=get_dataforseo(),
+            dfs=get_dataforseo(store.session_location_code(session)),
             orchestrator=get_orchestrator(),
             embed_fn=get_llm().embed,
             candidate_serp_top_n=s.candidate_serp_top_n,
@@ -484,7 +484,7 @@ def run_fanout_job(
         recursive_pool, degraded, _timed_out = run_recursive_expansion(
             seed=seed,
             sub_anchors=sub_anchors,
-            dfs=get_dataforseo(),
+            dfs=get_dataforseo(store.session_location_code(session)),
             keyword_ideas_limit=s.keyword_ideas_limit,
             paa_tier1_seeds=s.paa_tier1_seeds,
             paa_tier2_cap=s.paa_tier2_cap,

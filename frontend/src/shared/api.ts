@@ -100,6 +100,19 @@ export const listSessions = (projectId: string, includeArchived = false) =>
     `/projects/${projectId}/sessions${includeArchived ? "?include_archived=true" : ""}`,
   );
 
+// Supported English-market countries (E1, 2026-06-17). The code is the
+// DataForSEO location_code (2000 + ISO-3166 numeric); language stays "en". Must
+// mirror the backend allow-list (storage/silo.SUPPORTED_LOCATION_CODES) + the DB
+// check constraint. Default = US.
+export const SUPPORTED_COUNTRIES = [
+  { label: "United States", code: 2840 },
+  { label: "United Kingdom", code: 2826 },
+  { label: "Canada", code: 2124 },
+  { label: "Australia", code: 2036 },
+  { label: "New Zealand", code: 2554 },
+] as const;
+export const DEFAULT_LOCATION_CODE = 2840;
+
 export interface CreateSessionBody {
   seed_keyword: string;
   project_id?: string;
@@ -107,6 +120,9 @@ export interface CreateSessionBody {
   disambiguation_hint?: string;
   topic_count?: number;
   coverage_mode?: "standard" | "comprehensive";
+  // Per-country locale (E1). DataForSEO location_code for the session's market.
+  // Omit -> backend defaults to US (2840).
+  location_code?: number;
   // §7.8 metrics enrichment toggle. Omit -> backend uses workspace default
   // (currently true). Setting false skips the DataForSEO keyword_overview pass
   // -> Volume / CPC / KD stay null.

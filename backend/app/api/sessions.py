@@ -46,6 +46,10 @@ class CreateSessionBody(BaseModel):
     topic_count: int = Field(default=5, ge=3, le=10)
     coverage_mode: str = Field(default="standard", pattern="^(standard|comprehensive)$")
     recursive_fanout: bool = False
+    # Per-country locale (E1, 2026-06-17). DataForSEO location_code for the
+    # session's market; validated against the supported English-market set in the
+    # endpoint. Default US (2840).
+    location_code: int = Field(default=2840)
     # §7.8 metrics enrichment toggle. None -> use workspace default
     # (`enrich_with_metrics_default`, currently True). Surfacing as Optional
     # rather than bool=True so a deployed default flip propagates to clients
@@ -274,7 +278,7 @@ def _run_and_persist(session: dict) -> SiloDiscoveryResponse:
                 disambiguation_hint=session.get("disambiguation_hint")
                 or session.get("disambiguation_choice"),
                 llm=get_llm(),
-                dfs=get_dataforseo(),
+                dfs=get_dataforseo(store.session_location_code(session)),
                 serp_top_n=10 if coverage_mode == "comprehensive" else 5,
                 ambiguity_separation_threshold=get_settings().ambiguity_separation_threshold,
             )
@@ -325,6 +329,11 @@ def create_session(
         user.access_token, body.project_id
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if body.location_code not in store.SUPPORTED_LOCATION_CODES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported location_code {body.location_code}",
+        )
     project_id = store.resolve_project_id(user.id, body.project_id)
     session = store.create_session(
         user_id=user.id,
@@ -332,6 +341,7 @@ def create_session(
         seed_keyword=body.seed_keyword.strip(),
         audience_hint=body.audience_hint,
         disambiguation_hint=body.disambiguation_hint,
+        location_code=body.location_code,
         settings={
             "topic_count": body.topic_count,
             "coverage_mode": body.coverage_mode,

@@ -5,6 +5,8 @@ import {
   addTopic,
   cancelApproval,
   createSession,
+  DEFAULT_LOCATION_CODE,
+  SUPPORTED_COUNTRIES,
   deleteTopic,
   disambiguateSession,
   editTopic,
@@ -84,6 +86,8 @@ export function Wizard() {
   // Step 3 (folded into the seed screen)
   const [topicCount, setTopicCount] = useState(5);
   const [mode, setMode] = useState<"standard" | "comprehensive">("standard");
+  // Per-country locale (E1). Country -> DataForSEO location_code; default US.
+  const [locationCode, setLocationCode] = useState<number>(DEFAULT_LOCATION_CODE);
   // §7.8 metrics enrichment — adds ~$0.40/run for a 5-silo standard run.
   // Defaults on per workspace; the toggle just lets the user opt out.
   const [enrichMetrics, setEnrichMetrics] = useState(true);
@@ -156,6 +160,7 @@ export function Wizard() {
       disambiguation_hint: disambHint.trim() || undefined,
       topic_count: topicCount,
       coverage_mode: mode,
+      location_code: locationCode,
       enrich_with_metrics: enrichMetrics,
     });
   }
@@ -190,6 +195,7 @@ export function Wizard() {
               seed, setSeed, audience, setAudience, disambHint, setDisambHint,
               showAudience, setShowAudience, showDisamb, setShowDisamb,
               topicCount, setTopicCount, mode, setMode,
+              locationCode, setLocationCode,
               enrichMetrics, setEnrichMetrics,
               onBack: () => setStep("project"),
               onSubmit: submitSeed,
@@ -369,6 +375,8 @@ function SeedStep(p: {
   setShowDisamb: (v: boolean) => void;
   topicCount: number;
   setTopicCount: (v: number) => void;
+  locationCode: number;
+  setLocationCode: (v: number) => void;
   mode: "standard" | "comprehensive";
   setMode: (v: "standard" | "comprehensive") => void;
   enrichMetrics: boolean;
@@ -458,6 +466,20 @@ function SeedStep(p: {
             >
               <option value="standard">Standard</option>
               <option value="comprehensive">Comprehensive</option>
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Country</span>
+            <select
+              className="select"
+              value={p.locationCode}
+              onChange={(e) => p.setLocationCode(Number(e.target.value))}
+            >
+              {SUPPORTED_COUNTRIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.label}
+                </option>
+              ))}
             </select>
           </label>
         </div>
