@@ -12,6 +12,6 @@
 -- so the DB enforces the set too. Adding a market later = extend this list + the
 -- API allow-list + the frontend dropdown map.
 alter table fanout.sessions
-  add column location_code int not null default 2840
+  add column if not exists location_code int not null default 2840
     constraint sessions_location_code_supported
       check (location_code in (2840, 2826, 2124, 2036, 2554));

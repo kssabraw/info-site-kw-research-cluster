@@ -135,10 +135,12 @@ to `main`, no code touched):_
   `store.session_location_code(session)` at all 6 call sites; `create_session` persists it;
   API allow-lists the 5 codes (422 otherwise). Migration `20260617000000_session_location.sql`
   (sessions.location_code default 2840 + check constraint). Backend ruff-clean/py_compile OK,
-  `tests/test_locale.py` added. **NOT deployed: apply the migration to prod (Supabase MCP)
-  as part of the deploy — before the new create_session code runs (dormant-safe: defaults to
-  2840 if the column is absent); verify the Netlify build; then merge.** Overrides the
-  US/English locale lock (flagged divergence).
+  `tests/test_locale.py` added. **NOT deployed. ⚠️ Migration is MANDATORY-FIRST:** only the
+  READ path is dormant-safe (`session_location_code` → 2840 if the column is absent);
+  `create_session` WRITES `location_code`, so deploying the code before the migration 500s
+  every new-session creation. Order: apply `20260617000000_session_location.sql` to prod
+  (Supabase MCP) → verify the Netlify build → merge/deploy. Overrides the US/English locale
+  lock (flagged divergence).
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_
