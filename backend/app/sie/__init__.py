@@ -19,6 +19,14 @@ Build order (each a logical commit):
   cache.py             — keyword_analyses read/write
 """
 
-from .models import SIEOutput
-
 __all__ = ["SIEOutput"]
+
+
+def __getattr__(name: str):
+    # Lazy (PEP 562): importing app.sie.extract/ngrams (pure, stdlib-only) must not
+    # pull in pydantic via models. `app.sie.SIEOutput` still resolves on demand.
+    if name == "SIEOutput":
+        from .models import SIEOutput
+
+        return SIEOutput
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
