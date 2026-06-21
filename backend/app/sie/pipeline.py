@@ -103,7 +103,14 @@ def analyze(
         if sc.scrape_status != "success" or not sc.html:
             failed.append((c.url, sc.failure_reason or "scrape failed"))
             continue
-        pages.append(extract_zones(sc.html, c.url, rank=c.rank))
+        try:
+            pages.append(extract_zones(sc.html, c.url, rank=c.rank))
+        except Exception as exc:  # noqa: BLE001 — one bad page must not kill the run
+            logger.warning(
+                "sie_extract_failed",
+                extra={"event": "sie_extract_failed", "url": c.url, "reason": repr(exc)},
+            )
+            failed.append((c.url, f"extract failed: {type(exc).__name__}"))
 
     # M3 near-dup (post-scrape) -----------------------------------------------
     dups = serp.near_duplicates([(p.url, p.rank, _body_text(p)) for p in pages])
