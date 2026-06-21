@@ -166,12 +166,13 @@ clean; frontend build green.** SIE uses the session's `location_code` (E1), not 
 plan's hardcoded 2840. **Egress (DataForSEO/ScrapeOwl/TextRazor/embeddings) is
 UNVALIDATED — sandbox can't reach it.**
 
-**Remaining to ship M12 (deploy-only, needs owner go-ahead):** (1) apply migration
-`20260621000000_sie_keyword_analyses.sql` to prod (Supabase MCP) — MANDATORY-FIRST,
-same lesson as E1; (2) merge + deploy (Railway rebuilds the image incl. the spaCy
-model download — first build is slower); (3) live-validate on a real cluster keyword
-via the owner Term-analysis action (the only place the egress path runs). Then stop
-for review per milestone discipline.
+**Remaining to ship M12:** (1) ✅ **migration `20260621000000_sie_keyword_analyses.sql`
+APPLIED to prod 2026-06-21** (AR-Internal-Tools `wvcthtmmcmhkybcesirb`; verified: table
++ RLS on + 4 policies + 2 indexes + 2 FKs; backward-compatible — current `main` doesn't
+touch it); (2) merge + deploy (Railway rebuilds the image incl. the spaCy model
+download — first build is slower); (3) live-validate on a real cluster keyword via the
+owner Term-analysis action (the only place the egress path runs). Then stop for review
+per milestone discipline.
 
 **v1 MVP — complete. M11 is merged to `main` and deployed (M1–M11 all built,
 all live).** Plus **E1 per-country locale** shipped 2026-06-17 (USA/UK/CA/AU/NZ,

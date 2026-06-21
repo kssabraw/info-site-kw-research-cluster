@@ -59,11 +59,12 @@ _2026-06-21 — M12 (SIE Term & Entity module) CODE-COMPLETE, pending deploy:_
   egress clients lazy-import httpx/spaCy/app so the pure heart stays testable); ruff
   clean; **frontend build green**. **Egress UNVALIDATED** (sandbox can't reach
   DataForSEO/ScrapeOwl/TextRazor/OpenAI) — live-validate on deploy.
-- **Remaining to ship (deploy-only, needs go-ahead):** (1) apply migration
-  `20260621000000_sie_keyword_analyses.sql` to prod (Supabase MCP) **MANDATORY-FIRST**
-  (E1 lesson); (2) merge + deploy — Railway rebuilds the image **incl. the spaCy
-  model download** (first build slower); (3) live-validate via the owner Term-analysis
-  action on a real cluster keyword, then **stop for review** (milestone discipline).
+- **Remaining to ship:** (1) ✅ **migration APPLIED to prod 2026-06-21**
+  (`20260621000000_sie_keyword_analyses.sql`, AR-Internal-Tools; verified table + RLS
+  + 4 policies + 2 indexes + 2 FKs; backward-compatible, current `main` doesn't touch
+  it); (2) merge + deploy — Railway rebuilds the image **incl. the spaCy model
+  download** (first build slower); (3) live-validate via the owner Term-analysis action
+  on a real cluster keyword, then **stop for review** (milestone discipline).
 
 _2026-06-17 — Brief Generator (M13) re-aimed ANSWER-ENGINE-FIRST; new AIO
 planning doc. Docs-only, on branch `claude/optimistic-brown-9wijtx` (NOT merged
