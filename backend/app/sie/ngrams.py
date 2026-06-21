@@ -78,9 +78,13 @@ class AggregatedTerm:
     tfidf: float = 0.0
     passes_tfidf: bool = True
     semantic_similarity: float = 0.0
+    passes_semantic: bool = True
     intent_alignment: float = 0.0
     is_entity: bool = False
     avg_salience: float = 0.0
+    entity_category: str | None = None
+    ner_variants: list[str] = field(default_factory=list)
+    source: str = "ngram"               # "ngram" | "ngram_and_entity" | "entity_only"
     recommendation_score: float = 0.0
     confidence: str = "low"
     reason: str = ""

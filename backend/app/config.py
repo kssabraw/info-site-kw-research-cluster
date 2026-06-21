@@ -288,6 +288,28 @@ class Settings(BaseSettings):
     # live cost banner (§8.4) updates while the pipeline runs.
     cost_flush_interval_s: float = 10.0
 
+    # SIE Term & Entity module (M12, docs/sie-module-plan.md). Keys provisioned
+    # 2026-06-15 on the Railway service (reads SCRAPEOWL_API_KEY / TEXTRAZOR_API_KEY).
+    scrapeowl_api_key: str = ""
+    scrapeowl_base_url: str = "https://api.scrapeowl.com/v1"
+    textrazor_api_key: str = ""
+    textrazor_base_url: str = "https://api.textrazor.com"
+    # Anthropic tiers for SIE LLM calls (M3 classify / M11 pass-2 entities).
+    sie_classifier_model: str = "claude-haiku-4-5"
+    sie_entity_model: str = "claude-sonnet-4-6"
+    # Tunable SIE thresholds (PRD #3 defaults).
+    sie_serp_depth: int = 20
+    sie_coverage_threshold: int = 3            # M8: 3-of-top-10
+    sie_tfidf_threshold: float = 0.005         # M9
+    sie_semantic_threshold: float = 0.65       # M10 (dynamic 0.60/0.70)
+    sie_textrazor_relevance_min: float = 0.40  # M11 pass-1 salience proxy
+    sie_min_eligible_pages: int = 5            # below -> degraded-confidence warning
+    sie_scrape_max_workers: int = 6
+    sie_max_transport_attempts: int = 3
+    # Per-unit cost-meter estimates until first invoices (sie_analysis phase).
+    scrapeowl_cost_per_scrape: float = 0.0008
+    textrazor_cost_per_request: float = 0.0006
+
     # CORS — comma-separated list of allowed frontend origins. "*" allows all.
     cors_allow_origins: str = "*"
 

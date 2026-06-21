@@ -11,7 +11,10 @@ from app.sie.extract import (
     is_cta, is_service_area_list, normalize_block,
 )
 from app.sie.ngrams import AggregatedTerm, ZoneStat, aggregate_pages, coverage_gate, make_ngrams, subsume
-from app.sie.filters import compute_tfidf, tfidf_gate
+from types import SimpleNamespace
+from app.sie.filters import apply_dynamic_threshold, compute_tfidf, tfidf_gate
+from app.sie.serp import near_duplicates
+from app.sie.entities import merge_entities_into_terms
 from app.sie.scoring import (
     _safe_exclude_outliers, minmax_normalize, percentile, quadgram_zone_multiplier,
     recommend_word_count, score_terms, usage_range,
@@ -157,6 +160,57 @@ def test_coverage_gate_threshold_and_exceptions():
 
 def _zp(url, wc):
     return ZonePage(url=url, domain=url, zones=Zones(), word_count=wc)
+
+
+# ----- Module 3: near-duplicate detection -----------------------------------
+
+def test_near_duplicates_flags_lower_ranked():
+    body = "Water heater repair and replacement services for tankless and gas units. " * 10
+    dups = near_duplicates([
+        ("https://example.com/x", 1, body),
+        ("https://www.example.com/x", 4, body),       # same content, lower rank
+        ("https://other.com/y", 2, "Completely different content about solar panels here."),
+    ])
+    assert "https://www.example.com/x" in dups
+    assert dups["https://www.example.com/x"][0] == "https://example.com/x"
+    assert "https://other.com/y" not in dups
+
+
+# ----- Module 11: entity-term merge -----------------------------------------
+
+def test_merge_entities_dual_signal_and_entity_only():
+    pages = [_page(f"https://{d}.com", h2=["tankless water heater"]) for d in "ab"]
+    terms = aggregate_pages(pages, _lemma, boilerplate=set())
+    assert "tankless water heater" in terms
+    entities = [
+        SimpleNamespace(term="tankless water heater", entity_category="equipment",
+                        ner_variants=["tankless heater"]),
+        SimpleNamespace(term="Bradford White", entity_category="brand",
+                        ner_variants=["Bradford White"]),
+    ]
+    merge_entities_into_terms(terms, entities, _lemma)
+    dual = terms["tankless water heater"]
+    assert dual.is_entity and dual.source == "ngram_and_entity"
+    assert "bradford white" in terms                          # entity_only added (lemmatized)
+    assert terms["bradford white"].source == "entity_only" and terms["bradford white"].passes_coverage
+
+
+# ----- Module 10: dynamic semantic threshold --------------------------------
+
+def test_dynamic_threshold_lowers_when_few_pass():
+    terms = [_term("a", semantic_similarity=0.62), _term("b", semantic_similarity=0.5)]
+    th = apply_dynamic_threshold(terms, base=0.65)
+    assert th == 0.60                                          # <25 passing -> lowered
+    assert terms[0].passes_semantic is True                   # 0.62 >= 0.60 now passes
+
+
+def test_dynamic_threshold_preserves_heading_terms():
+    t = _term("c", n=2, semantic_similarity=0.40,
+              zones={"h2": ZoneStat(pages={"u1", "u2", "u3"})})
+    # enough other terms so threshold stays at base and 0.40 fails on similarity alone
+    others = [_term(f"x{i}", semantic_similarity=0.9) for i in range(30)]
+    apply_dynamic_threshold([t, *others], base=0.65)
+    assert t.passes_semantic is True                          # title/H1/H2 on 3+ pages preserved
 
 
 def _term(term, n=2, **kw):

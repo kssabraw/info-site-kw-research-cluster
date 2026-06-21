@@ -140,6 +140,10 @@ def score_terms(
             WEIGHTS[k] * (zone_norm if k == "zone_importance" else norm[k][i])
             for k in WEIGHTS
         )
+        # Dual-signal boost (M11 merge): a term that is BOTH a surviving n-gram and a
+        # high-salience entity gets 1.15x (entity_only terms score normally).
+        if term.is_entity and term.source == "ngram_and_entity":
+            score *= 1.15
         term.recommendation_score = round(min(1.0, score), 4)
         term.confidence = _confidence(term)
         boost = f" Zone multiplier {mult}x applied." if term.zone_boost_applied else ""

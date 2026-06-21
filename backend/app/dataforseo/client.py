@@ -234,6 +234,33 @@ class DataForSEOClient:
                 break
         return urls
 
+    def serp_top_results(self, keyword: str, depth: int = 20) -> list[dict]:
+        """SIE M2: top-`depth` organic results WITH metadata (url/title/description/
+        rank/type). `serp_top_urls` drops the metadata SIE needs for M3 classification."""
+        task = self._post(
+            "/v3/serp/google/organic/live/advanced",
+            [{"keyword": keyword, "location_code": self._location_code,
+              "language_code": self._language_code, "depth": depth}],
+        )
+        items = (task.get("result") or [{}])[0].get("items") or []
+        out: list[dict] = []
+        for item in items:
+            if item.get("type") != "organic":
+                continue
+            url = item.get("url")
+            if not url:
+                continue
+            out.append({
+                "url": url,
+                "title": item.get("title"),
+                "description": item.get("description"),
+                "rank": _coerce_int(item.get("rank_absolute")) or len(out) + 1,
+                "type": item.get("type"),
+            })
+            if len(out) >= depth:
+                break
+        return out
+
     def ranked_keywords(
         self, target_domain: str, limit: int = 500, max_position: int = 20
     ) -> list[str]:

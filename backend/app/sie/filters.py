@@ -10,10 +10,14 @@ and scoring treats it as a normalized input.
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 from .ngrams import AggregatedTerm, ZonePage
 
 TFIDF_THRESHOLD = 0.005
+SEMANTIC_THRESHOLD = 0.65
+_HIGH_ZONES = ("title", "h1", "h2")
+EmbedFn = Callable[[list[str]], list[list[float]]]
 
 
 def compute_tfidf(
@@ -55,3 +59,55 @@ def tfidf_gate(
         else:
             term.passes_tfidf = False
     return terms
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _high_zone_pages(term: AggregatedTerm) -> int:
+    return len({u for z in _HIGH_ZONES if z in term.zones for u in term.zones[z].pages})
+
+
+def apply_dynamic_threshold(
+    terms: list[AggregatedTerm], *, base: float = SEMANTIC_THRESHOLD
+) -> float:
+    """PURE (PRD M10): start at `base`; <25 passing -> 0.60; >300 passing -> 0.70.
+    Sets `passes_semantic` on each term; heading terms in title/H1/H2 on 3+ pages are
+    preserved even below threshold. Assumes `semantic_similarity` is already set."""
+    threshold = base
+    for _ in range(2):  # converge (lower then maybe stay)
+        passing = sum(1 for t in terms if t.semantic_similarity >= threshold)
+        if passing < 25 and threshold > 0.60:
+            threshold = 0.60
+        elif passing > 300 and threshold < 0.70:
+            threshold = 0.70
+        else:
+            break
+    for t in terms:
+        if t.semantic_similarity >= threshold:
+            t.passes_semantic = True
+        elif _high_zone_pages(t) >= 3:
+            t.passes_semantic = True       # heading-term preservation
+        else:
+            t.passes_semantic = False
+    return threshold
+
+
+def attach_semantic_similarity(
+    terms: list[AggregatedTerm], keyword: str, embed_fn: EmbedFn,
+    *, base: float = SEMANTIC_THRESHOLD,
+) -> float:
+    """M10 egress: embed keyword + terms (one batched call), set
+    `semantic_similarity` (cosine), then apply the dynamic threshold. Returns the
+    effective threshold."""
+    if not terms:
+        return base
+    vectors = embed_fn([keyword, *(t.term for t in terms)])
+    kw_vec, term_vecs = vectors[0], vectors[1:]
+    for term, vec in zip(terms, term_vecs):
+        term.semantic_similarity = round(_cosine(kw_vec, vec), 4)
+    return apply_dynamic_threshold(terms, base=base)
