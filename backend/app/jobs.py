@@ -631,3 +631,58 @@ def run_architecture_job(session_id: str) -> None:
         store.try_finalize_running(
             session_id, {"status": "error", "last_error": _short(exc)}
         )
+
+
+# ----- M12 SIE Term & Entity analysis ---------------------------------------
+def submit_sie(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+    *, language_code: str = "en", outlier_mode: str = "safe", force_refresh: bool = False,
+) -> None:
+    _EXECUTOR.submit(
+        run_sie_job, session_id, cluster_id, keyword, location_code,
+        language_code, outlier_mode, force_refresh,
+    )
+
+
+@_metered("sie_analysis")
+@_cancellable
+def run_sie_job(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+    language_code: str = "en", outlier_mode: str = "safe", force_refresh: bool = False,
+) -> None:
+    """Run the SIE pipeline for one cluster keyword and cache the result
+    (docs/sie-module-plan.md §3). Metered under the `sie_analysis` phase. On
+    failure, logs and leaves the cache empty (the report GET then 404s)."""
+    from app.cost_meter import current_meter
+    from app.sie import cache as sie_cache
+    from app.sie import pipeline as sie_pipeline
+
+    # Race guard: a fresh row may have landed between the endpoint's miss and here.
+    if not force_refresh and sie_cache.get_fresh_analysis(keyword, location_code):
+        return
+    meter = current_meter()
+    before = meter.snapshot()[0] if meter else 0.0
+    try:
+        deps = sie_pipeline.build_deps(location_code)
+        output = sie_pipeline.analyze(
+            keyword, location_code=location_code, language_code=language_code,
+            outlier_mode=outlier_mode, deps=deps,
+        )
+    except Exception as exc:  # noqa: BLE001 — SIE is a side analysis; never crash the worker
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "sie_job",
+                   "keyword": keyword, "reason": repr(exc)},
+        )
+        return
+    cost = round((meter.snapshot()[0] if meter else 0.0) - before, 6)
+    sie_cache.save_analysis(
+        keyword=keyword, location_code=location_code, language_code=language_code,
+        outlier_mode=outlier_mode, output_json=output.model_dump(), cost_usd=cost,
+        session_id=session_id, cluster_id=cluster_id,
+    )
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "sie_job", "keyword": keyword,
+               "required_terms": len(output.terms.required), "cost_usd": cost},
+    )

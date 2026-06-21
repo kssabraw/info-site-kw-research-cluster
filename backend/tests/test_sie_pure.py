@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from app.sie.filters import apply_dynamic_threshold, compute_tfidf, tfidf_gate
 from app.sie.serp import near_duplicates
 from app.sie.entities import merge_entities_into_terms
+from app.sie.pipeline import _ensure_target_keyword, _force_target_score
 from app.sie.scoring import (
     _safe_exclude_outliers, minmax_normalize, percentile, quadgram_zone_multiplier,
     recommend_word_count, score_terms, usage_range,
@@ -288,6 +289,18 @@ def test_usage_range_safe_vs_aggressive_and_cap():
     # 10-per-1000 cap: a term used 50x/1000 words caps at 10 at target 1000 wc.
     hot = _term("y", zone_page_count={"paragraphs": {f"u{i}": 50 for i in range(5)}})
     assert usage_range(hot, "paragraphs", 1000, {f"u{i}": 1000 for i in range(5)})[2] == 10
+
+
+# ----- Pipeline: target-keyword force-inclusion (PRD M13) -------------------
+
+def test_target_keyword_always_required_at_score_1():
+    req = [_term("water heater", n=2)]
+    terms = {"water heater": req[0]}
+    out = _ensure_target_keyword(req, terms, "water heater repair", _lemma)
+    assert any(t.term == "water heater repair" for t in out)   # force-included
+    _force_target_score(out, "water heater repair", _lemma)
+    tk = next(t for t in out if t.term == "water heater repair")
+    assert tk.recommendation_score == 1.0 and tk.confidence == "high"
 
 
 def _run_all():
