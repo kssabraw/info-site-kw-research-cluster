@@ -128,6 +128,17 @@ to `main`, no code touched):_
   + Perplexity); E5 **content-hash embedding cache**; E6 **intra-brief parallelism**;
   E7 **batch MCS candidate gen across slots**. All design-locked into the plan; code at
   M12/M13 build time (E1 partly sooner if the international client needs research now).
+- **E1 per-country locale — ✅ BUILT on `claude/optimistic-brown-9wijtx` (`baf381b`),
+  2026-06-17** (international client is live). USA/UK/CA/AU/NZ country dropdown at session
+  creation (owner + VA) → DataForSEO `location_code` (language stays `en`). Threaded via
+  `DataForSEOClient(location_code=…)` + `get_dataforseo(loc)` (per-locale `@lru_cache`) +
+  `store.session_location_code(session)` at all 6 call sites; `create_session` persists it;
+  API allow-lists the 5 codes (422 otherwise). Migration `20260617000000_session_location.sql`
+  (sessions.location_code default 2840 + check constraint). Backend ruff-clean/py_compile OK,
+  `tests/test_locale.py` added. **NOT deployed: apply the migration to prod (Supabase MCP)
+  as part of the deploy — before the new create_session code runs (dormant-safe: defaults to
+  2840 if the column is absent); verify the Netlify build; then merge.** Overrides the
+  US/English locale lock (flagged divergence).
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_

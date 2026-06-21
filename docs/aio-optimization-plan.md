@@ -696,10 +696,21 @@ call site. Latency + per-call-overhead win.
 modularity/cacheability; batch-priced pre-generation — trades the lazy lock, deferred
 to M15 (§ batch-pricing discussion).
 
-### 5.8 E1 implementation scope — per-country locale for the BUILT pipeline (2026-06-17)
+### 5.8 E1 implementation — per-country locale for the BUILT pipeline (2026-06-17)
+
+**✅ IMPLEMENTED on `claude/optimistic-brown-9wijtx` (`baf381b`)** — USA/UK/CA/AU/NZ.
+Backend ruff-clean + py_compile OK; `tests/test_locale.py` added (runs in CI — no
+sandbox deps). **Remaining to ship:** (1) **apply migration
+`20260617000000_session_location.sql` to prod** (Supabase MCP) **as part of the
+deploy, before the new code serves create_session** (the standing code-before-migration
+lesson — but the code is dormant-safe: it defaults to 2840 when the column is absent);
+(2) frontend build verification in CI/Netlify (tsc not runnable in-sandbox, node_modules
+absent); (3) merge + deploy. What landed: client+factory locale params, 6 call sites,
+`create_session` + API allow-list (422 on unsupported), the migration (+ check
+constraint), and country dropdowns in both the owner `SeedForm` and VA `SeedStep`.
 
 **Driver:** international client is live now → the M1–M11 keyword research must run in
-their country. This is **do-now buildable** (all built code), unlike the M12/M13 items.
+their country. This was **do-now buildable** (all built code), unlike the M12/M13 items.
 
 **Simplification found in the code:** DataForSEO localizes by **`location_code`**;
 `language_code` stays **`"en"`** for every English market. So we thread **one value**
