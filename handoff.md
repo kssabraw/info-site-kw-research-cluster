@@ -128,28 +128,35 @@ to `main`, no code touched):_
   + Perplexity); E5 **content-hash embedding cache**; E6 **intra-brief parallelism**;
   E7 **batch MCS candidate gen across slots**. All design-locked into the plan; code at
   M12/M13 build time (E1 partly sooner if the international client needs research now).
-- **E1 per-country locale — ✅ BUILT on `claude/optimistic-brown-9wijtx` (`baf381b`),
-  2026-06-17** (international client is live). USA/UK/CA/AU/NZ country dropdown at session
-  creation (owner + VA) → DataForSEO `location_code` (language stays `en`). Threaded via
+- **E1 per-country locale — ✅ MERGED TO `main` + DEPLOYING (2026-06-17)** (international
+  client is live). USA/UK/CA/AU/NZ country dropdown at session creation (owner + VA) →
+  DataForSEO `location_code` (language stays `en`). Threaded via
   `DataForSEOClient(location_code=…)` + `get_dataforseo(loc)` (per-locale `@lru_cache`) +
   `store.session_location_code(session)` at all 6 call sites; `create_session` persists it;
-  API allow-lists the 5 codes (422 otherwise). Migration `20260617000000_session_location.sql`
-  (sessions.location_code default 2840 + check constraint). Backend ruff-clean/py_compile OK,
-  `tests/test_locale.py` added. **NOT deployed. ⚠️ Migration is MANDATORY-FIRST:** only the
-  READ path is dormant-safe (`session_location_code` → 2840 if the column is absent);
-  `create_session` WRITES `location_code`, so deploying the code before the migration 500s
-  every new-session creation. Order: apply `20260617000000_session_location.sql` to prod
-  (Supabase MCP) → verify the Netlify build → merge/deploy. Overrides the US/English locale
-  lock (flagged divergence).
-  - **Adversarial review done (`c01bd1c`): no logic bugs.** Verified end-to-end (UK pick →
-    2826 → all SERP/expansion localized); all 6 call sites carry `location_code` (`get_session`
-    is `select("*")`, `update_session`/insert return the full row); 422 on bad codes; existing
-    tests don't touch `create_session` so none break; client is immutable/thread-safe. Two
-    fixes applied: migration → `add column if not exists` (repo convention); corrected the
-    misleading "dormant-safe" claim (the create WRITE needs the column — see above). **Residual:
-    pytest + frontend tsc/build unverified in-sandbox (no deps) → must go green in CI before
-    merge.** The 5 codes live in 3 places (API set / DB check / frontend map) — adding a market
-    touches all three.
+  API allow-lists the 5 codes (422 otherwise). Country list lives in **3 places** (API set
+  `storage/silo.SUPPORTED_LOCATION_CODES` / DB check constraint / frontend `SUPPORTED_COUNTRIES`)
+  — adding a market touches all three. Overrides the US/English locale lock (flagged divergence).
+  - **Deploy sequence DONE (2026-06-17), in order:**
+    1. **Migration applied to prod** (`20260617000000_session_location.sql`, AR-Internal-Tools
+       `wvcthtmmcmhkybcesirb`, via Supabase MCP). Verified: `location_code` default `2840` +
+       check constraint present + **all 8 existing rows backfilled to US**. (Migration was
+       mandatory-FIRST: only the read path defaults to 2840; `create_session` *writes* the
+       column, so code-before-migration would 500 new sessions.)
+    2. **Build confirmed green** — note: NO GitHub Actions test/build CI exists (only
+       `pages-build-deployment`); the repo builds at deploy time. Confirmed directly with
+       `npm ci && npm run build` (tsc + vite, exit 0) — the previously-unverified frontend risk.
+       Backend ruff/py_compile clean; **backend pytest NOT run in-sandbox** (PyJWT system-pkg
+       conflict + python-louvain wheel fail — environmental). `tests/test_locale.py` runs in
+       a real env.
+    3. **Merged `claude/optimistic-brown-9wijtx` → `main` `--no-ff` (`beea52f`)**, 23 commits
+       (E1 code + all AIO planning docs), zero divergence. Push triggered Railway (backend) +
+       Netlify (frontend) auto-deploy. Railway `info-site-kw-research-cluster` deploy
+       `df12e5b1` was BUILDING at handoff time — **confirm it reached SUCCESS.**
+  - **Adversarial review (`c01bd1c`): no logic bugs.** End-to-end UK trace (2826 → all
+    SERP/expansion localized); all 6 sites carry `location_code` (`get_session` `select("*")`,
+    `update_session`/insert return the row); 422 on bad codes; no existing test touches
+    `create_session`; client immutable/thread-safe. Fixes: migration `if not exists`; corrected
+    the "dormant-safe" wording.
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_
