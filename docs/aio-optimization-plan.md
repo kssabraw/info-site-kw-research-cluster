@@ -639,6 +639,65 @@ the sandbox); confirm field shapes on the first deployed brief run.
 
 ---
 
+## 5.7 Efficiency & streamlining — adopted 2026-06-17 (owner)
+
+**Status:** design decisions folded into the M12/M13 build. **Nothing built** — the
+brief gen + SIE don't exist yet, so "adopted" = locked into the plan, implemented at
+build time. **E1 additionally touches the *built* M1–M11 pipeline** (flagged).
+
+**E1. Per-country locale — lifts the US/English lock (new international client).**
+The user inputs a **country at the session (or project) level**; language stays
+**English** (the country's English variant where DataForSEO supports it —
+`en-GB`/`en-AU`/`en-CA` — else `en`). Country → DataForSEO `location_code`, which
+flows to every SERP / AIO / SIE / brief fetch.
+- **Clean by construction:** the brief & SIE caches are *already* keyed by
+  `(keyword, location_code)`, so multi-country caching works with **no cache change**;
+  country is run-invariant → set **once per session**, not per article (the
+  hoist-invariants principle).
+- **Required, not cosmetic:** the **AIO answer is country-specific**, so the
+  international client needs the right `location_code` to get correct MCS targets.
+- ⚠️ **Built-pipeline implication (separate task, NOT doc-only):** the M1–M11
+  keyword-research pipeline assumes US/`en` (locale constants in
+  `dataforseo/client.py` + config). End-to-end international support needs that made
+  session-configurable too → a **`sessions` schema field + migration + code change**.
+  Recorded as a build task. **Overrides the Writer-PRD US/English locale lock and the
+  SIE-plan §3 `2840`/`en` constants** (flagged divergence).
+
+**E2. Shared SERP fetch (Brief Gen ⇄ SIE).** Both run in parallel on the same keyword
+and each call DataForSEO for the same depth-20 SERP. A thin shared-context fetch pulls
+it **once** (organic + PAA + AIO) and feeds both. Saves one DataForSEO call + latency
+per article. *Trade-off:* a thin coordinator couples two otherwise-independent modules
+— shares the **fetch**, not the **logic**. Accepted, flagged.
+
+**E3. Conditional Gemini/AIO path.** When `aio_target.present == false`, **skip the
+Gemini embedding pass entirely** (ChatGPT-only scoring; entity derivation already
+title-falls-back). Pure dead-work elimination on the common no-AIO query.
+
+**E4. Trim the LLM fan-out → ChatGPT + Gemini only.** **Remove Claude and Perplexity**
+from the Step-2 fan-out. ChatGPT stays (it's a target); Gemini stays (it's the AIO
+judge model). ~halves the fan-out cost (a larger brief line item). *Trade-off:* less
+candidate-source diversity — accepted.
+
+**E5. Content-hash embedding cache.** Cache embeddings keyed by `(text_hash, model)`
+so identical competitor headings / AIO text aren't re-embedded across sibling articles
+in a silo (overlapping SERPs). Mostly a latency/throughput win (embeddings are cents).
+Keyed by **model** → respects the never-mix-vector-spaces rule.
+
+**E6. Maximize intra-brief parallelism.** Run independent data fetches (Step 1 SERP,
+Step 2 PAA/Reddit/autocomplete/fan-out) and independent LLM calls (persona gaps, FAQ)
+concurrently via `ContextThreadPoolExecutor`. Latency win → pushes wall time toward the
+low end of the 1–3 min budget.
+
+**E7. Batch MCS candidate generation across slots.** Generate candidates for multiple
+H2 slots in **one** LLM call rather than per-slot — fewer round-trips on the heaviest
+call site. Latency + per-call-overhead win.
+
+**Not adopted (for the record):** merging LLM calls (intent+title / persona+FAQ) — kills
+modularity/cacheability; batch-priced pre-generation — trades the lazy lock, deferred
+to M15 (§ batch-pricing discussion).
+
+---
+
 ## 6. Next actions (not yet done)
 
 **Section-1 decisions — ✅ all RESOLVED 2026-06-17** (see §0 sub-decisions + §4):
@@ -672,6 +731,11 @@ X.6). **Remaining = the Section-2 verifications/spikes + the build.**
 - [x] **Commercial Page Gating (§3.4)** — DEFERRED 2026-06-17 (owner): A4 gates on
       the three general partner factors only; `multiple_languages` dropped from the
       directive enum. Revisit when the owner supplies the source section.
+- [ ] **Efficiency E1–E7 (§5.7)** at build time. Special call-out: **E1 per-country
+      locale touches BUILT code** — make the M1–M11 research pipeline's locale
+      session-configurable (`sessions` location_code field + migration + replace the
+      `dataforseo/client.py`/config US/`en` constants). This is the international-client
+      enabler and is the only efficiency item that isn't purely M12/M13-internal.
 - [ ] Once signed off: write the concrete Brief Gen addendum mapping §5 ship-now
       slice onto the (rebased) file layout, with pure-module tests per §13.X.8 /
       X.9 acceptance.

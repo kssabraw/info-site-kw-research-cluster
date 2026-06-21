@@ -118,6 +118,16 @@ to `main`, no code touched):_
     (directive locked) — must **map authority gaps to H3** (resolved 2026-06-17:
     authority gaps are H3s, deliberately NOT entity-form-enforced — flagged divergence
     from the research's X.4/X.9). Then the build itself, behind M12/SIE.
+- **Efficiency/streamlining decisions — adopted 2026-06-17 (doc §5.7), build-time:**
+  E1 **per-country locale** (international client — country input at session level,
+  English retained; lifts the US/`en` lock; ⚠️ also needs the BUILT M1–M11 pipeline
+  made locale-configurable: `sessions` field + migration + client/config constants —
+  a real code task, the international-client enabler); E2 **shared SERP fetch** between
+  Brief Gen & SIE (they duplicate it today); E3 **conditional Gemini path** (skip when
+  `aio_target.present==false`); E4 **trim the fan-out to ChatGPT + Gemini** (drop Claude
+  + Perplexity); E5 **content-hash embedding cache**; E6 **intra-brief parallelism**;
+  E7 **batch MCS candidate gen across slots**. All design-locked into the plan; code at
+  M12/M13 build time (E1 partly sooner if the international client needs research now).
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_
