@@ -37,6 +37,34 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
 
+_2026-06-21 — M12 (SIE Term & Entity module) CODE-COMPLETE, pending deploy:_
+
+- **Built the full 14-module SIE pipeline** (`backend/app/sie/`, plan
+  `docs/sie-module-plan.md`, spec PRD #3) on `claude/optimistic-brown-9wijtx` in 6
+  committed slices: foundation (migration `20260621000000_sie_keyword_analyses.sql`
+  cross-session 7-day cache + RLS mirroring `site_architecture`; Final Output Model
+  `models.py` = Writer **Input C, schema_version 1.4**); pure core (M5-14:
+  extract/ngrams/filters/scoring — 5 noise layers, n-grams+subsumption+coverage gate,
+  TF-IDF, 6-weight scoring + quadgram multipliers, safe/aggressive usage ranges);
+  egress clients (M2-4,10-11: DataForSEO `serp_top_results`, Haiku URL classify +
+  pure near-dup, ScrapeOwl, TextRazor NER pass-1 + Sonnet pass-2 with may-not-invent
+  guard, OpenAI semantic + dynamic threshold, entity→term merge w/ dual-signal
+  1.15x); orchestration (`pipeline.analyze` M1→M14, `cache.py`, `run_sie_job`
+  `@_metered("sie_analysis")`); owner-only `term-analysis` API + `TermAnalysisPanel`
+  report UI; deps (bs4/lxml/spaCy + `en_core_web_sm` in the Dockerfile).
+- **Reconciliations:** SIE uses the session's `location_code` (E1), not the plan's
+  hardcoded 2840; built `models.py` to the live Input C **1.4** (consumer wins), so
+  per-term confidence/reason aren't persisted (report shows score+entity+usage).
+- **Validation:** **23 pure-module tests green in-sandbox** (stdlib only — the
+  egress clients lazy-import httpx/spaCy/app so the pure heart stays testable); ruff
+  clean; **frontend build green**. **Egress UNVALIDATED** (sandbox can't reach
+  DataForSEO/ScrapeOwl/TextRazor/OpenAI) — live-validate on deploy.
+- **Remaining to ship (deploy-only, needs go-ahead):** (1) apply migration
+  `20260621000000_sie_keyword_analyses.sql` to prod (Supabase MCP) **MANDATORY-FIRST**
+  (E1 lesson); (2) merge + deploy — Railway rebuilds the image **incl. the spaCy
+  model download** (first build slower); (3) live-validate via the owner Term-analysis
+  action on a real cluster keyword, then **stop for review** (milestone discipline).
+
 _2026-06-17 — Brief Generator (M13) re-aimed ANSWER-ENGINE-FIRST; new AIO
 planning doc. Docs-only, on branch `claude/optimistic-brown-9wijtx` (NOT merged
 to `main`, no code touched):_

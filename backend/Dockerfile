@@ -13,6 +13,10 @@ COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --upgrade pip && pip install .
 
+# M12 SIE: the locked spaCy lemmatizer (en_core_web_sm) — downloaded at build
+# time into the image (sie-module-plan §9 #1; matches the installed spaCy minor).
+RUN python -m spacy download en_core_web_sm
+
 # Railway injects $PORT. Default to 8000 for local docker runs.
 ENV PORT=8000
 EXPOSE 8000
