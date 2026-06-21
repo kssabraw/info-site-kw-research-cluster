@@ -141,6 +141,15 @@ to `main`, no code touched):_
   every new-session creation. Order: apply `20260617000000_session_location.sql` to prod
   (Supabase MCP) → verify the Netlify build → merge/deploy. Overrides the US/English locale
   lock (flagged divergence).
+  - **Adversarial review done (`c01bd1c`): no logic bugs.** Verified end-to-end (UK pick →
+    2826 → all SERP/expansion localized); all 6 call sites carry `location_code` (`get_session`
+    is `select("*")`, `update_session`/insert return the full row); 422 on bad codes; existing
+    tests don't touch `create_session` so none break; client is immutable/thread-safe. Two
+    fixes applied: migration → `add column if not exists` (repo convention); corrected the
+    misleading "dormant-safe" claim (the create WRITE needs the column — see above). **Residual:
+    pytest + frontend tsc/build unverified in-sandbox (no deps) → must go green in CI before
+    merge.** The 5 codes live in 3 places (API set / DB check / frontend map) — adding a market
+    touches all three.
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_
