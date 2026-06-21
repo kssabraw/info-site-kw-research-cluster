@@ -696,6 +696,43 @@ call site. Latency + per-call-overhead win.
 modularity/cacheability; batch-priced pre-generation — trades the lazy lock, deferred
 to M15 (§ batch-pricing discussion).
 
+### 5.8 E1 implementation scope — per-country locale for the BUILT pipeline (2026-06-17)
+
+**Driver:** international client is live now → the M1–M11 keyword research must run in
+their country. This is **do-now buildable** (all built code), unlike the M12/M13 items.
+
+**Simplification found in the code:** DataForSEO localizes by **`location_code`**;
+`language_code` stays **`"en"`** for every English market. So we thread **one value**
+(`location_code`); the `en-GB` variant idea in E1 is unnecessary. `pipeline/language.py`
+(non-English filter) needs **no change** — it drops non-English regardless of which
+English market.
+
+**Blast radius (mechanical — funnels through one client + one factory):**
+1. `dataforseo/client.py:23-24` — make `_LOCATION_CODE`/`_LANGUAGE_CODE` `__init__`
+   params (default 2840/`en`); replace ~10 usages (104,136,144,155,175,193,210,233,
+   262,309) with `self._…`.
+2. `dataforseo/__init__.py:9` — `get_dataforseo(location_code=2840, language_code="en")`;
+   keep `@lru_cache` (now one client per locale).
+3. 6 call sites pass the session's `location_code`: `jobs.py` ×4 (104,248,336,487) +
+   `api/sessions.py` ×2 (277 + sync silo-discovery). Confirm session row in scope at each.
+4. `storage/silo.py:73 create_session` — accept + persist `location_code`.
+5. `api/sessions.py:319` create endpoint — accept `country`, validate vs allow-list.
+6. **Migration** `2026XXXX_session_location.sql`: `add column location_code int not null
+   default 2840` (existing rows → US, no backfill). Apply to prod via Supabase MCP.
+7. **Frontend:** country selector (owner flow + VA `Wizard.tsx`) + a curated
+   country→`location_code` map (US 2840 / UK 2826 / CA 2124 / AU 2036 / … — verify codes
+   vs DataForSEO's locations endpoint); `shared/api.ts createSession` field; default US.
+8. **Allow-list** supported English-market codes server-side.
+9. **Tests:** `DataForSEOClient` default args keep existing tests green; add one asserting
+   a non-default `location_code` reaches the payload.
+
+**Risks/verifications:** confirm all our DataForSEO endpoints support the client's
+country; cross-locale cache safety already holds (per-session data + location-keyed
+caches); no cost change.
+
+**Effort:** low–medium (~½ day). Order: migration (dormant-safe, default 2840) →
+client+factory → call sites → create_session → frontend → allow-list → test.
+
 ---
 
 ## 6. Next actions (not yet done)
