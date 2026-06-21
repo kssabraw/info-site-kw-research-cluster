@@ -1488,3 +1488,70 @@ def embedding_health(user: AuthedUser = Depends(require_owner)) -> dict:
 
 # Re-export for callers that validate relationship types.
 __all__ = ["router", "PROPOSABLE_TYPES"]
+
+
+# ----- M12 SIE Term & Entity analysis (owner-only validation surface) --------
+class TermAnalysisBody(BaseModel):
+    force_refresh: bool = False
+    outlier_mode: str = Field(default="safe", pattern="^(safe|aggressive)$")
+
+
+def _cluster_keyword_and_location(
+    user: AuthedUser, session_id: str, cluster_id: str
+) -> tuple[str, int, str]:
+    """(primary keyword text, session location_code, session_id) for a cluster the
+    caller can see. The SIE keyword is the cluster's primary keyword (the article's
+    target keyword)."""
+    cluster, sid = _require_cluster(user, cluster_id)
+    if sid != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    session = _require_session(user, sid)
+    pkid = cluster.get("primary_keyword_id")
+    if not pkid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cluster has no primary keyword to analyze",
+        )
+    keyword = store.get_keyword_texts([pkid]).get(pkid)
+    if not keyword:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Cluster primary keyword not found"
+        )
+    return keyword, store.session_location_code(session), sid
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/term-analysis")
+def start_term_analysis(
+    session_id: str, cluster_id: str, response: Response,
+    body: TermAnalysisBody | None = None, user: AuthedUser = Depends(require_owner),
+) -> dict:
+    """Owner-only (M12 validation surface). Cache hit -> 200 + stored report; miss
+    -> 202 + the SIE job is submitted (poll GET until present)."""
+    from app.sie import cache as sie_cache
+
+    body = body or TermAnalysisBody()
+    keyword, location_code, sid = _cluster_keyword_and_location(user, session_id, cluster_id)
+    if not body.force_refresh:
+        row = sie_cache.get_fresh_analysis(keyword, location_code)
+        if row:
+            return {"status": "complete", "keyword": keyword, "report": row["output_json"]}
+    jobs.submit_sie(
+        sid, cluster_id, keyword, location_code,
+        outlier_mode=body.outlier_mode, force_refresh=body.force_refresh,
+    )
+    response.status_code = status.HTTP_202_ACCEPTED
+    return {"status": "running", "keyword": keyword}
+
+
+@router.get("/sessions/{session_id}/clusters/{cluster_id}/term-analysis")
+def get_term_analysis(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """The cached SIE report for a cluster's keyword (404 until analyzed)."""
+    from app.sie import cache as sie_cache
+
+    keyword, location_code, _sid = _cluster_keyword_and_location(user, session_id, cluster_id)
+    row = sie_cache.get_fresh_analysis(keyword, location_code)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No analysis yet")
+    return {"status": "complete", "keyword": keyword, "report": row["output_json"]}

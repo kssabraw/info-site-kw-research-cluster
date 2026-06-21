@@ -734,3 +734,62 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
   // Defer revoke so Firefox/Chrome finish the download handoff first.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ----- M12 SIE Term & Entity analysis (owner-only) --------------------------
+export interface SieZoneRange { min: number; target: number; max: number }
+export interface SieRequiredTerm {
+  term: string;
+  recommendation_score: number;
+  is_entity: boolean;
+  entity_category: string | null;
+}
+export interface SieUsageRec {
+  term: string;
+  h2: SieZoneRange;
+  h3: SieZoneRange;
+  paragraphs: SieZoneRange;
+}
+export interface SieEntity {
+  term: string;
+  entity_category: string | null;
+  example_context: string | null;
+  ner_variants: string[];
+  recommendation_score: number;
+}
+export interface SiePage {
+  url: string;
+  rank: number | null;
+  included: boolean;
+  reason: string | null;
+}
+export interface SieReport {
+  schema_version: string;
+  keyword: string;
+  word_count: { min: number; target: number; max: number };
+  target_keyword: { term: string; minimum_usage: { h2: number; h3: number; paragraphs: number } };
+  terms: { required: SieRequiredTerm[]; avoid: string[] };
+  usage_recommendations: SieUsageRec[];
+  entities: SieEntity[];
+  warnings: string[];
+  pages: SiePage[];
+}
+export interface TermAnalysisResponse {
+  status: "complete" | "running";
+  keyword: string;
+  report?: SieReport;
+}
+
+export const startTermAnalysis = (
+  sessionId: string,
+  clusterId: string,
+  body?: { force_refresh?: boolean; outlier_mode?: "safe" | "aggressive" },
+) =>
+  request<TermAnalysisResponse>(
+    `/sessions/${sessionId}/clusters/${clusterId}/term-analysis`,
+    { method: "POST", body: JSON.stringify(body ?? {}) },
+  );
+
+export const getTermAnalysis = (sessionId: string, clusterId: string) =>
+  request<TermAnalysisResponse>(
+    `/sessions/${sessionId}/clusters/${clusterId}/term-analysis`,
+  );
