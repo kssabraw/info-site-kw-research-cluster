@@ -62,9 +62,11 @@ _2026-06-21 — M12 (SIE Term & Entity module) CODE-COMPLETE, pending deploy:_
 - **Remaining to ship:** (1) ✅ **migration APPLIED to prod 2026-06-21**
   (`20260621000000_sie_keyword_analyses.sql`, AR-Internal-Tools; verified table + RLS
   + 4 policies + 2 indexes + 2 FKs; backward-compatible, current `main` doesn't touch
-  it); (2) merge + deploy — Railway rebuilds the image **incl. the spaCy model
-  download** (first build slower); (3) live-validate via the owner Term-analysis action
-  on a real cluster keyword, then **stop for review** (milestone discipline).
+  it); (2) ✅ **MERGED to `main` + DEPLOYED** (`b104405`; Railway `46ea998a` SUCCESS —
+  the spaCy/lxml/bs4 build + en_core_web_sm download resolved + started clean);
+  (3) **live-validate via the owner Term-analysis action on a real cluster keyword**
+  (first real egress run — expect calibration on ScrapeOwl/TextRazor response shapes +
+  the Haiku/Sonnet tool schemas), then **STOP FOR REVIEW** (milestone discipline).
 
 _2026-06-17 — Brief Generator (M13) re-aimed ANSWER-ENGINE-FIRST; new AIO
 planning doc. Docs-only, on branch `claude/optimistic-brown-9wijtx` (NOT merged
