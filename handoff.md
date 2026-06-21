@@ -151,7 +151,8 @@ to `main`, no code touched):_
     3. **Merged `claude/optimistic-brown-9wijtx` → `main` `--no-ff` (`beea52f`)**, 23 commits
        (E1 code + all AIO planning docs), zero divergence. Push triggered Railway (backend) +
        Netlify (frontend) auto-deploy. Railway `info-site-kw-research-cluster` deploy
-       `df12e5b1` was BUILDING at handoff time — **confirm it reached SUCCESS.**
+       `df12e5b1` = **✅ SUCCESS** (backend live with the new code; migration already
+       applied so it finds `location_code`). E1 is fully shipped.
   - **Adversarial review (`c01bd1c`): no logic bugs.** End-to-end UK trace (2826 → all
     SERP/expansion localized); all 6 sites carry `location_code` (`get_session` `select("*")`,
     `update_session`/insert return the row); 422 on bad codes; no existing test touches
