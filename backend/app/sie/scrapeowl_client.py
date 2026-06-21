@@ -47,7 +47,7 @@ def _failure_reason(status: int | None, exc: Exception | None) -> str:
 class ScrapeOwlClient:
     def __init__(
         self, api_key: str, base_url: str, *, cost_per_scrape: float = 0.0008,
-        timeout_s: float = 60.0, max_attempts: int = 3,
+        timeout_s: float = 35.0, max_attempts: int = 3,
     ):
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
@@ -78,31 +78,54 @@ class ScrapeOwlClient:
                 last_status = resp.status_code
                 if resp.status_code >= 400:
                     last_exc = None
+                    # 4xx (blocked / bad request) is persistent — don't burn retries.
+                    # 5xx (server-side render failure) gets one quick retry, then stop;
+                    # in practice these are persistent per-URL and 3x60s hangs the run.
+                    if resp.status_code < 500 or attempt >= 1:
+                        break
                     continue
-                body = resp.json()
+                try:
+                    body = resp.json()
+                except ValueError:
+                    last_exc = None
+                    break
+                if not isinstance(body, dict):
+                    self._log(url, resp.status_code, started, "failed",
+                              note=f"non-dict body: {type(body).__name__}")
+                    return ScrapeResult(
+                        url, None, None, None, "failed", "Unexpected scrape response shape"
+                    )
+                html = body.get("html") or body.get("data")
+                if not html or not isinstance(html, str):
+                    # Log the keys so the real ScrapeOwl shape is visible on a miss.
+                    self._log(url, resp.status_code, started, "failed",
+                              note=f"no html; keys={sorted(body)[:8]}")
+                    return ScrapeResult(url, None, None, None, "failed", "Empty page")
                 record_cost(self._cost)
                 self._log(url, resp.status_code, started, "success")
-                html = body.get("html") or body.get("data")
-                if not html:
-                    return ScrapeResult(url, None, None, None, "failed", "Empty page")
                 return ScrapeResult(
-                    url=url, html=html, text=body.get("text"),
-                    markdown=body.get("markdown"), scrape_status="success",
+                    url=url, html=html,
+                    text=body.get("text") if isinstance(body.get("text"), str) else None,
+                    markdown=body.get("markdown") if isinstance(body.get("markdown"), str) else None,
+                    scrape_status="success",
                 )
-            except (httpx.HTTPError, ValueError) as exc:
+            except httpx.HTTPError as exc:
                 last_exc = exc
         self._log(url, last_status, started, "failed")
         return ScrapeResult(
             url, None, None, None, "failed", _failure_reason(last_status, last_exc)
         )
 
-    def _log(self, url: str, status: int | None, started: float, outcome: str) -> None:
-        logger.info(
-            "external_call",
-            extra={
-                "event": "external_call", "service": "scrapeowl", "endpoint": "/scrape",
-                "url": url, "status": status, "outcome": outcome,
-                "latency_ms": round((time.perf_counter() - started) * 1000, 2),
-                "cost_usd": self._cost if outcome == "success" else 0.0,
-            },
-        )
+    def _log(
+        self, url: str, status: int | None, started: float, outcome: str,
+        *, note: str | None = None,
+    ) -> None:
+        extra = {
+            "event": "external_call", "service": "scrapeowl", "endpoint": "/scrape",
+            "url": url, "status": status, "outcome": outcome,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "cost_usd": self._cost if outcome == "success" else 0.0,
+        }
+        if note:
+            extra["note"] = note
+        logger.info("external_call", extra=extra)
