@@ -37,6 +37,120 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
 
+_2026-06-17 — Brief Generator (M13) re-aimed ANSWER-ENGINE-FIRST; new AIO
+planning doc. Docs-only, on branch `claude/optimistic-brown-9wijtx` (NOT merged
+to `main`, no code touched):_
+
+- **New planning doc: `docs/aio-optimization-plan.md`** — captures a body of
+  owner-supplied research on optimizing content for **Google AI Overview (AIO) +
+  ChatGPT citation**, the gap analysis against the current plans, the collision
+  analysis, all owner decisions below, and the source research verbatim
+  (Appendix). This is the single source of truth for the AIO/answer-engine work.
+  **Registered in CLAUDE.md "Key file locations"** (auto-loads each session).
+- **Gap analysis.** The AIO research is **~85% net-new** — `grep` across all of
+  `docs/` returns zero prior matches for `AIO`/`main_entity`/`Max Cosine`/
+  `decision-fit`. It lands **almost entirely on Brief Gen (M13)**; **nothing on
+  SIE (M12)** (SIE only contributes its already-locked spaCy `en_core_web_sm`
+  dep); one piece (decision-fit *rendering*) on the Writer (M14). Decision-fit
+  mapping is **co-owned** — brief-side trigger/gating + a `format_directive`,
+  writer-side prose render.
+- **Owner decision #1 — embeddings (DUAL/TRIPLE-SPACE).** Resolves the M13
+  embedding-model choice the 2026-06-16 entry re-opened. **Gemini Embedding 2 for
+  the AIO-proximity path ONLY**; **`text-embedding-3-large` for the organic
+  eligibility gates AND ChatGPT-proximity** (matches GPT's judge). Safe because
+  proximity is self-contained and **scalar cosines are blended, never vectors** —
+  the "never mix vector spaces" lock holds. Invoke the dormant `GeminiEmbedder`
+  directly (independent of the app-wide `EMBEDDING_PROVIDER=openai`, which stays).
+  Open: Gemini **task type** (avoid `SEMANTIC_SIMILARITY`, the 06-16 suspect; try
+  `RETRIEVAL_*`) — now higher-stakes since proximity drives selection.
+- **Owner decision #2 — STRATEGIC PIVOT: answer-engine-first.** The brief
+  generator now optimizes **AIO + ChatGPT citation as the PRIMARY target; organic
+  ranking is the floor, not the goal.** **Divergence from the PRD/organic-first
+  brief-gen design — flagged.** Organic is kept only as the "entry ticket" (AIO/
+  ChatGPT pull from the ranked/retrieved set; you must be in it to be cited).
+- **Owner decision #3 — FULL MCS selection.** Max Cosine Synthesis **replaces**
+  the organic priority/MMR/region/information-gain selection layer: per heading
+  slot, generate a large candidate pool (entity+one-point form baked in), score
+  by cosine to the AIO + ChatGPT answers (dual-space, scalar-blended), beam-climb
+  for set coverage. The eligibility gates (relevance floor + entity-stripped
+  restatement ceiling) **demote to a pre-filter**; the 0.20 information-gain
+  weight is **removed**; no-EMQ-stuffing becomes default. The ChatGPT answer is
+  **promoted from a Step-2D fan-out source to a selection target**. **Accepted
+  risk (owner):** proximity is the research's own *low-confidence* citation signal
+  ("necessary-not-sufficient") — the X.6 measurement loop is **now required**, not
+  deferred, to find out if it pays.
+- **Heading-selection rationale "orchestrator" — considered, HELD OFF (owner,
+  2026-06-17).** MCS makes selection opaque (pure numeric proximity); there is **no
+  component that explains *why* a heading was measured/chosen** (only a
+  `discarded_headings` "why-not" record + `title_rationale` for the title +
+  aggregate §X.8 metadata). A deterministic "selection rationale ledger" (cheap —
+  MCS already computes the signals) was scoped + pros/cons weighed; **owner chose
+  to hold off for now.** Revisit when MCS is being built/validated (it's the
+  natural instrument for the X.6 loop).
+- **Section-1 design decisions are now all RESOLVED** (owner batch 2026-06-17,
+  after this entry's first draft): engine set (AIO + ChatGPT), weighting (0.5/0.5),
+  stopping rule, Gemini task type (`RETRIEVAL_*`), AIO TTL (shared 7-day), v2.6
+  rebase (directive-now), gates-as-pre-filter, ChatGPT (accept + validate via X.6),
+  and **H3 generation = HYBRID** (the late-caught item). See the doc's §0/§4/§6.
+- **Decision-fit mapping fully specced on the brief side** (doc §3.1–§3.4). Mechanism
+  A1–A5: A1 detect (Step-3 intent fold-in, LLM-judged, gate = `confidence ≥ 0.7` AND
+  ≥2 distinct conditions) → A2 reserve an anchor H2 (MCS won't drop it; X.4 still
+  form-enforces) → A3 source conditions+default (persona-gap/PAA/Reddit) → A4
+  pairing/gating co-occurrence check → A5 emit a typed `format_directive`. Writer-side
+  render+validate (B1/B2) deferred to M14. **Three spec gaps closed 2026-06-17:** A1
+  detector (§3.2) + A5 directive schema (§3.3) specced; **Commercial Page Gating
+  DEFERRED** (§3.4 — source not in our excerpt; A4 gates on the three general partner
+  factors only, `multiple_languages` dropped from the directive enum; revisit when the
+  owner supplies the section).
+- **Pre-build verifications — both do-now ones now DONE (2026-06-17):**
+  - ✅ **MCS cost estimate** (doc §5.5): embeddings are negligible (~cents; a heading
+    is ~12 tok), the driver is LLM candidate *generation*. Bounded shared pool + Haiku
+    ≈ **$0.09–$0.27/article** (under the brief budget); literal per-slot×hundreds ≈
+    $0.34–$1.03 (risks the $1.00 ceiling). **One open tuning call: cap the pool small
+    or raise the brief ceiling to ~$1.25.**
+  - ✅ **DataForSEO AIO block** (doc §5.6): CONFIRMED — the advanced endpoint we
+    already call at depth 20 returns a structured `ai_overview` item (text + quoted
+    sources → X.1's `answer_text`/`cited_sources`). Synchronous AIOs free on the
+    existing call; async needs `load_async_ai_overview: true` (+$0.0006, refunded if
+    absent/cached). X.1 rides the Step-1 SERP call with one added param. (Docs-sourced;
+    confirm field shapes on first deployed run.)
+  - ⏳ **Still gated:** the v2.6 **plan-doc reconciliation** at M13 build start
+    (directive locked) — must **map authority gaps to H3** (resolved 2026-06-17:
+    authority gaps are H3s, deliberately NOT entity-form-enforced — flagged divergence
+    from the research's X.4/X.9). Then the build itself, behind M12/SIE.
+- **Efficiency/streamlining decisions — adopted 2026-06-17 (doc §5.7), build-time:**
+  E1 **per-country locale** (international client — country input at session level,
+  English retained; lifts the US/`en` lock; ⚠️ also needs the BUILT M1–M11 pipeline
+  made locale-configurable: `sessions` field + migration + client/config constants —
+  a real code task, the international-client enabler); E2 **shared SERP fetch** between
+  Brief Gen & SIE (they duplicate it today); E3 **conditional Gemini path** (skip when
+  `aio_target.present==false`); E4 **trim the fan-out to ChatGPT + Gemini** (drop Claude
+  + Perplexity); E5 **content-hash embedding cache**; E6 **intra-brief parallelism**;
+  E7 **batch MCS candidate gen across slots**. All design-locked into the plan; code at
+  M12/M13 build time (E1 partly sooner if the international client needs research now).
+- **E1 per-country locale — ✅ BUILT on `claude/optimistic-brown-9wijtx` (`baf381b`),
+  2026-06-17** (international client is live). USA/UK/CA/AU/NZ country dropdown at session
+  creation (owner + VA) → DataForSEO `location_code` (language stays `en`). Threaded via
+  `DataForSEOClient(location_code=…)` + `get_dataforseo(loc)` (per-locale `@lru_cache`) +
+  `store.session_location_code(session)` at all 6 call sites; `create_session` persists it;
+  API allow-lists the 5 codes (422 otherwise). Migration `20260617000000_session_location.sql`
+  (sessions.location_code default 2840 + check constraint). Backend ruff-clean/py_compile OK,
+  `tests/test_locale.py` added. **NOT deployed. ⚠️ Migration is MANDATORY-FIRST:** only the
+  READ path is dormant-safe (`session_location_code` → 2840 if the column is absent);
+  `create_session` WRITES `location_code`, so deploying the code before the migration 500s
+  every new-session creation. Order: apply `20260617000000_session_location.sql` to prod
+  (Supabase MCP) → verify the Netlify build → merge/deploy. Overrides the US/English locale
+  lock (flagged divergence).
+  - **Adversarial review done (`c01bd1c`): no logic bugs.** Verified end-to-end (UK pick →
+    2826 → all SERP/expansion localized); all 6 call sites carry `location_code` (`get_session`
+    is `select("*")`, `update_session`/insert return the full row); 422 on bad codes; existing
+    tests don't touch `create_session` so none break; client is immutable/thread-safe. Two
+    fixes applied: migration → `add column if not exists` (repo convention); corrected the
+    misleading "dormant-safe" claim (the create WRITE needs the column — see above). **Residual:
+    pytest + frontend tsc/build unverified in-sandbox (no deps) → must go green in CI before
+    merge.** The 5 codes live in 3 places (API set / DB check / frontend map) — adding a market
+    touches all three.
+
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_
 
