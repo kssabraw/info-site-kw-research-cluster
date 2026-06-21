@@ -2,17 +2,23 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-> **▶ Resume here (dead-simple):** the immediate next action is still finishing the
-> **M11 / M8–M10 live-validation checklist** in **§2** (deployed-stack browser + DB
-> checks the sandbox can't run). All of the 2026-06-09 work below — writer-owned
-> titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
-> and deployed; nothing is mid-flight.
+> **▶ Resume here (dead-simple):** the immediate next action is the **M12 (SIE)
+> live-validation** — M12 is **code-complete, merged to `main`, and DEPLOYED**
+> (2026-06-21; Railway `46ea998a` SUCCESS), and its `keyword_analyses` migration is
+> applied to prod. **What's left for M12 is the owner running ONE live Term-analysis**
+> on a real cluster keyword (Owner → Cluster view → expand an article → **Term
+> analysis**; ~1–3 min, ~$0.30–$0.60) — the first real egress run, so expect minor
+> first-run calibration on the ScrapeOwl/TextRazor response shapes + the Haiku/Sonnet
+> tool schemas. **Then stop for review; M13 (Brief Generator, answer-engine-first —
+> `docs/aio-optimization-plan.md`) is next.** See the 2026-06-21 dated entry for the
+> full M12 build. (Older standing item, lower priority: the **M11 / M8–M10
+> live-validation checklist** in §2 — deployed-stack browser/DB checks; nothing
+> mid-flight.)
 >
-> **Separately, the post-v1 sequence was re-set on 2026-06-12 (owner
-> decisions; see that day's dated entries): M12 = SIE Term & Entity module
-> (`docs/sie-module-plan.md`), M13 = Brief Generator
-> (`docs/brief-generator-module-plan.md`), M14 = Writer
-> (`docs/writer-module-plan.md`), M15 = scheduling + link injection.
+> **Post-v1 sequence (owner, 2026-06-12): M12 = SIE ✅ deployed (validation pending)
+> → M13 = Brief Generator (`docs/brief-generator-module-plan.md` + the
+> answer-engine-first pivot in `docs/aio-optimization-plan.md`) → M14 = Writer
+> (`docs/writer-module-plan.md`) → M15 = scheduling + link injection.**
 > Both Brief Gen and SIE run lazily at write time only (parallel stage 1 of
 > `run_article_job`) — never during keyword research.** The AR Tools Blog Writer bundle is in
 > the repo (`docs/blog-writer-pipeline-bundle.md`, all 8 PRDs verbatim — the
