@@ -152,9 +152,21 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
+**M12 — SIE Term & Entity module: IN PROGRESS (started 2026-06-21).** Build plan:
+`docs/sie-module-plan.md`; spec: PRD #3 in the bundle. Building in dependency
+slices (see `backend/app/sie/__init__.py`): **slice 1 (foundation) done** —
+migration `20260621000000_sie_keyword_analyses.sql` (cross-session cache + RLS,
+mirroring `site_architecture`), the Final Output Model `app/sie/models.py`
+(Writer Input C, `schema_version 1.4`), package skeleton. NB: SIE uses the
+session's `location_code` (per E1), not the plan's hardcoded 2840. Next: slice 2
+(pure core — extract/ngrams/scoring + unit tests). **Migration NOT yet applied to
+prod** (apply when the module is wired + ready to validate).
+
 **v1 MVP — complete. M11 is merged to `main` and deployed (M1–M11 all built,
-all live).** State as of 2026-06-11; `handoff.md`'s dated entries are the live
-log and supersede the per-milestone history below where they conflict.
+all live).** Plus **E1 per-country locale** shipped 2026-06-17 (USA/UK/CA/AU/NZ,
+session `location_code` → DataForSEO). State as of 2026-06-11; `handoff.md`'s
+dated entries are the live log and supersede the per-milestone history below where
+they conflict.
 
 **Post-M11 work already shipped to `main` + deployed (2026-06-09, owner
 decisions; nothing mid-flight):**
