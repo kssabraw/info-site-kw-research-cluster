@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import TermAnalysisPanel from "./TermAnalysisPanel";
 import {
   acceptGap,
   bulkKeywordMove,
@@ -240,6 +241,7 @@ function ArticleRow(p: {
   const [splitMode, setSplitMode] = useState(false);
   const [splitSel, setSplitSel] = useState<Set<string>>(new Set());
   const [showVariants, setShowVariants] = useState(false);
+  const [showSie, setShowSie] = useState(false);   // M12 SIE Term-analysis panel
 
   // Display-time dedup: rows with dedupe_canonical_id are near-duplicates of
   // another keyword in this cluster (the canonical). Hide them from the main
@@ -331,6 +333,27 @@ function ArticleRow(p: {
           <DetailLine label="Primary">
             {primary?.keyword ?? <span className="cell-muted">— (no primary)</span>}
           </DetailLine>
+
+          {!isVA && (
+            <div style={{ margin: "6px 0" }}>
+              <button
+                className="btn btn-sm"
+                disabled={!primary?.keyword}
+                onClick={() => setShowSie(true)}
+                title="SurferSEO-style on-page term & entity analysis of the top-20 SERP"
+              >
+                Term analysis
+              </button>
+            </div>
+          )}
+          {showSie && primary?.keyword && (
+            <TermAnalysisPanel
+              sessionId={p.sessionId}
+              clusterId={c.id}
+              keyword={primary.keyword}
+              onClose={() => setShowSie(false)}
+            />
+          )}
 
           <DetailLine label="Intent">
             {isVA ? (

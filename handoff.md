@@ -37,6 +37,35 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
 
+_2026-06-21 — M12 (SIE Term & Entity module) CODE-COMPLETE, pending deploy:_
+
+- **Built the full 14-module SIE pipeline** (`backend/app/sie/`, plan
+  `docs/sie-module-plan.md`, spec PRD #3) on `claude/optimistic-brown-9wijtx` in 6
+  committed slices: foundation (migration `20260621000000_sie_keyword_analyses.sql`
+  cross-session 7-day cache + RLS mirroring `site_architecture`; Final Output Model
+  `models.py` = Writer **Input C, schema_version 1.4**); pure core (M5-14:
+  extract/ngrams/filters/scoring — 5 noise layers, n-grams+subsumption+coverage gate,
+  TF-IDF, 6-weight scoring + quadgram multipliers, safe/aggressive usage ranges);
+  egress clients (M2-4,10-11: DataForSEO `serp_top_results`, Haiku URL classify +
+  pure near-dup, ScrapeOwl, TextRazor NER pass-1 + Sonnet pass-2 with may-not-invent
+  guard, OpenAI semantic + dynamic threshold, entity→term merge w/ dual-signal
+  1.15x); orchestration (`pipeline.analyze` M1→M14, `cache.py`, `run_sie_job`
+  `@_metered("sie_analysis")`); owner-only `term-analysis` API + `TermAnalysisPanel`
+  report UI; deps (bs4/lxml/spaCy + `en_core_web_sm` in the Dockerfile).
+- **Reconciliations:** SIE uses the session's `location_code` (E1), not the plan's
+  hardcoded 2840; built `models.py` to the live Input C **1.4** (consumer wins), so
+  per-term confidence/reason aren't persisted (report shows score+entity+usage).
+- **Validation:** **23 pure-module tests green in-sandbox** (stdlib only — the
+  egress clients lazy-import httpx/spaCy/app so the pure heart stays testable); ruff
+  clean; **frontend build green**. **Egress UNVALIDATED** (sandbox can't reach
+  DataForSEO/ScrapeOwl/TextRazor/OpenAI) — live-validate on deploy.
+- **Remaining to ship:** (1) ✅ **migration APPLIED to prod 2026-06-21**
+  (`20260621000000_sie_keyword_analyses.sql`, AR-Internal-Tools; verified table + RLS
+  + 4 policies + 2 indexes + 2 FKs; backward-compatible, current `main` doesn't touch
+  it); (2) merge + deploy — Railway rebuilds the image **incl. the spaCy model
+  download** (first build slower); (3) live-validate via the owner Term-analysis action
+  on a real cluster keyword, then **stop for review** (milestone discipline).
+
 _2026-06-17 — Brief Generator (M13) re-aimed ANSWER-ENGINE-FIRST; new AIO
 planning doc. Docs-only, on branch `claude/optimistic-brown-9wijtx` (NOT merged
 to `main`, no code touched):_
@@ -128,28 +157,36 @@ to `main`, no code touched):_
   + Perplexity); E5 **content-hash embedding cache**; E6 **intra-brief parallelism**;
   E7 **batch MCS candidate gen across slots**. All design-locked into the plan; code at
   M12/M13 build time (E1 partly sooner if the international client needs research now).
-- **E1 per-country locale — ✅ BUILT on `claude/optimistic-brown-9wijtx` (`baf381b`),
-  2026-06-17** (international client is live). USA/UK/CA/AU/NZ country dropdown at session
-  creation (owner + VA) → DataForSEO `location_code` (language stays `en`). Threaded via
+- **E1 per-country locale — ✅ MERGED TO `main` + DEPLOYING (2026-06-17)** (international
+  client is live). USA/UK/CA/AU/NZ country dropdown at session creation (owner + VA) →
+  DataForSEO `location_code` (language stays `en`). Threaded via
   `DataForSEOClient(location_code=…)` + `get_dataforseo(loc)` (per-locale `@lru_cache`) +
   `store.session_location_code(session)` at all 6 call sites; `create_session` persists it;
-  API allow-lists the 5 codes (422 otherwise). Migration `20260617000000_session_location.sql`
-  (sessions.location_code default 2840 + check constraint). Backend ruff-clean/py_compile OK,
-  `tests/test_locale.py` added. **NOT deployed. ⚠️ Migration is MANDATORY-FIRST:** only the
-  READ path is dormant-safe (`session_location_code` → 2840 if the column is absent);
-  `create_session` WRITES `location_code`, so deploying the code before the migration 500s
-  every new-session creation. Order: apply `20260617000000_session_location.sql` to prod
-  (Supabase MCP) → verify the Netlify build → merge/deploy. Overrides the US/English locale
-  lock (flagged divergence).
-  - **Adversarial review done (`c01bd1c`): no logic bugs.** Verified end-to-end (UK pick →
-    2826 → all SERP/expansion localized); all 6 call sites carry `location_code` (`get_session`
-    is `select("*")`, `update_session`/insert return the full row); 422 on bad codes; existing
-    tests don't touch `create_session` so none break; client is immutable/thread-safe. Two
-    fixes applied: migration → `add column if not exists` (repo convention); corrected the
-    misleading "dormant-safe" claim (the create WRITE needs the column — see above). **Residual:
-    pytest + frontend tsc/build unverified in-sandbox (no deps) → must go green in CI before
-    merge.** The 5 codes live in 3 places (API set / DB check / frontend map) — adding a market
-    touches all three.
+  API allow-lists the 5 codes (422 otherwise). Country list lives in **3 places** (API set
+  `storage/silo.SUPPORTED_LOCATION_CODES` / DB check constraint / frontend `SUPPORTED_COUNTRIES`)
+  — adding a market touches all three. Overrides the US/English locale lock (flagged divergence).
+  - **Deploy sequence DONE (2026-06-17), in order:**
+    1. **Migration applied to prod** (`20260617000000_session_location.sql`, AR-Internal-Tools
+       `wvcthtmmcmhkybcesirb`, via Supabase MCP). Verified: `location_code` default `2840` +
+       check constraint present + **all 8 existing rows backfilled to US**. (Migration was
+       mandatory-FIRST: only the read path defaults to 2840; `create_session` *writes* the
+       column, so code-before-migration would 500 new sessions.)
+    2. **Build confirmed green** — note: NO GitHub Actions test/build CI exists (only
+       `pages-build-deployment`); the repo builds at deploy time. Confirmed directly with
+       `npm ci && npm run build` (tsc + vite, exit 0) — the previously-unverified frontend risk.
+       Backend ruff/py_compile clean; **backend pytest NOT run in-sandbox** (PyJWT system-pkg
+       conflict + python-louvain wheel fail — environmental). `tests/test_locale.py` runs in
+       a real env.
+    3. **Merged `claude/optimistic-brown-9wijtx` → `main` `--no-ff` (`beea52f`)**, 23 commits
+       (E1 code + all AIO planning docs), zero divergence. Push triggered Railway (backend) +
+       Netlify (frontend) auto-deploy. Railway `info-site-kw-research-cluster` deploy
+       `df12e5b1` = **✅ SUCCESS** (backend live with the new code; migration already
+       applied so it finds `location_code`). E1 is fully shipped.
+  - **Adversarial review (`c01bd1c`): no logic bugs.** End-to-end UK trace (2826 → all
+    SERP/expansion localized); all 6 sites carry `location_code` (`get_session` `select("*")`,
+    `update_session`/insert return the row); 422 on bad codes; no existing test touches
+    `create_session`; client immutable/thread-safe. Fixes: migration `if not exists`; corrected
+    the "dormant-safe" wording.
 
 _2026-06-16 — Gemini embeddings cutover executed, then ROLLED BACK; logging gap
 noted; build path resumes at M12=SIE:_

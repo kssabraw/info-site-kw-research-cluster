@@ -21,6 +21,12 @@ dependencies = [
   "python-louvain>=0.16,<0.17",
   "numpy>=1.26,<3.0",
   "lingua-language-detector>=2.0,<3.0",
+  # M12 SIE Term & Entity module (docs/sie-module-plan.md): page scraping/zone
+  # extraction (bs4+lxml) and the locked spaCy lemmatizer. The en_core_web_sm
+  # model is downloaded in the Dockerfile (§9 #1 — accepted in the image).
+  "beautifulsoup4>=4.12,<5.0",
+  "lxml>=5.0,<6.0",
+  "spacy>=3.7,<4.0",
 ]
 
 [project.optional-dependencies]
