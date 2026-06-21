@@ -65,12 +65,26 @@ class AggregatedTerm:
     total_count: int = 0
     pages: set[str] = field(default_factory=set)              # unique urls
     zones: dict[str, ZoneStat] = field(default_factory=dict)
-    per_page_count: dict[str, int] = field(default_factory=dict)  # url -> count (Layer 5)
+    per_page_count: dict[str, int] = field(default_factory=dict)  # url -> count (Layer 5, M9 tf)
+    # zone -> url -> count (M14 per-zone percentiles).
+    zone_page_count: dict[str, dict[str, int]] = field(default_factory=dict)
     quadgram_zone_flag: bool = False
     subsumed_terms: list[str] = field(default_factory=list)
     passes_coverage: bool = False
     coverage_exception: str | None = None
     low_coverage: bool = False
+    # Scoring inputs populated by later modules (M9 tfidf, M10 semantic, M11 entity,
+    # M3-derived intent) and the M13 outputs.
+    tfidf: float = 0.0
+    passes_tfidf: bool = True
+    semantic_similarity: float = 0.0
+    intent_alignment: float = 0.0
+    is_entity: bool = False
+    avg_salience: float = 0.0
+    recommendation_score: float = 0.0
+    confidence: str = "low"
+    reason: str = ""
+    zone_boost_applied: bool = False
 
     @property
     def pages_found(self) -> int:
@@ -123,6 +137,7 @@ def aggregate_pages(
                 zs = agg._zone(zone)
                 zs.total_count += count
                 zs.pages.add(page.url)
+                agg.zone_page_count.setdefault(zone, {})[page.url] = count
 
     for agg in terms.values():
         if agg.n == MAX_N:
@@ -171,6 +186,10 @@ def subsume(
                 lz.pages |= zs.pages
             for url, c in shorter.per_page_count.items():
                 longer.per_page_count[url] = longer.per_page_count.get(url, 0) + c
+            for zone, pc in shorter.zone_page_count.items():
+                dst = longer.zone_page_count.setdefault(zone, {})
+                for url, c in pc.items():
+                    dst[url] = dst.get(url, 0) + c
             longer.subsumed_terms.append(shorter.term)
             del survivors[shorter.term]
     return survivors

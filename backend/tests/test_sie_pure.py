@@ -10,7 +10,12 @@ from app.sie.extract import (
     cross_page_fingerprint, frequency_anomaly_terms, heuristic_keep,
     is_cta, is_service_area_list, normalize_block,
 )
-from app.sie.ngrams import aggregate_pages, coverage_gate, make_ngrams, subsume
+from app.sie.ngrams import AggregatedTerm, ZoneStat, aggregate_pages, coverage_gate, make_ngrams, subsume
+from app.sie.filters import compute_tfidf, tfidf_gate
+from app.sie.scoring import (
+    _safe_exclude_outliers, minmax_normalize, percentile, quadgram_zone_multiplier,
+    recommend_word_count, score_terms, usage_range,
+)
 
 # A trivial lemmatizer for tests: lowercase split, mark a few stopwords.
 _STOPS = {"how", "to", "a", "the", "is", "of", "for"}
@@ -148,6 +153,87 @@ def test_coverage_gate_threshold_and_exceptions():
     coverage_gate(rt, rp + [_page("https://c.com", rank=4)], threshold=3)
     assert rt["niche rare"].passes_coverage is True
     assert rt["niche rare"].coverage_exception == "rank 1-3 only, 2+ unique domains"
+
+
+def _zp(url, wc):
+    return ZonePage(url=url, domain=url, zones=Zones(), word_count=wc)
+
+
+def _term(term, n=2, **kw):
+    t = AggregatedTerm(term=term, n=n)
+    for k, v in kw.items():
+        setattr(t, k, v)
+    return t
+
+
+# ----- Module 9: TF-IDF ------------------------------------------------------
+
+def test_tfidf_idf_zero_for_ubiquitous_term_and_gate():
+    pages = [_zp(f"https://{d}.com", 100) for d in "abc"]
+    terms = {
+        "rare": _term("rare", per_page_count={"https://a.com": 5}, pages={"https://a.com"}),
+        "common": _term("common", per_page_count={u.url: 5 for u in pages},
+                        pages={u.url for u in pages}),
+    }
+    compute_tfidf(terms, pages)
+    assert terms["common"].tfidf == 0.0            # on every page -> idf 0
+    assert terms["rare"].tfidf > 0.005
+    tfidf_gate(terms)
+    assert terms["rare"].passes_tfidf is True and terms["common"].passes_tfidf is False
+
+
+def test_tfidf_gate_preserves_coverage_exception():
+    t = _term("niche", tfidf=0.0, coverage_exception="rank 1-3 only, 2+ unique domains")
+    tfidf_gate({"niche": t})
+    assert t.passes_tfidf is True                  # exception overrides low tfidf
+
+
+# ----- Module 12: word count -------------------------------------------------
+
+def test_recommend_word_count_filters_and_percentiles():
+    pages = [_zp("u", w) for w in (500, 900, 1500, 2000, 6000)]
+    lo, target, hi, src = recommend_word_count(pages)
+    assert src == [900, 1500, 2000]                # 500/6000 filtered out
+    assert target == 1500 and lo <= target <= hi
+
+
+# ----- Module 13: scoring ----------------------------------------------------
+
+def test_minmax_and_percentile():
+    assert minmax_normalize([5, 5, 5]) == [0.5, 0.5, 0.5]    # all-equal rule
+    assert minmax_normalize([0, 10])[0] == 0.0 and minmax_normalize([0, 10])[1] == 1.0
+    assert percentile([1, 2, 3, 4], 0.5) == 2.5
+
+
+def test_quadgram_multiplier_and_boost():
+    quad = _term("a b c d", n=4, pages={"u1", "u2"},
+                 zones={"h2": ZoneStat(total_count=2, pages={"u1", "u2"})})
+    assert quadgram_zone_multiplier(quad) == 1.4
+    bigram = _term("e f", n=2, pages={"u1"}, zones={"paragraphs": ZoneStat(pages={"u1"})})
+    score_terms([quad, bigram], rank_by_url={"u1": 1, "u2": 2})
+    assert quad.zone_boost_applied is True and bigram.zone_boost_applied is False
+
+
+# ----- Module 14: usage recommendations -------------------------------------
+
+def test_safe_mode_excludes_3x_median_outlier():
+    freqs = [2.0] * 9 + [18.0]
+    kept = _safe_exclude_outliers(freqs)
+    assert 18.0 not in kept and kept.count(2.0) == 9
+
+
+def test_usage_range_safe_vs_aggressive_and_cap():
+    wc = {f"u{i}": 1000 for i in range(10)}
+    zpc = {f"u{i}": 2 for i in range(9)}
+    zpc["u9"] = 18
+    t = _term("x", zone_page_count={"paragraphs": zpc})
+    safe = usage_range(t, "paragraphs", 1000, wc, mode="safe")
+    aggressive = usage_range(t, "paragraphs", 1000, wc, mode="aggressive")
+    assert safe[2] == 2                            # outlier excluded -> max 2
+    assert aggressive[2] >= safe[2]                # outlier inflates aggressive
+    # 10-per-1000 cap: a term used 50x/1000 words caps at 10 at target 1000 wc.
+    hot = _term("y", zone_page_count={"paragraphs": {f"u{i}": 50 for i in range(5)}})
+    assert usage_range(hot, "paragraphs", 1000, {f"u{i}": 1000 for i in range(5)})[2] == 10
 
 
 def _run_all():
