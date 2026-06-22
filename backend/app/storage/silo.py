@@ -1287,18 +1287,27 @@ def get_keyword_texts(keyword_ids: list[str]) -> dict[str, str]:
 def get_cluster_supporting_keywords(cluster_id: str, *, limit: int = 60) -> list[str]:
     """The cluster's non-primary keyword texts (the clustered research that the brief's
     primary keyword doesn't directly drive). Feeds the brief H3 pool + the coverage audit."""
-    client = get_service_client()
+    return [r["keyword"] for r in get_cluster_keyword_rows(cluster_id, limit=limit)
+            if not r.get("is_primary_for_cluster")]
+
+
+def get_cluster_keyword_rows(cluster_id: str, *, limit: int = 200) -> list[dict]:
+    """The cluster's keyword rows ({id, keyword, is_primary_for_cluster}) — used to map the
+    coverage audit's uncovered keyword *texts* back to row ids for the auto-split."""
     res = (
-        client.table("keywords")
-        .select("keyword, is_primary_for_cluster")
+        get_service_client()
+        .table("keywords")
+        .select("id, keyword, is_primary_for_cluster")
         .eq("cluster_id", cluster_id)
         .limit(limit)
         .execute()
     )
-    return [
-        r["keyword"] for r in (res.data or [])
-        if r.get("keyword") and not r.get("is_primary_for_cluster")
-    ]
+    return res.data or []
+
+
+def mark_cluster_auto_split(cluster_id: str) -> None:
+    """Flag a cluster as auto-split so its own write won't re-prompt to split (recursion guard)."""
+    get_service_client().table("clusters").update({"auto_split": True}).eq("id", cluster_id).execute()
 
 
 def persist_architecture(session_id: str, architecture_json: dict) -> dict:
@@ -1340,7 +1349,7 @@ def get_architecture(session_id: str) -> dict | None:
 _CLUSTER_COLS = (
     "id, topic_id, name, primary_keyword_id, intent, intent_locked, suggested_h2s, "
     "peer_article_links, source_statistical_grouping_id, orchestrator_notes, "
-    "is_user_edited, is_gap_placeholder, created_at"
+    "is_user_edited, is_gap_placeholder, auto_split, created_at"
 )
 
 

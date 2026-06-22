@@ -1668,3 +1668,14 @@ def get_article(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No article yet")
     return {"status": "complete", "keyword": keyword, "article": row["article_json"]}
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/split-uncovered")
+def split_uncovered(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Owner-confirmed (from the article's 'unused keywords' prompt): group this cluster's
+    uncovered keywords into new articles and queue them for generation. Recursion-guarded;
+    uncapped (owner choice)."""
+    keyword, location_code, sid = _cluster_keyword_and_location(user, session_id, cluster_id)
+    return jobs.split_uncovered_and_write(sid, cluster_id, keyword, location_code)

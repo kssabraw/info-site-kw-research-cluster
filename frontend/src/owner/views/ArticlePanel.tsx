@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { getArticle, startArticle, type ArticleOutput } from "../../shared/api";
+import {
+  getArticle,
+  splitUncovered,
+  startArticle,
+  type ArticleOutput,
+} from "../../shared/api";
 
 // M14 Content Writer — owner-only article readout. Starts generation on open (ensures
 // the Brief + SIE as stage 1, then writes), polls until the article lands, then renders
@@ -87,6 +92,25 @@ export default function ArticlePanel(props: {
   const meta = (article?.metadata ?? {}) as Record<string, unknown>;
   const num = (k: string) => (typeof meta[k] === "number" ? (meta[k] as number) : undefined);
 
+  // In-app prompt: clustered keywords that no heading covered. Owner confirms to write
+  // each (grouped) one as its own article.
+  const unused = (Array.isArray(meta["unused_keywords"]) ? meta["unused_keywords"] : []) as string[];
+  const [splitState, setSplitState] = useState<"idle" | "running" | "done" | "dismissed">("idle");
+  const [splitMsg, setSplitMsg] = useState<string | null>(null);
+  const confirmSplit = async () => {
+    setSplitState("running");
+    try {
+      const res = await splitUncovered(sessionId, clusterId);
+      setSplitMsg(
+        `Started ${res.submitted} new article${res.submitted === 1 ? "" : "s"} from ${res.uncovered} unused keyword(s).`,
+      );
+      setSplitState("done");
+    } catch (e) {
+      setSplitMsg(e instanceof Error ? e.message : "Failed to start split articles");
+      setSplitState("idle");
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal card" style={{ maxWidth: 900 }} onClick={(e) => e.stopPropagation()}>
@@ -119,6 +143,29 @@ export default function ArticlePanel(props: {
                   </span>
                 )}
             </div>
+            {unused.length > 0 && splitState !== "dismissed" && (
+              <div className="banner banner-warn" style={{ display: "grid", gap: 8 }}>
+                <div>
+                  <strong>{unused.length} researched keyword{unused.length === 1 ? "" : "s"} weren't covered by this article:</strong>{" "}
+                  <span style={{ fontSize: 13 }}>{unused.join(", ")}</span>
+                </div>
+                {splitState === "done" ? (
+                  <div style={{ fontSize: 13 }}>{splitMsg}</div>
+                ) : (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button className="btn btn-sm" disabled={splitState === "running"} onClick={confirmSplit}>
+                      {splitState === "running" ? "Starting…" : "Write these as separate articles"}
+                    </button>
+                    <button className="link-btn" onClick={() => setSplitState("dismissed")}>
+                      Dismiss
+                    </button>
+                    {splitMsg && splitState === "idle" && (
+                      <span className="form-error" style={{ fontSize: 13 }}>{splitMsg}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <button className="btn btn-sm" style={{ justifySelf: "start" }} onClick={() => setForceNext((f) => !f)}>
               Regenerate
             </button>

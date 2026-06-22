@@ -883,3 +883,14 @@ export const generateArticles = (sessionId: string, clusterIds: string[]) =>
     method: "POST",
     body: JSON.stringify({ cluster_ids: clusterIds }),
   });
+
+export interface SplitUncoveredResponse {
+  created: { cluster_id: string; name: string; keywords: string[]; submitted: boolean }[];
+  submitted: number;
+  uncovered: number;
+}
+export const splitUncovered = (sessionId: string, clusterId: string) =>
+  request<SplitUncoveredResponse>(
+    `/sessions/${sessionId}/clusters/${clusterId}/split-uncovered`,
+    { method: "POST" },
+  );
