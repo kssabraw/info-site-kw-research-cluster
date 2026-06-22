@@ -21,9 +21,11 @@ from typing import Callable
 
 from .assemble import build_brief_output
 from .authority import generate_authority_gaps
+from .decision_fit import build_decision_fit_directive, detect_partner_factor
 from .entity import derive_main_entity
 from .faq import generate_faqs
 from .gates import prefilter
+from .h3 import merge_h3s, select_h3s
 from .intent import classify_intent
 from .mcs import MCSDeps, run_mcs
 from .models import BriefOutput
@@ -137,20 +139,20 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
         gate_fn=gate_fn,
     )
 
-    # Step 9 authority-gap H3s (enrichment; degrades to []) — differentiation under the H2s.
     h2_texts = [s.text for s in mcs.selected]
     reddit_summaries = [d.get("content") or d.get("title") or "" for d in sources.reddit]
-    authority_h3s = generate_authority_gaps(
-        keyword, title=title.title, scope_statement=title.scope_statement,
-        intent_type=intent.intent_type, h2_texts=h2_texts, reddit_summaries=reddit_summaries,
-        llm=deps.gen_llm,
-    )
 
-    # Step 6 persona (informational; degrades to empty) — gap questions feed the FAQ pool.
+    # Step 6 persona (informational; degrades to empty) — gap questions feed FAQ + H3s.
     persona = generate_persona(
         keyword, intent_type=intent.intent_type, title=title.title,
         scope_statement=title.scope_statement, serp_h1s=serp_titles, serp_metas=serp_metas,
         candidate_headings=h2_texts, llm=deps.intent_llm,
+    )
+    # Step 9 authority-gap H3s (enrichment; degrades to []) — differentiation under the H2s.
+    authority_h3s = generate_authority_gaps(
+        keyword, title=title.title, scope_statement=title.scope_statement,
+        intent_type=intent.intent_type, h2_texts=h2_texts, reddit_summaries=reddit_summaries,
+        llm=deps.gen_llm,
     )
     # Steps 10/10.5 FAQ generation + intent gate.
     faqs, faq_meta = generate_faqs(
@@ -159,8 +161,54 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
         primary_goal=persona.primary_goal, heading_texts=[title.title, *h2_texts],
         embed_3large=deps.embed_3large, classify_llm=deps.gen_llm, concern_llm=deps.gen_llm,
     )
+    # Step 8.6 regular H3 selection (coverage-graph regions) + merge with authority H3s.
+    regular_by_h2 = select_h3s(
+        h2_texts=h2_texts, candidates=_h3_candidates(sources, persona),
+        scope_statement=title.scope_statement, embed_3large=deps.embed_3large,
+    )
+    authority_by_h2: dict[str, list[dict]] = {}
+    for a in authority_h3s:
+        authority_by_h2.setdefault(a["parent_h2_text"], []).append(a)
+    h3s_by_h2 = merge_h3s(regular_by_h2, authority_by_h2)
+
+    # Decision-fit (A3 source -> A4 gate -> A5 emit) — only on a qualifying multi-answer query.
+    directive = None
+    if intent.decision_fit_qualifies and h2_texts:
+        heading_dicts = ([{"text": t, "source": "mcs"} for t in h2_texts]
+                         + [{"text": a["text"], "source": "authority_gap_sme"} for a in authority_h3s])
+        directive = build_decision_fit_directive(
+            intent.decision_fit_detection, anchor_h2_text=h2_texts[0],
+            persona_gaps=persona.gap_questions, paa=sources.paa, reddit=sources.reddit,
+            partner_factor=detect_partner_factor(intent.intent_type, heading_dicts),
+            llm=deps.intent_llm,
+        )
 
     return build_brief_output(
         keyword=keyword, intent=intent, title=title, entity=entity, mcs=mcs, sources=sources,
-        persona=persona, faqs=faqs, authority_h3s=authority_h3s, extra_metadata=faq_meta,
+        persona=persona, faqs=faqs, h3s_by_h2=h3s_by_h2, decision_fit_directive=directive,
+        extra_metadata=faq_meta,
     )
+
+
+def _h3_candidates(sources, persona) -> list:
+    """Build the H3 subtopic candidate pool (info-gain sources: PAA + autocomplete +
+    suggestions + persona gaps), deduped."""
+    from .h3 import H3Candidate
+
+    seen: set[str] = set()
+    out: list = []
+    def _add(text: str, src: str) -> None:
+        t = (text or "").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(H3Candidate(t, src))
+
+    for q in sources.paa:
+        _add(q, "paa")
+    for s in sources.autocomplete:
+        _add(s, "autocomplete")
+    for s in sources.suggestions:
+        _add(s, "keyword_suggestion")
+    for g in persona.gap_questions:
+        _add(g.get("question"), "persona_gap")
+    return out

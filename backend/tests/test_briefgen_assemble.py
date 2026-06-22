@@ -52,27 +52,34 @@ def test_build_brief_output_assembles_v26():
     assert b.metadata["mcs"]["selected_count"] == 2
 
 
-def test_build_brief_output_interleaves_authority_h3s():
-    intent = _intent("informational")
+def test_build_brief_output_interleaves_h3s_and_directive():
+    intent = _intent("comparison", 0.9)
     title = TitleScope(title="T", scope_statement="Covers x. Does not cover y.")
     entity = MainEntity(canonical="e")
     mcs = MCSResult(
         selected=[ScoredHeading("H2 one", [0.9], 0.8, 0.9, 0.85),
                   ScoredHeading("H2 two", [0.8], 0.7, 0.8, 0.75)],
         pool=["a"], discarded=[])
-    authority = [
-        {"text": "deep H3", "parent_h2_text": "H2 one", "scope_alignment_note": "in scope"},
-        {"text": "extra H3", "parent_h2_text": "H2 one"},
-        {"text": "third H3", "parent_h2_text": "H2 one"},          # >2 -> dropped
-        {"text": "orphan", "parent_h2_text": "nope"},               # no parent -> dropped
-    ]
+    h3s = {"H2 one": [
+        {"text": "reg H3", "source": "coverage_graph", "parent_h2_text": "H2 one",
+         "parent_relevance": 0.72, "region_id": "1"},
+        {"text": "auth H3", "source": "authority_gap_sme", "parent_h2_text": "H2 one",
+         "scope_alignment_note": "in scope"},
+    ]}
+    directive = {"type": "decision_fit", "anchor_h2_text": "H2 one",
+                 "branches": [{"condition": "a", "option": "x"}, {"condition": "b", "option": "y"}],
+                 "default_statement": "d", "partner_factor": "comparative_depth"}
     b = build_brief_output(keyword="k", intent=intent, title=title, entity=entity, mcs=mcs,
-                           sources=BriefSources(keyword="k"), authority_h3s=authority)
+                           sources=BriefSources(keyword="k"), h3s_by_h2=h3s,
+                           decision_fit_directive=directive)
     assert [(h.level, h.text) for h in b.heading_structure] == [
-        ("H1", "T"), ("H2", "H2 one"), ("H3", "deep H3"), ("H3", "extra H3"), ("H2", "H2 two")]
+        ("H1", "T"), ("H2", "H2 one"), ("H3", "reg H3"), ("H3", "auth H3"), ("H2", "H2 two")]
     assert [h.order for h in b.heading_structure] == [1, 2, 3, 4, 5]
-    h3 = b.heading_structure[2]
-    assert h3.source == "authority_gap_sme" and h3.parent_h2_text == "H2 one" and h3.exempt is True
+    h2_one, reg, auth = b.heading_structure[1], b.heading_structure[2], b.heading_structure[3]
+    assert h2_one.format_directive["type"] == "decision_fit" and h2_one.format_directive["section_id"] == 2
+    assert reg.source == "coverage_graph" and reg.parent_relevance == 0.72
+    assert auth.source == "authority_gap_sme" and auth.exempt is True
+    assert b.metadata["decision_fit_directive_emitted"] is True
 
 
 def test_generate_authority_gaps_restricts_parent_to_h2s():
