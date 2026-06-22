@@ -79,6 +79,16 @@ export default function BriefPanel(props: {
   const bool = (k: string) => fd[k] === true;
   const indent = (level: string) => (level === "H3" ? 24 : level === "H2" ? 12 : 0);
 
+  // 2b coverage audit: which of the cluster's supporting keywords a heading covers vs.
+  // fell through (so clustered research is visible, not silently dropped).
+  const coverage = (brief?.metadata?.["cluster_keyword_coverage"] ?? null) as {
+    total?: number;
+    covered_count?: number;
+    uncovered_count?: number;
+    used_as_subtopic?: string[];
+    uncovered?: { keyword: string; nearest: string | null; cosine: number }[];
+  } | null;
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal card" style={{ maxWidth: 880 }} onClick={(e) => e.stopPropagation()}>
@@ -155,6 +165,45 @@ export default function BriefPanel(props: {
                     <li key={i}><strong>{f.question}</strong>{f.answer ? ` — ${f.answer}` : ""}</li>
                   ))}
                 </ul>
+              </section>
+            )}
+
+            {coverage && (coverage.total ?? 0) > 0 && (
+              <section>
+                <h3>
+                  Clustered-keyword coverage{" "}
+                  <span className="cell-muted" style={{ fontWeight: 400, fontSize: 13 }}>
+                    {coverage.covered_count ?? 0}/{coverage.total} covered
+                  </span>
+                </h3>
+                {(coverage.used_as_subtopic?.length ?? 0) > 0 && (
+                  <p className="muted" style={{ fontSize: 13, margin: "2px 0 8px" }}>
+                    Used as subtopics: {coverage.used_as_subtopic!.join(", ")}
+                  </p>
+                )}
+                {(coverage.uncovered?.length ?? 0) > 0 ? (
+                  <>
+                    <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
+                      Researched but not covered by any heading — consider Split, or accept as out of scope:
+                    </div>
+                    <ul style={{ fontSize: 13, margin: 0 }}>
+                      {coverage.uncovered!.map((u, i) => (
+                        <li key={i}>
+                          <strong>{u.keyword}</strong>
+                          {u.nearest && (
+                            <span className="cell-muted">
+                              {" "}· nearest: "{u.nearest}" ({u.cosine.toFixed(2)})
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+                    Every clustered keyword is covered by a heading.
+                  </p>
+                )}
               </section>
             )}
 

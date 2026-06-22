@@ -752,9 +752,13 @@ def run_brief_job(
     meter = current_meter()
     before = meter.snapshot()[0] if meter else 0.0
     try:
+        from app.storage import silo as store
+
+        supporting = store.get_cluster_supporting_keywords(cluster_id)
         deps = build_brief_deps(location_code)
         output = generate_brief(
-            keyword, location_code=location_code, deps=deps, intent_override=override)
+            keyword, location_code=location_code, deps=deps, intent_override=override,
+            supporting_keywords=supporting)
     except Exception as exc:  # noqa: BLE001 — brief is a side analysis; never crash the worker
         logger.error(
             "step_failed",

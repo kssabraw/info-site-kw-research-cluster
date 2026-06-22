@@ -1284,6 +1284,23 @@ def get_keyword_texts(keyword_ids: list[str]) -> dict[str, str]:
     return out
 
 
+def get_cluster_supporting_keywords(cluster_id: str, *, limit: int = 60) -> list[str]:
+    """The cluster's non-primary keyword texts (the clustered research that the brief's
+    primary keyword doesn't directly drive). Feeds the brief H3 pool + the coverage audit."""
+    client = get_service_client()
+    res = (
+        client.table("keywords")
+        .select("keyword, is_primary_for_cluster")
+        .eq("cluster_id", cluster_id)
+        .limit(limit)
+        .execute()
+    )
+    return [
+        r["keyword"] for r in (res.data or [])
+        if r.get("keyword") and not r.get("is_primary_for_cluster")
+    ]
+
+
 def persist_architecture(session_id: str, architecture_json: dict) -> dict:
     """Upsert the session's one architecture row (PRD §13: session_id is the PK,
     so a re-generate replaces in place). Regeneration resets is_user_edited and
