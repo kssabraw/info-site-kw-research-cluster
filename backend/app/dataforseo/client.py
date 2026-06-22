@@ -365,3 +365,39 @@ class DataForSEOClient:
             if len(paths) >= top_n:
                 break
         return paths
+
+    # ----- M13 Brief Generator sources (Steps 1-2) ------------------------
+    # Thin egress: these return the RAW DataForSEO items[]; the brief module's
+    # pure parsers (app/briefgen/sources.py) shape them, so the parsing is
+    # unit-testable without egress. Reddit + LLM-Responses + the AIO block are
+    # docs-derived shapes — confirm on the first deployed brief run.
+
+    def serp_advanced_items(
+        self, keyword: str, depth: int = 20, *, load_async_aio: bool = True
+    ) -> list[dict]:
+        """Brief Gen Step 1 (+ X.1 AIO capture) + Step 2A PAA + Step 2B discussion
+        threads in ONE SERP-advanced call (efficiency E2/E3): returns the raw items[]
+        (organic + ai_overview + people_also_ask + discussions_and_forums).
+        `load_async_aio` adds `load_async_ai_overview` to capture async AIOs too
+        (+$0.0006, refunded if absent/cached; aio-optimization-plan.md §5.6)."""
+        payload = {
+            "keyword": keyword, "location_code": self._location_code,
+            "language_code": self._language_code, "depth": depth,
+            "people_also_ask_click_depth": 1,
+        }
+        if load_async_aio:
+            payload["load_async_ai_overview"] = True
+        task = self._post("/v3/serp/google/organic/live/advanced", [payload])
+        return (task.get("result") or [{}])[0].get("items") or []
+
+    def llm_response_items(self, prompt: str, provider: str) -> list[dict]:
+        """Brief Gen Step 2D (one LLM's answer): DataForSEO AI Optimization "LLM
+        Responses". `provider` ∈ {`chat_gpt`, `gemini`} (E4 trims Claude + Perplexity).
+        Endpoint path + payload + response shape are docs-derived — confirm live.
+        Returns raw items[]."""
+        task = self._post(
+            f"/v3/ai_optimization/{provider}/llm_responses/live",
+            [{"user_prompt": prompt, "location_code": self._location_code,
+              "language_code": self._language_code, "web_search": True}],
+        )
+        return (task.get("result") or [{}])[0].get("items") or []

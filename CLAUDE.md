@@ -152,27 +152,44 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M12 — SIE Term & Entity module: CODE-COMPLETE on `claude/optimistic-brown-9wijtx`,
-PENDING DEPLOY (2026-06-21).** Build plan: `docs/sie-module-plan.md`; spec: PRD #3.
-Built in 6 dependency slices (see `backend/app/sie/__init__.py`), all committed:
-1 foundation (migration `20260621000000_sie_keyword_analyses.sql` + Final Output
-Model `models.py`, Writer Input C `schema_version 1.4`); 2 pure core (M5-14:
-extract/ngrams/filters/scoring); 3 egress clients (M2-4,10-11:
-serp/scrapeowl_client/textrazor_client/entities); 4 orchestration
-(pipeline/cache/`run_sie_job`, `sie_analysis` meter phase); 5 owner-only
-`term-analysis` API + `TermAnalysisPanel` report UI; 6 deps (bs4/lxml/spaCy +
-`en_core_web_sm` in the Dockerfile). **23 pure-module tests green in-sandbox; ruff
-clean; frontend build green.** SIE uses the session's `location_code` (E1), not the
-plan's hardcoded 2840. **Egress (DataForSEO/ScrapeOwl/TextRazor/embeddings) is
-UNVALIDATED — sandbox can't reach it.**
+**M13 — Brief Generator (answer-engine-first): NEXT, not yet started.** Build plan:
+`docs/brief-generator-module-plan.md` + **`docs/aio-optimization-plan.md`** (the
+answer-engine-first pivot is the source of truth — full MCS heading selection,
+dual/triple-space embeddings, decision-fit mapping, H3 hybrid). Spec: PRD #2 (v2.6
+live contract). Runs lazily at write time only (parallel stage 1 with SIE). **First
+build-time task is the gated v2.6 plan-doc reconciliation** (`handoff.md` 2026-06-17:
+map authority gaps → H3, directive locked). Do **not** start until M12 is signed off
+(it now is — see below). Build in dependency slices like M12; stop for review after.
 
-**Remaining to ship M12:** (1) ✅ **migration `20260621000000_sie_keyword_analyses.sql`
-APPLIED to prod 2026-06-21** (AR-Internal-Tools `wvcthtmmcmhkybcesirb`; verified: table
-+ RLS on + 4 policies + 2 indexes + 2 FKs; backward-compatible — current `main` doesn't
-touch it); (2) merge + deploy (Railway rebuilds the image incl. the spaCy model
-download — first build is slower); (3) live-validate on a real cluster keyword via the
-owner Term-analysis action (the only place the egress path runs). Then stop for review
-per milestone discipline.
+**M12 — SIE Term & Entity module: ✅ DONE — built, deployed, and LIVE-VALIDATED
+(signed off 2026-06-22).** Build plan: `docs/sie-module-plan.md`; spec: PRD #3.
+Built in 6 dependency slices (`backend/app/sie/`): foundation (migration
+`20260621000000_sie_keyword_analyses.sql` + Final Output Model `models.py` = Writer
+**Input C** `schema_version 1.4`); pure core (extract/ngrams/filters/scoring); egress
+clients (serp/scrapeowl_client/textrazor_client/entities); orchestration
+(pipeline/cache/`run_sie_job`, `sie_analysis` meter phase); owner-only `term-analysis`
+API + `TermAnalysisPanel`; deps (bs4/lxml/spaCy `en_core_web_sm`). Merged to `main`
++ deployed (Railway). Migration applied to prod (AR-Internal-Tools
+`wvcthtmmcmhkybcesirb`; RLS on + 4 policies). SIE uses the session's `location_code`
+(E1).
+
+**Live validation (session `4ecefaa1`, keyword `is retatrutide a glp-3 drug`):** full
+egress chain works — DataForSEO SERP → ScrapeOwl (+premium fallback) → TextRazor NER
+→ OpenAI embeddings → Haiku/Sonnet tool calls → scoring → cache. Result: **13/19
+pages, 15 required terms, 50 categorized entities**, $0.19, no degraded warning.
+Persisted as Writer Input C in `keyword_analyses.output_json`.
+
+**Five first-run fixes landed during validation (all merged + deployed):** (1) the
+crash — `extract_zones` did mid-iteration `decompose()` so a later `el.get()` on an
+already-decomposed child raised `None.get` (collect-then-decompose + per-page
+try/except so one bad page degrades, not the job); (2) ScrapeOwl hardening — guard
+non-dict/empty bodies, 35s timeout, 4xx no-retry / 5xx single-retry; (3) **5xx →
+premium-proxy retry** (`sie_scrapeowl_premium_on_500`, cost-aware — premium only on
+pages that 500; confirmed firing live); (4) **TextRazor 401 storm** fixed —
+`sie_textrazor_max_workers=2` + backoff (NER calls now all 200); (5) polish —
+hard-skip social/video domains (FB/IG/YouTube/Pinterest/TikTok, never crawled),
+drop empty-lemma entity terms, and display the target keyword's original text (not
+its lemma). Writer-plan §8 reconciled: real entities confirm Δ4 as fallback-only.
 
 **v1 MVP — complete. M11 is merged to `main` and deployed (M1–M11 all built,
 all live).** Plus **E1 per-country locale** shipped 2026-06-17 (USA/UK/CA/AU/NZ,
@@ -981,3 +998,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.13 | 2026-06-15 | **Embeddings provider swap (locked-decision override, owner): OpenAI `text-embedding-3-small` → Google `gemini-embedding-001` @ 1536-dim (Matryoshka), whole-app, quality/consistency.** **Slice 1 (code, shipped DORMANT):** new provider-pluggable embedder `backend/app/llm/embeddings.py` (`OpenAIEmbedder` + `GeminiEmbedder` — REST `:batchEmbedContents` via httpx, `outputDimensionality=1536` + L2-normalize for truncated vectors + 100/request chunking); `OpenAILLM.embed` delegates to the backend (the `LLMError` contract preserved for callers); `get_llm()` builds the Gemini backend when `embedding_provider=gemini`; config adds `embedding_provider`/`gemini_api_key`/`gemini_embedding_model`/`gemini_embedding_dim`/`gemini_embedding_task_type`; cost-meter rate (`gemini-embedding-001` $0.15/1M, tokens estimated from input length). **Default `embedding_provider=openai` → prod untouched until cutover.** All embeddings flow through the single `get_llm().embed` seam (verified). `tests/test_embeddings.py` added; ruff + py_compile clean + logic validated in isolation; full pytest not sandbox-runnable (deps absent — validate in CI/deployed). 1536-dim truncation keeps the `vector(1536)` schema (no migration). Brief Gen §7.3's 3-large exception is **superseded** by this. **Slice 2 (freeze-old-sessions guard) shipped 2026-06-15:** migration `20260615000000_session_embedding_model.sql` tags `sessions.embedding_model` (existing rows backfill to `text-embedding-3-small`); `active_embedding_model()` helper; `create_session` tags new sessions; a 409 guard `_assert_embedding_current` on `/expand` `/regate` `/fanout` `/plan-articles` `/architecture` refuses a session whose tag ≠ the active model (a no-op while dormant, since active == OpenAI). Also: `GeminiEmbedder` sends the key as the `x-goog-api-key` header (not a URL param) + owner-only `GET /debug/embedding-health` probe. **Remaining ops to cut over: `GEMINI_API_KEY` ✅ provisioned; apply the migration to prod (Supabase MCP); set `EMBEDDING_PROVIDER=gemini` + redeploy; smoke-test via `/debug/embedding-health`; recalibrate the 8 cosine thresholds on live Gemini runs.** |
 | 1.14 | 2026-06-15 | **Embeddings cutover EXECUTED + model upgraded to Gemini Embedding 2.** Branch `claude/focused-wright-kj3gyr` merged to `main` (`bf01879`, `--no-ff`) + deployed (Railway auto-deploy → SUCCESS; dormant-safe — `embedding_provider` still defaulted `openai` at merge time). Migration `20260615000000_session_embedding_model.sql` applied to prod (AR-Internal-Tools, `fanout.sessions`, via Supabase MCP). Then on the Railway service: `EMBEDDING_PROVIDER=gemini` set (the flip), smoke-tested green via owner-only `GET /debug/embedding-health`. Owner then chose **Gemini Embedding 2** (`gemini-embedding-2-preview`, public preview, #1 MTEB, multimodal) over GA `001`, so `GEMINI_EMBEDDING_MODEL=gemini-embedding-2-preview` set + health-verified (`ok:true`, returned_dim 1536, normalized). Code: `config` default → `gemini-embedding-2-preview`; cost-meter `gemini-embedding-2` = $0.20/1M (prefix-matches `-preview` + future variants). Provider/model are env-overridable (`EMBEDDING_PROVIDER` / `GEMINI_EMBEDDING_MODEL`). **Remaining: recalibrate the 8 cosine thresholds** (`relevance 0.65` / `clustering 0.55` / `dedup 0.85` / `lateral 0.55` / `orphan 0.65` / `split 0.55` / `ambiguity 0.5` / `routing-margin 0.04`) **on live Embedding-2 runs — IN PROGRESS; prod clustering is degraded until locked, so no production sessions yet.** Preview caveat: a model change/deprecation shifts the vector space (forces re-embed + recalibrate); GA fallback `gemini-embedding-001`. The earlier dormant code + 6 adversarial-review fixes are described in v1.13. |
 | 1.15 | 2026-06-16 | **Gemini embeddings ROLLED BACK to OpenAI `text-embedding-3-small` (owner decision).** In write-time calibration on `retatrutide`, Gemini Embedding 2 showed **poor relevance discrimination** — off-topic keywords passed the relevance gate even after sweeping `relevance_threshold` 0.65 → 0.85 → 0.88 → 0.90 via `/regate` (cosines compressed too high to separate on-topic from off-topic; likely the `SEMANTIC_SIMILARITY` task type and/or preview-model behavior). Reverted live by setting **`EMBEDDING_PROVIDER=openai`** on the Railway service — one env var, no code change, no recalibration (OpenAI's 8 thresholds were never altered). Caught entirely in calibration; **no production data affected** (the staged "deploy-dormant → calibrate-before-real-work" plan did its job). Code cleanup: `config.gemini_embedding_model` default reverted preview → GA `gemini-embedding-001` (saner dormant default). **The provider/model-pluggable embedder, the per-session `embedding_model` 409 guard, the cost rates, and `GET /debug/embedding-health` all stay in place (dormant)** — revisiting Gemini later (Embedding 2 at GA, or `RETRIEVAL_*` task types) is a re-embed + recalibration, not re-engineering. The `sessions.embedding_model` column + migration stay (harmless; all live sessions tag `text-embedding-3-small`). |
+| 1.16 | 2026-06-22 | **M12 (SIE Term & Entity module) DONE — deployed + LIVE-VALIDATED + signed off.** First real egress run surfaced and fixed five first-run issues (merged + deployed across PRs #13–#16): (1) the `extract_zones` crash (mid-iteration bs4 `decompose()` → `None.get` on decomposed children → collect-then-decompose + per-page try/except); (2) ScrapeOwl parse hardening (non-dict/empty-body guards, 35s timeout, 4xx no-retry / 5xx single-retry); (3) **5xx → premium-proxy retry** (`sie_scrapeowl_premium_on_500`, cost-aware; confirmed firing live); (4) **TextRazor 401 storm** fixed (`sie_textrazor_max_workers=2` + backoff; NER now all 200); (5) polish — hard-skip social/video domains (FB/IG/YouTube/Pinterest/TikTok), drop empty-lemma entity terms, display the target keyword's original text not its lemma. Live result on session `4ecefaa1` / `is retatrutide a glp-3 drug`: **13/19 pages, 15 terms, 50 entities**, $0.19, no degraded warning; persisted as Writer **Input C** (`keyword_analyses.output_json`, schema 1.4) — the native shape the M14 adapter reads (no adaptation layer). Writer-plan §8 reconciled (real entities confirm Δ4 fallback-only; lede-eligible category set is domain-dependent → make configurable in M14). **M13 (Brief Generator, answer-engine-first per `docs/aio-optimization-plan.md`) is next**; first M13 task = the gated v2.6 plan-doc reconciliation. Worked on `claude/intelligent-keller-6sx8ho`. |
