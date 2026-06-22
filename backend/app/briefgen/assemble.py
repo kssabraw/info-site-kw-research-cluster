@@ -9,17 +9,21 @@ from __future__ import annotations
 
 from statistics import mean
 
+from dataclasses import asdict
+
 from .entity import MainEntity
 from .intent import IntentResult
 from .mcs import MCSResult
 from .models import SCHEMA_VERSION, BriefOutput
+from .persona import Persona
 from .sources import BriefSources
 from .title import TitleScope
 
 
 def build_brief_output(
     *, keyword: str, intent: IntentResult, title: TitleScope, entity: MainEntity,
-    mcs: MCSResult, sources: BriefSources,
+    mcs: MCSResult, sources: BriefSources, persona: Persona | None = None,
+    faqs: list[dict] | None = None, extra_metadata: dict | None = None,
 ) -> BriefOutput:
     """Assemble the v2.6 BriefOutput. heading_structure = H1 (the title, verbatim per the
     Writer's D6 contract) + the MCS-selected H2s; discarded MCS candidates are recorded
@@ -63,6 +67,8 @@ def build_brief_output(
             "discussions": len(sources.reddit), "llm_answers": sorted(sources.llm_answers),
         },
     }
+    if extra_metadata:
+        metadata.update(extra_metadata)
 
     return BriefOutput(
         schema_version=SCHEMA_VERSION,
@@ -74,7 +80,8 @@ def build_brief_output(
         intent_format_template=intent.intent_format_template,
         format_directives=intent.format_directives,           # dict -> FormatDirectives (coerced)
         heading_structure=headings,
-        faqs=[], persona=None,                                  # 5c enrichment
+        faqs=list(faqs or []),
+        persona=asdict(persona) if persona is not None else None,
         discarded_headings=discarded,
         metadata=metadata,
     )
