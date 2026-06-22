@@ -64,47 +64,21 @@ class AnthropicLLM:
         self._max_tokens = max_tokens
         self._max_transport_attempts = max(1, max_transport_attempts)
 
-    def call_tool(
-        self,
-        *,
-        system: str,
-        user: str,
-        tool_name: str,
-        tool_description: str,
-        input_schema: dict,
-        purpose: str,
-    ) -> dict:
-        """Force a single tool call and return its `input` dict (the structured
-        output). Raises AnthropicError on transport failure or a missing tool
-        block; the caller owns reprompt/degrade policy (PRD §16.2)."""
+    def _invoke(self, *, create_kwargs: dict, purpose: str):
+        """Shared transport-retry + cost/logging wrapper around messages.create.
+        Returns the raw response; callers extract the tool_use / text block."""
         raise_if_cancelled()
         started = time.perf_counter()
         resp = None
         for attempt in range(self._max_transport_attempts):
             try:
-                resp = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=self._max_tokens,
-                    system=system,
-                    tools=[
-                        {
-                            "name": tool_name,
-                            "description": tool_description,
-                            "input_schema": input_schema,
-                        }
-                    ],
-                    tool_choice={"type": "tool", "name": tool_name},
-                    messages=[{"role": "user", "content": user}],
-                )
+                resp = self._client.messages.create(model=self._model, **create_kwargs)
                 break
             except Exception as exc:  # noqa: BLE001 — surfaced as AnthropicError
                 # Retry only transient transport errors (rate-limit / overload /
-                # timeout); anything else (auth, bad-request, …) fails fast. A
-                # shape failure can't happen here — it's raised below, after a
-                # successful call, and the caller owns that reprompt/degrade.
+                # timeout); anything else (auth, bad-request, …) fails fast.
                 if _is_retryable(exc) and attempt < self._max_transport_attempts - 1:
-                    # Exponential backoff with jitter to step out of the shared
-                    # rate-limit window (1.5s, 3s, 6s, capped at 8s).
+                    # Exponential backoff with jitter (1.5s, 3s, 6s, capped at 8s).
                     time.sleep(min(8.0, 1.5 * (2 ** attempt)) + random.uniform(0, 0.5))
                     continue
                 raise AnthropicError(f"Anthropic call failed ({purpose}): {exc}") from exc
@@ -118,17 +92,41 @@ class AnthropicLLM:
         logger.info(
             "llm_call",
             extra={
-                "event": "llm_call",
-                "purpose": purpose,
-                "provider": "anthropic",
-                "model": self._model,
-                "prompt_tokens": input_tokens,
-                "completion_tokens": output_tokens,
-                "latency_ms": latency_ms,
-                "cost_usd": cost,
-                "status": "success",
+                "event": "llm_call", "purpose": purpose, "provider": "anthropic",
+                "model": self._model, "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens, "latency_ms": latency_ms,
+                "cost_usd": cost, "status": "success",
             },
         )
+        return resp
+
+    def call_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool_name: str,
+        tool_description: str,
+        input_schema: dict,
+        purpose: str,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> dict:
+        """Force a single tool call and return its `input` dict (the structured
+        output). Raises AnthropicError on transport failure or a missing tool
+        block; the caller owns reprompt/degrade policy (PRD §16.2). `max_tokens` /
+        `temperature` override the instance defaults per the §17 call inventory."""
+        create_kwargs: dict = {
+            "max_tokens": max_tokens or self._max_tokens,
+            "system": system,
+            "tools": [{"name": tool_name, "description": tool_description,
+                       "input_schema": input_schema}],
+            "tool_choice": {"type": "tool", "name": tool_name},
+            "messages": [{"role": "user", "content": user}],
+        }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
+        resp = self._invoke(create_kwargs=create_kwargs, purpose=purpose)
 
         for block in resp.content or []:
             if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
@@ -137,3 +135,27 @@ class AnthropicLLM:
                     return data
                 raise AnthropicError(f"Tool input was not an object ({purpose})")
         raise AnthropicError(f"Model returned no tool_use block ({purpose})")
+
+    def complete_text(
+        self,
+        *,
+        system: str,
+        user: str,
+        purpose: str,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> str:
+        """Plain-text prose call (Writer §17 calls #5/#7 — section + conclusion). Returns
+        the concatenated text blocks. Raises AnthropicError on transport failure."""
+        create_kwargs: dict = {
+            "max_tokens": max_tokens or self._max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
+        resp = self._invoke(create_kwargs=create_kwargs, purpose=purpose)
+        return "".join(
+            getattr(b, "text", "") for b in (resp.content or [])
+            if getattr(b, "type", None) == "text"
+        ).strip()

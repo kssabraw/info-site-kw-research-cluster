@@ -1,0 +1,139 @@
+import { useEffect, useRef, useState } from "react";
+import { getArticle, startArticle, type ArticleOutput } from "../../shared/api";
+
+// M14 Content Writer — owner-only article readout. Starts generation on open (ensures
+// the Brief + SIE as stage 1, then writes), polls until the article lands, then renders
+// the Markdown + word count + cost. Runs ~1–3 min on a cache hit of brief+SIE, longer
+// on a cold cache (brief + SIE both run first).
+export default function ArticlePanel(props: {
+  sessionId: string;
+  clusterId: string;
+  keyword: string;
+  onClose: () => void;
+}) {
+  const { sessionId, clusterId, keyword, onClose } = props;
+  const [status, setStatus] = useState<"running" | "complete" | "error">("running");
+  const [article, setArticle] = useState<ArticleOutput | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [forceNext, setForceNext] = useState(false);
+  const timer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (status !== "running") return;
+    const id = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [status]);
+
+  const run = (force: boolean) => {
+    setStatus("running");
+    setArticle(null);
+    setError(null);
+    setElapsed(0);
+    let cancelled = false;
+    let attempts = 0;
+
+    const poll = async () => {
+      attempts += 1;
+      try {
+        const res = await getArticle(sessionId, clusterId);
+        if (cancelled) return;
+        if (res.status === "complete" && res.article) {
+          setArticle(res.article);
+          setStatus("complete");
+          if (timer.current) window.clearInterval(timer.current);
+        }
+      } catch {
+        // 404 until generated — keep polling, give up after ~10 min.
+        if (attempts > 120 && timer.current) {
+          window.clearInterval(timer.current);
+          if (!cancelled) {
+            setStatus("error");
+            setError("Generation timed out. The brief/SIE/writer pass may have failed — check logs.");
+          }
+        }
+      }
+    };
+
+    startArticle(sessionId, clusterId, force ? { force_refresh: true } : undefined)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.status === "complete" && res.article) {
+          setArticle(res.article);
+          setStatus("complete");
+        } else {
+          timer.current = window.setInterval(poll, 5000);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setStatus("error");
+          setError(e instanceof Error ? e.message : "Failed to start generation");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (timer.current) window.clearInterval(timer.current);
+    };
+  };
+
+  useEffect(() => {
+    const cleanup = run(forceNext);
+    return cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, clusterId, forceNext]);
+
+  const meta = (article?.metadata ?? {}) as Record<string, unknown>;
+  const num = (k: string) => (typeof meta[k] === "number" ? (meta[k] as number) : undefined);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal card" style={{ maxWidth: 900 }} onClick={(e) => e.stopPropagation()}>
+        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 className="page-title" style={{ margin: 0 }}>Article — {keyword}</h2>
+          <button className="link-btn" onClick={onClose}>Close</button>
+        </header>
+
+        {status === "running" && (
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <div className="spinner" />
+            <p className="progress-stage">Generating the article…</p>
+            <p className="progress-meta">
+              Brief + SIE (stage 1) → Writer · {elapsed}s elapsed
+              <br />several minutes on a cold cache
+            </p>
+          </div>
+        )}
+        {status === "error" && <p className="banner banner-error">{error}</p>}
+
+        {article && (
+          <div style={{ display: "grid", gap: 14 }}>
+            <div className="muted" style={{ fontSize: 13 }}>
+              {num("total_word_count") ?? "?"} words · {num("section_count") ?? "?"} sections ·{" "}
+              {num("faq_count") ?? "?"} FAQs · intent {article.intent_type}
+              {Array.isArray(meta["under_length_h2_sections"]) &&
+                (meta["under_length_h2_sections"] as unknown[]).length > 0 && (
+                  <span className="badge badge-warn" style={{ marginLeft: 8 }}>
+                    {(meta["under_length_h2_sections"] as unknown[]).length} short section(s)
+                  </span>
+                )}
+            </div>
+            <button className="btn btn-sm" style={{ justifySelf: "start" }} onClick={() => setForceNext((f) => !f)}>
+              Regenerate
+            </button>
+            <pre
+              style={{
+                whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit",
+                fontSize: 14, lineHeight: 1.5, background: "var(--surface-2, #f6f8fa)",
+                padding: 16, borderRadius: 8, maxHeight: "60vh", overflowY: "auto", margin: 0,
+              }}
+            >
+              {article.article_markdown}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

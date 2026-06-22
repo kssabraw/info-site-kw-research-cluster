@@ -1595,3 +1595,46 @@ def get_brief(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No brief yet")
     return {"status": "complete", "keyword": keyword, "brief": row["output_json"]}
+
+
+# ----- M14 Content Writer (article generation; owner-only) ------------------
+class GenerateArticleBody(BaseModel):
+    force_refresh: bool = False
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/generate-article")
+def start_article(
+    session_id: str, cluster_id: str, response: Response,
+    body: GenerateArticleBody | None = None, user: AuthedUser = Depends(require_owner),
+) -> dict:
+    """Owner-only. Generate the full article for a cluster (ensures Brief + SIE as stage
+    1, then writes). Existing article + no force_refresh -> 200 + it; in-flight -> 409;
+    else 202 + the job is submitted (poll GET). Runs lazily at write time only."""
+    from app.writer import store as article_store
+
+    body = body or GenerateArticleBody()
+    keyword, location_code, sid = _cluster_keyword_and_location(user, session_id, cluster_id)
+    if jobs.article_inflight(cluster_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Article already generating")
+    if not body.force_refresh:
+        row = article_store.get_latest_article(cluster_id)
+        if row:
+            return {"status": "complete", "keyword": keyword, "article": row["article_json"]}
+    if not jobs.submit_article(sid, cluster_id, keyword, location_code, force_refresh=body.force_refresh):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Article already generating")
+    response.status_code = status.HTTP_202_ACCEPTED
+    return {"status": "running", "keyword": keyword}
+
+
+@router.get("/sessions/{session_id}/clusters/{cluster_id}/article")
+def get_article(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """The latest generated article for a cluster (404 until generated)."""
+    from app.writer import store as article_store
+
+    keyword, _location_code, _sid = _cluster_keyword_and_location(user, session_id, cluster_id)
+    row = article_store.get_latest_article(cluster_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No article yet")
+    return {"status": "complete", "keyword": keyword, "article": row["article_json"]}
