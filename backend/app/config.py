@@ -323,9 +323,20 @@ class Settings(BaseSettings):
     brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation
     brief_intent_model: str = "claude-haiku-4-5"           # intent + A1 classification
     brief_title_model: str = "claude-sonnet-4-6"           # title/scope (quality cascades)
+    # DataForSEO AI-Optimization "LLM Responses" requires a per-provider model_name
+    # (omitting it -> task error 40501 "Invalid Field: 'model_name'"). Env-overridable;
+    # confirmed-valid values from the provider models endpoints (tune to a cheaper
+    # flash tier once verified against /llm_responses/models).
+    brief_chatgpt_model: str = "gpt-4.1-mini"
+    brief_gemini_model: str = "gemini-2.5-pro"
 
     # CORS — comma-separated list of allowed frontend origins. "*" allows all.
     cors_allow_origins: str = "*"
+
+    @property
+    def brief_llm_response_models(self) -> dict[str, str]:
+        """provider -> model_name for the DataForSEO LLM-Responses calls."""
+        return {"chat_gpt": self.brief_chatgpt_model, "gemini": self.brief_gemini_model}
 
     @property
     def cors_origins_list(self) -> list[str]:

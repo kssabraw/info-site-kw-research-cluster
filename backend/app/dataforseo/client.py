@@ -390,14 +390,23 @@ class DataForSEOClient:
         task = self._post("/v3/serp/google/organic/live/advanced", [payload])
         return (task.get("result") or [{}])[0].get("items") or []
 
-    def llm_response_items(self, prompt: str, provider: str) -> list[dict]:
+    def llm_response_items(
+        self, prompt: str, provider: str, model_name: str | None = None
+    ) -> list[dict]:
         """Brief Gen Step 2D (one LLM's answer): DataForSEO AI Optimization "LLM
         Responses". `provider` ∈ {`chat_gpt`, `gemini`} (E4 trims Claude + Perplexity).
-        Endpoint path + payload + response shape are docs-derived — confirm live.
-        Returns raw items[]."""
+        `model_name` is REQUIRED by the endpoint (omitting it -> 40501 "Invalid Field:
+        'model_name'"); defaults to the per-provider config value. Returns raw items[]."""
+        if model_name is None:
+            from app.config import get_settings
+            model_name = get_settings().brief_llm_response_models.get(provider)
+        payload = {
+            "user_prompt": prompt, "location_code": self._location_code,
+            "language_code": self._language_code, "web_search": True,
+        }
+        if model_name:
+            payload["model_name"] = model_name
         task = self._post(
-            f"/v3/ai_optimization/{provider}/llm_responses/live",
-            [{"user_prompt": prompt, "location_code": self._location_code,
-              "language_code": self._language_code, "web_search": True}],
+            f"/v3/ai_optimization/{provider}/llm_responses/live", [payload]
         )
         return (task.get("result") or [{}])[0].get("items") or []
