@@ -2,25 +2,25 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-> **▶ Resume here (2026-06-22, late):** **M13 (Brief Generator, answer-engine-first) is
-> fully BUILT and merged to `main` — but DORMANT and NOT live-validated.** All of slices
-> 1–5c are on `main` + deployed (PRs #17–#20; M12 close-out + M13 1–4 + 5a + 5b + 5c).
-> `backend/app/briefgen/` runs the complete answer-engine flow end-to-end (stub-validated;
-> 81 brief-gen+SIE tests green). **Nothing in production calls it yet** and the
-> `fanout.briefs` migration (`20260622000000_briefs.sql`) is **NOT applied to prod** — so
-> it's behavior-neutral. See the 2026-06-22 M13 entry below for the slice map + the
-> docs-derived egress shapes to confirm live.
+> **▶ Resume here (2026-06-22, latest):** **M13 (Brief Generator, answer-engine-first)
+> is DONE — built, deployed, and LIVE-VALIDATED (signed off).** Slices 1–5c (PRs #17–#20)
+> + the activation layer (`run_brief_job` + `fanout.briefs` cache + owner-only `brief` API
+> + `BriefPanel`, PR #21) are on `main` + deployed; migration `20260622000000_briefs.sql`
+> applied to prod (RLS on + 4 policies). First live brief produced a real answer-engine
+> output (session `4ecefaa1` / `is retatrutide a glp-3 drug`): 4 MCS H2s + coverage-graph
+> H3s, MCS pool 38, AIO proximity 0.871, ChatGPT proximity 0.624, $0.21. Three first-run
+> fixes shipped (PRs #22–#23): the `model_name` blocker, the loading spinner, the entity
+> title-fallback strip. See the 2026-06-22 (signoff) entry below.
 >
-> **NEXT = the M13 activation layer** (mirrors M12's pattern): build `run_brief_job`
-> (`@_metered("brief_generation")`) + the `fanout.briefs` cache wiring (`get_fresh_brief`/
-> `save_brief` already exist) + an owner-only "Generate brief" API + report UI (like M12's
-> `term-analysis` + `TermAnalysisPanel`) → **apply the `briefs` migration to prod** →
-> deploy → **live-validate** the first real brief (the only way to confirm the DataForSEO
-> LLM-Responses / Discussions&Forums / AIO-block field shapes + Gemini `RETRIEVAL_*`
-> discrimination — expect first-run calibration like M12). Then M14 = Writer, M15 =
-> scheduling. Current working branch: `claude/intelligent-keller-6sx8ho`.
+> **NEXT = M14 (Writer module)** — `docs/writer-module-plan.md`, PRD #1 (Writer v1.7,
+> §17/§18/§20). Consumes the M13 brief as **Input A** (heading structure + format
+> directives) + the M12 SIE output as **Input C** (terms/entities). Sonnet 4.6 prose +
+> Haiku 4.5 short calls; `1.7-no-context` + `no_citations` degraded mode. Build in
+> dependency slices like M12/M13; stop for review. (M15 = scheduling + link injection.)
+> Current working branch: `claude/intelligent-keller-6sx8ho`.
 >
-> **M12 (SIE) is DONE — deployed, live-validated, signed off** (2026-06-22 entry below).
+> **M12 (SIE) + M13 (Brief Gen) are both DONE — deployed, live-validated, signed off**
+> (2026-06-22 entries below).
 > (Older standing item, unchanged: the **M11 / M8–M10 live-validation checklist** in
 > **§2** — deployed-stack browser + DB checks the sandbox can't run — remains open.)
 >
@@ -52,6 +52,48 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > **stay in place (dormant)** for a future revisit (Embedding 2 at GA and/or
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
+
+_2026-06-22 (signoff) — M13 (Brief Generator, ANSWER-ENGINE-FIRST) DONE — activation
+layer shipped, deployed, LIVE-VALIDATED, signed off. Worked on
+`claude/intelligent-keller-6sx8ho`:_
+
+- **Activation layer (PR #21)** mirrors M12's SIE pattern: `run_brief_job`
+  (`@_metered("brief_generation")` + `@_cancellable`, lazy/write-time, race-guards the
+  cache, catches load-bearing failures so the worker survives) + `submit_brief`;
+  owner-only `POST`/`GET /sessions/{id}/clusters/{cid}/brief` (cache hit → 200; miss →
+  202 + poll); `BriefPanel.tsx` + a "Content brief" button beside "Term analysis" in
+  ClusterView. Migration `20260622000000_briefs.sql` **applied to prod** (`fanout.briefs`,
+  RLS on + 4 policies, via Supabase MCP).
+- **Live-validated** (owner clicked "Content brief", session `4ecefaa1` /
+  `is retatrutide a glp-3 drug`; diagnosed via Railway logs + the `briefs` row over MCP —
+  sandbox egress to the Railway host is blocked, so the owner triggers, Claude watches).
+  After the blocker fix the brief produced a real answer-engine output: **4 MCS-selected
+  H2s + coverage-graph H3s (9 headings)**, MCS **pool 38**, **AIO proximity 0.871**,
+  **ChatGPT proximity 0.624**, **$0.21** (under the $1 ceiling), no crash. Both embedding
+  spaces (OpenAI 3-large + Gemini `RETRIEVAL_*`) confirmed firing; headings directly
+  answer the query (e.g. *"Retatrutide is informally called a GLP-3 drug rather than
+  officially classified that way"*). **All four previously-unvalidated egress shapes now
+  confirmed live** (LLM-Responses, Discussions/Forums, AIO block, dual-space MCS).
+- **Three first-run fixes (merged + deployed):**
+  1. **THE BLOCKER (PR #22)** — DataForSEO `/v3/ai_optimization/{provider}/llm_responses/live`
+     **requires a per-provider `model_name`** the payload omitted → task error 40501
+     "Invalid Field: 'model_name'". Both LLM answers came back empty and (AIO also absent
+     on the first run) `run_mcs` hit its **no-targets short-circuit** → the brief had only
+     an H1 (0 H2s, pool_size 0). Fix: env-overridable `brief_chatgpt_model=gpt-4.1-mini` /
+     `brief_gemini_model=gemini-2.5-pro` (both confirmed against the provider
+     `llm_responses/models` lists) + a `brief_llm_response_models` lookup + `model_name`
+     in the payload. **Tune to a cheaper flash tier later via env.**
+  2. **Loading spinner (PR #23)** — `BriefPanel` + `TermAnalysisPanel` now show a centered
+     `.spinner` + a live "Xs elapsed" counter (was a static text line) for the 1–5 min jobs.
+  3. **Entity title-fallback (PR #23)** — a question-form keyword made the title chunk
+     "Is Retatrutide" win the keyword-cosine, so the main entity was "Is Retatrutide".
+     `_strip_leading_stopwords` drops leading interrogative/auxiliary/determiner tokens →
+     "Retatrutide". Visible headings were unaffected (Haiku already wrote "Retatrutide…"),
+     but the gate's entity-stripping depends on a clean entity.
+- **Cache note:** a brief is cached 7 days by (keyword, location); the UI's plain re-click
+  returns the cached brief, so to force a fresh validation run delete the row (or call
+  with `force_refresh`). The first broken (0-H2) brief was deleted before re-validating.
+- **NEXT = M14 (Writer)** — consumes this v2.6 `BriefOutput` as Input A.
 
 _2026-06-22 (late) — M13 (Brief Generator, ANSWER-ENGINE-FIRST) BUILT + merged to
 `main`, DORMANT, not yet live-validated. Built in slices on

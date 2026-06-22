@@ -152,14 +152,45 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M13 — Brief Generator (answer-engine-first): NEXT, not yet started.** Build plan:
-`docs/brief-generator-module-plan.md` + **`docs/aio-optimization-plan.md`** (the
-answer-engine-first pivot is the source of truth — full MCS heading selection,
-dual/triple-space embeddings, decision-fit mapping, H3 hybrid). Spec: PRD #2 (v2.6
-live contract). Runs lazily at write time only (parallel stage 1 with SIE). **First
-build-time task is the gated v2.6 plan-doc reconciliation** (`handoff.md` 2026-06-17:
-map authority gaps → H3, directive locked). Do **not** start until M12 is signed off
-(it now is — see below). Build in dependency slices like M12; stop for review after.
+**M14 — Writer module: NEXT, not yet started.** Build plan: `docs/writer-module-plan.md`;
+spec: PRD #1 (Writer v1.7, §17 Call Inventory / §18 Prompt Scaffolds / §20 golden
+example). Consumes the M13 Brief Generator output as **Input A** (heading structure +
+format directives) and the M12 SIE output as **Input C** (terms/entities). Sonnet 4.6
+prose + Haiku 4.5 short/classification calls; `1.7-no-context` + `no_citations` degraded
+mode. Build in dependency slices like M12/M13; stop for review after. (M15 = scheduling +
+link injection follows.)
+
+**M13 — Brief Generator (answer-engine-first): ✅ DONE — built, deployed, and
+LIVE-VALIDATED (signed off 2026-06-22).** Build plan: `docs/brief-generator-module-plan.md`
++ `docs/aio-optimization-plan.md` (answer-engine-first pivot). Spec: PRD #2 (v2.6 live
+contract). Built in slices 1–5c (`backend/app/briefgen/`, PRs #17–#20) + the activation
+layer (PR #21): `run_brief_job` (`@_metered("brief_generation")`) + `fanout.briefs` 7-day
+cache + owner-only `brief` API + `BriefPanel`. Migration `20260622000000_briefs.sql`
+applied to prod (AR-Internal-Tools `wvcthtmmcmhkybcesirb`; RLS on + 4 policies). Runs
+lazily at write time only; uses the session's `location_code` (E1).
+
+The answer-engine-first flow runs end-to-end: sources (SERP + AIO + DataForSEO
+LLM-Responses fan-out + Discussions/Forums) → intent(+A1) → title/scope → main-entity →
+**dual-space MCS** (OpenAI 3-large for ChatGPT proximity + gates; Gemini `RETRIEVAL_*`
+for AIO proximity — scalars blended, vectors never mixed) → persona → authority-gap H3s
+→ FAQ → regular H3s → decision-fit directive → assemble the **v2.6 `BriefOutput`** (Writer
+**Input A**), persisted in `briefs.output_json`.
+
+**Live validation (session `4ecefaa1`, keyword `is retatrutide a glp-3 drug`):** after
+the first-run fix, the brief produced **4 MCS-selected H2s + coverage-graph H3s** (9
+headings total), MCS **pool 38**, AIO proximity **0.871**, ChatGPT proximity **0.624**,
+**$0.21** (under the $1 ceiling), no crash. Both embedding spaces confirmed firing live;
+headings directly answer the query.
+
+**Three fixes landed during validation (all merged + deployed):** (1) **the blocker** —
+DataForSEO `llm_responses/live` requires a per-provider `model_name` the payload omitted
+(task error 40501); both LLM answers were empty → with no AIO either, `run_mcs` hit its
+no-targets short-circuit and the brief had only an H1 (0 H2s). Added env-overridable
+`brief_chatgpt_model=gpt-4.1-mini` / `brief_gemini_model=gemini-2.5-pro` + payload
+`model_name` (PR #22). (2) **Loading spinner** + elapsed-seconds counter on `BriefPanel`
+and `TermAnalysisPanel` (PR #23). (3) **Entity title-fallback** strip — a question-form
+keyword made the title chunk "Is Retatrutide" win; strip leading interrogative/auxiliary/
+determiner tokens → "Retatrutide" (PR #23).
 
 **M12 — SIE Term & Entity module: ✅ DONE — built, deployed, and LIVE-VALIDATED
 (signed off 2026-06-22).** Build plan: `docs/sie-module-plan.md`; spec: PRD #3.
@@ -999,3 +1030,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.14 | 2026-06-15 | **Embeddings cutover EXECUTED + model upgraded to Gemini Embedding 2.** Branch `claude/focused-wright-kj3gyr` merged to `main` (`bf01879`, `--no-ff`) + deployed (Railway auto-deploy → SUCCESS; dormant-safe — `embedding_provider` still defaulted `openai` at merge time). Migration `20260615000000_session_embedding_model.sql` applied to prod (AR-Internal-Tools, `fanout.sessions`, via Supabase MCP). Then on the Railway service: `EMBEDDING_PROVIDER=gemini` set (the flip), smoke-tested green via owner-only `GET /debug/embedding-health`. Owner then chose **Gemini Embedding 2** (`gemini-embedding-2-preview`, public preview, #1 MTEB, multimodal) over GA `001`, so `GEMINI_EMBEDDING_MODEL=gemini-embedding-2-preview` set + health-verified (`ok:true`, returned_dim 1536, normalized). Code: `config` default → `gemini-embedding-2-preview`; cost-meter `gemini-embedding-2` = $0.20/1M (prefix-matches `-preview` + future variants). Provider/model are env-overridable (`EMBEDDING_PROVIDER` / `GEMINI_EMBEDDING_MODEL`). **Remaining: recalibrate the 8 cosine thresholds** (`relevance 0.65` / `clustering 0.55` / `dedup 0.85` / `lateral 0.55` / `orphan 0.65` / `split 0.55` / `ambiguity 0.5` / `routing-margin 0.04`) **on live Embedding-2 runs — IN PROGRESS; prod clustering is degraded until locked, so no production sessions yet.** Preview caveat: a model change/deprecation shifts the vector space (forces re-embed + recalibrate); GA fallback `gemini-embedding-001`. The earlier dormant code + 6 adversarial-review fixes are described in v1.13. |
 | 1.15 | 2026-06-16 | **Gemini embeddings ROLLED BACK to OpenAI `text-embedding-3-small` (owner decision).** In write-time calibration on `retatrutide`, Gemini Embedding 2 showed **poor relevance discrimination** — off-topic keywords passed the relevance gate even after sweeping `relevance_threshold` 0.65 → 0.85 → 0.88 → 0.90 via `/regate` (cosines compressed too high to separate on-topic from off-topic; likely the `SEMANTIC_SIMILARITY` task type and/or preview-model behavior). Reverted live by setting **`EMBEDDING_PROVIDER=openai`** on the Railway service — one env var, no code change, no recalibration (OpenAI's 8 thresholds were never altered). Caught entirely in calibration; **no production data affected** (the staged "deploy-dormant → calibrate-before-real-work" plan did its job). Code cleanup: `config.gemini_embedding_model` default reverted preview → GA `gemini-embedding-001` (saner dormant default). **The provider/model-pluggable embedder, the per-session `embedding_model` 409 guard, the cost rates, and `GET /debug/embedding-health` all stay in place (dormant)** — revisiting Gemini later (Embedding 2 at GA, or `RETRIEVAL_*` task types) is a re-embed + recalibration, not re-engineering. The `sessions.embedding_model` column + migration stay (harmless; all live sessions tag `text-embedding-3-small`). |
 | 1.16 | 2026-06-22 | **M12 (SIE Term & Entity module) DONE — deployed + LIVE-VALIDATED + signed off.** First real egress run surfaced and fixed five first-run issues (merged + deployed across PRs #13–#16): (1) the `extract_zones` crash (mid-iteration bs4 `decompose()` → `None.get` on decomposed children → collect-then-decompose + per-page try/except); (2) ScrapeOwl parse hardening (non-dict/empty-body guards, 35s timeout, 4xx no-retry / 5xx single-retry); (3) **5xx → premium-proxy retry** (`sie_scrapeowl_premium_on_500`, cost-aware; confirmed firing live); (4) **TextRazor 401 storm** fixed (`sie_textrazor_max_workers=2` + backoff; NER now all 200); (5) polish — hard-skip social/video domains (FB/IG/YouTube/Pinterest/TikTok), drop empty-lemma entity terms, display the target keyword's original text not its lemma. Live result on session `4ecefaa1` / `is retatrutide a glp-3 drug`: **13/19 pages, 15 terms, 50 entities**, $0.19, no degraded warning; persisted as Writer **Input C** (`keyword_analyses.output_json`, schema 1.4) — the native shape the M14 adapter reads (no adaptation layer). Writer-plan §8 reconciled (real entities confirm Δ4 fallback-only; lede-eligible category set is domain-dependent → make configurable in M14). **M13 (Brief Generator, answer-engine-first per `docs/aio-optimization-plan.md`) is next**; first M13 task = the gated v2.6 plan-doc reconciliation. Worked on `claude/intelligent-keller-6sx8ho`. |
+| 1.17 | 2026-06-22 | **M13 (Brief Generator, answer-engine-first) DONE — deployed + LIVE-VALIDATED + signed off.** The whole `backend/app/briefgen/` package (slices 1–5c, PRs #17–#20) plus the **activation layer** (PR #21): `run_brief_job` (`@_metered("brief_generation")`) + `fanout.briefs` 7-day cache + owner-only `brief` API + `BriefPanel` (mirrors M12's `term-analysis` + `TermAnalysisPanel`). Migration `20260622000000_briefs.sql` applied to prod (`wvcthtmmcmhkybcesirb`; RLS on + 4 policies). The answer-engine-first flow runs end-to-end live: sources (SERP + AIO + DataForSEO LLM-Responses fan-out + Discussions/Forums) → intent(+A1) → title/scope → main-entity → **dual-space MCS** (OpenAI 3-large = ChatGPT proximity + gates; Gemini `RETRIEVAL_*` = AIO proximity; scalars blended, vectors never mixed) → persona → authority-gap H3s → FAQ → regular H3s → decision-fit → v2.6 `BriefOutput` (Writer **Input A**). **Live validation (session `4ecefaa1` / `is retatrutide a glp-3 drug`):** 4 MCS H2s + coverage-graph H3s (9 headings), MCS pool 38, AIO proximity 0.871, ChatGPT proximity 0.624, **$0.21**. **Three first-run fixes (merged + deployed):** (1) **blocker** — DataForSEO `llm_responses/live` requires a per-provider `model_name` (task error 40501); both LLM answers empty → `run_mcs` no-targets short-circuit → only an H1. Added env-overridable `brief_chatgpt_model=gpt-4.1-mini` / `brief_gemini_model=gemini-2.5-pro` + payload `model_name` (PR #22). (2) **Loading spinner** + elapsed timer on the brief/term panels (PR #23). (3) **Entity title-fallback** strip ("Is Retatrutide" → "Retatrutide", PR #23). **M14 (Writer) is next** — consumes this brief as Input A + the SIE output as Input C. Worked on `claude/intelligent-keller-6sx8ho`. |
