@@ -217,7 +217,7 @@ def run_mcs(
     *, entity: str, aio: dict, chatgpt_answer: str | None, keyword: str, deps: MCSDeps,
     pool_size: int = POOL_SIZE, beam_rounds: int = BEAM_ROUNDS, min_count: int = MIN_H2,
     max_count: int = MAX_H2, epsilon: float = EPSILON, w_aio: float = W_AIO,
-    w_chatgpt: float = W_CHATGPT,
+    w_chatgpt: float = W_CHATGPT, gate_fn: Callable[[list[str]], list[str]] | None = None,
 ) -> MCSResult:
     """Orchestrate MCS: generate a candidate pool (+ beam variation rounds), score in
     both spaces, and select by coverage. `aio` is the X.1 dict
@@ -244,7 +244,14 @@ def run_mcs(
             pool_size=pool_size, seed_winners=seed_winners or None,
         )
         fresh = [h for h in fresh if h.lower() not in {p.lower() for p in pool}]
+        if gate_fn is not None and fresh:
+            # Eligibility pre-filter (X.3): drop off-topic / pure-restatement candidates
+            # before they reach scoring + coverage selection.
+            kept = set(gate_fn(fresh))
+            fresh = [h for h in fresh if h in kept]
         if not fresh:
+            if round_i == 0:
+                continue   # first pool fully gated out — try a variation round before giving up
             break
         pool.extend(fresh)
         cand_aio_vecs = deps.embed_aio_query(fresh) if aio_present else [[] for _ in fresh]

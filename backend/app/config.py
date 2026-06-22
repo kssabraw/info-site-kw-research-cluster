@@ -313,6 +313,17 @@ class Settings(BaseSettings):
     scrapeowl_cost_per_scrape_premium: float = 0.005   # premium proxies cost ~5x
     textrazor_cost_per_request: float = 0.0006
 
+    # ----- M13 Brief Generator (answer-engine-first) -----
+    # Dual/triple embedding spaces (aio plan §0 #1): 3-large for the organic gates +
+    # ChatGPT proximity; Gemini (RETRIEVAL_* task types) for AIO proximity. The Gemini
+    # path here is INDEPENDENT of the app-wide embedding_provider (which stays openai).
+    brief_embedding_model_large: str = "text-embedding-3-large"
+    brief_aio_query_task_type: str = "RETRIEVAL_QUERY"     # heading side (asymmetric)
+    brief_aio_doc_task_type: str = "RETRIEVAL_DOCUMENT"    # answer side
+    brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation
+    brief_intent_model: str = "claude-haiku-4-5"           # intent + A1 classification
+    brief_title_model: str = "claude-sonnet-4-6"           # title/scope (quality cascades)
+
     # CORS — comma-separated list of allowed frontend origins. "*" allows all.
     cors_allow_origins: str = "*"
 
