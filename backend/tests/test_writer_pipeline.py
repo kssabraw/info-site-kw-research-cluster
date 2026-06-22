@@ -123,6 +123,45 @@ def test_generate_article_end_to_end_degraded():
     assert out.metadata["total_word_count"] > 0
 
 
+def test_group_to_items_promotes_lead_when_model_starts_with_h3():
+    from app.writer.budget import Group
+    from app.writer.models import BriefHeading
+    from app.writer.pipeline import _group_to_items
+
+    group = Group(parent=BriefHeading(order=1, level="H2", text="The H2"),
+                  children=[BriefHeading(order=2, level="H3", text="Sub A")])
+
+    # Model led straight into a ### subheading (no H2 lead paragraph).
+    prose = "### Sub A\nFirst paragraph of real content.\n\n### Sub B\nMore content."
+    items = _group_to_items(prose, group, 100)
+    kinds = [(it.level, it.type, it.heading, bool(it.body)) for it in items]
+    # H2 heading, then a promoted lead BODY (not an H3), then the remaining H3
+    assert kinds[0][:2] == ("H2", "content")
+    assert kinds[1] == ("none", "content", None, True)        # promoted lead paragraph
+    assert items[1].body.startswith("First paragraph")
+    # the first restating "### Sub A" heading was dropped; "Sub B" survives as an H3
+    assert any(it.level == "H3" and it.heading == "Sub B" for it in items)
+    assert not any(it.level == "H3" and it.heading == "Sub A" for it in items)
+    # invariant: no H2 is immediately followed by an H3
+    levels = [it.level for it in items]
+    for i, lvl in enumerate(levels[:-1]):
+        if lvl == "H2":
+            assert levels[i + 1] != "H3"
+
+
+def test_group_to_items_normal_lead_then_h3():
+    from app.writer.budget import Group
+    from app.writer.models import BriefHeading
+    from app.writer.pipeline import _group_to_items
+
+    group = Group(parent=BriefHeading(order=1, level="H2", text="The H2"),
+                  children=[BriefHeading(order=2, level="H3", text="Sub A")])
+    prose = "Answer-first lead paragraph here.\n\n### Sub A\nSubsection content."
+    items = _group_to_items(prose, group, 100)
+    assert items[1].level == "none" and items[1].body.startswith("Answer-first")
+    assert any(it.level == "H3" and it.heading == "Sub A" for it in items)
+
+
 def test_generate_article_drops_low_adherence_h2():
     # An off-topic H2 whose title-cosine falls below 0.62 is dropped.
     bj = _brief_json()
