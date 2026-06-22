@@ -57,6 +57,8 @@ def build_deps(location_code: int):
         scrapeowl=ScrapeOwlClient(
             s.scrapeowl_api_key, s.scrapeowl_base_url,
             cost_per_scrape=s.scrapeowl_cost_per_scrape,
+            cost_per_scrape_premium=s.scrapeowl_cost_per_scrape_premium,
+            premium_on_5xx=s.sie_scrapeowl_premium_on_500,
             max_attempts=s.sie_max_transport_attempts,
         ),
         textrazor=TextRazorClient(
