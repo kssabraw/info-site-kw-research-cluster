@@ -761,8 +761,11 @@ X.6). **Remaining = the Section-2 verifications/spikes + the build.**
 - [x] **MCS cost estimate** — done (§5.5). Finding: embeddings are negligible
       (~cents); LLM candidate *generation* is the driver. Bounded shared pool +
       Haiku ≈ **$0.09–$0.27/article** (under the brief budget); literal
-      per-slot×hundreds ≈ $0.34–$1.03 (risks the $1.00 ceiling). **Open owner call:
-      cap the pool small, or raise the brief ceiling to ~$1.25.**
+      per-slot×hundreds ≈ $0.34–$1.03 (risks the $1.00 ceiling). **✅ RESOLVED
+      2026-06-22 (owner): bounded shared pool (~150–300, set-selected) + Haiku
+      generation, KEEP the $1.00 brief ceiling.** Build slice 4 (MCS) to that; expose
+      pool size / beam rounds as config so the X.6 loop can tune later, but the
+      default stays under $1.00.
 - [x] **DataForSEO AIO-block availability** — CONFIRMED (§5.6): `ai_overview` item
       is returned on the advanced endpoint we already use; add `load_async_ai_overview:
       true` to the Step-1 call for full (incl. async) coverage. Trivial cost.
