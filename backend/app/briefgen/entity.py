@@ -214,6 +214,24 @@ def derive_main_entity(
     return _title_fallback(title, keyword, np_extract, embed_fn)
 
 
+# Leading function words that should never head a main entity. A question-form
+# keyword ("is retatrutide a glp-3 drug") makes the title chunk "Is Retatrutide"
+# score highest against the keyword, so strip these off the chosen phrase.
+_LEADING_STOPWORDS = frozenset({
+    "is", "are", "was", "were", "do", "does", "did", "can", "could", "will",
+    "would", "should", "has", "have", "had", "a", "an", "the", "what", "how",
+    "why", "who", "when", "where", "which", "whose", "to",
+})
+
+
+def _strip_leading_stopwords(phrase: str) -> str:
+    """Drop leading interrogative/auxiliary/determiner tokens (keeps ≥1 token)."""
+    tokens = phrase.split()
+    while len(tokens) > 1 and tokens[0].lower().strip("?:,.") in _LEADING_STOPWORDS:
+        tokens = tokens[1:]
+    return " ".join(tokens) or phrase
+
+
 def _title_fallback(
     title: str, keyword: str, np_extract: NpExtractor, embed_fn: EmbedFn
 ) -> MainEntity:
@@ -223,6 +241,7 @@ def _title_fallback(
     vecs = embed_fn([keyword, *chunks])
     kw_vec, chunk_vecs = vecs[0], vecs[1:]
     best = max(zip(chunks, chunk_vecs), key=lambda cv: cosine(cv[1], kw_vec))[0]
+    best = _strip_leading_stopwords(best)
     return MainEntity(
         canonical=best, variants=[], source="title_fallback", confidence=0.0,
         emq_identical=best.lower() == keyword.lower(),

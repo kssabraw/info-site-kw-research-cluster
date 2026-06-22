@@ -122,3 +122,13 @@ def test_g_determinism():
     )
     a, b = derive_main_entity(**kwargs), derive_main_entity(**kwargs)
     assert (a.canonical, a.source, a.variants) == (b.canonical, b.source, b.variants)
+
+
+def test_strip_leading_stopwords():
+    from app.briefgen.entity import _strip_leading_stopwords
+
+    assert _strip_leading_stopwords("Is Retatrutide") == "Retatrutide"
+    assert _strip_leading_stopwords("How to Lose Weight") == "Lose Weight"
+    assert _strip_leading_stopwords("the best mattress") == "best mattress"
+    assert _strip_leading_stopwords("Retatrutide") == "Retatrutide"   # unchanged
+    assert _strip_leading_stopwords("is are the") == "the"            # keeps >=1 token

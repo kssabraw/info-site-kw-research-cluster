@@ -18,7 +18,15 @@ export default function TermAnalysisPanel(props: {
   const [status, setStatus] = useState<"running" | "complete" | "error">("running");
   const [report, setReport] = useState<SieReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const timer = useRef<number | null>(null);
+
+  // Elapsed-time counter while the analysis runs (reassurance for a ~1–3 min job).
+  useEffect(() => {
+    if (status !== "running") return;
+    const id = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,7 +92,14 @@ export default function TermAnalysisPanel(props: {
         </header>
 
         {status === "running" && (
-          <p className="muted">Analyzing the top-20 SERP (scrape + n-grams + entities)… this runs ~1–3 min on a cache miss.</p>
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <div className="spinner" />
+            <p className="progress-stage">Analyzing the top-20 SERP…</p>
+            <p className="progress-meta">
+              scrape + n-grams + entities · {elapsed}s elapsed
+              <br />usually 1–3 min on a cache miss
+            </p>
+          </div>
         )}
         {status === "error" && <p className="banner banner-error">{error}</p>}
 
