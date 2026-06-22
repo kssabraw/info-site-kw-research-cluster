@@ -58,7 +58,7 @@ class TextRazorClient:
         if not body.strip():
             return []
         started = time.perf_counter()
-        for _ in range(self._max_attempts):
+        for attempt in range(self._max_attempts):
             try:
                 resp = httpx.post(
                     self._base_url,
@@ -67,6 +67,10 @@ class TextRazorClient:
                     timeout=self._timeout,
                 )
                 if resp.status_code >= 400:
+                    # 401/4xx here is concurrency/rate rejection (the key is valid),
+                    # so back off before retrying to let contention clear.
+                    if attempt < self._max_attempts - 1:
+                        time.sleep(0.5 * (attempt + 1))
                     continue
                 payload = resp.json()
                 record_cost(self._cost)

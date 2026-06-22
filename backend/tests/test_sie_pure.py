@@ -177,6 +177,37 @@ def test_near_duplicates_flags_lower_ranked():
     assert "https://other.com/y" not in dups
 
 
+def test_classify_hard_skips_social_and_video_domains():
+    """Social/video platforms are forced content_eligible=False regardless of what the
+    LLM classifier returns, so they're never scraped."""
+    from app.sie.serp import _is_skip_domain, classify_results
+
+    for u in (
+        "https://www.facebook.com/p/x", "https://m.youtube.com/watch?v=1",
+        "https://youtu.be/abc", "https://in.pinterest.com/pin/9",
+        "https://www.tiktok.com/@a/video/1", "https://instagram.com/reel/z",
+    ):
+        assert _is_skip_domain(u), u
+    assert not _is_skip_domain("https://example.com/article")
+
+    class _LLM:
+        def call_tool(self, **kw):  # would mark everything eligible — overridden for skips
+            return {"classifications": [
+                {"url": "https://www.facebook.com/p/x", "page_category": "informational article",
+                 "content_eligible": True, "reason": "llm-says-yes"},
+                {"url": "https://example.com/article", "page_category": "informational article",
+                 "content_eligible": True, "reason": "ok"},
+            ]}
+
+    results = [
+        {"url": "https://www.facebook.com/p/x", "rank": 1, "title": "fb"},
+        {"url": "https://example.com/article", "rank": 2, "title": "ok"},
+    ]
+    by = {c.url: c for c in classify_results(results, "kw", _LLM())}
+    assert by["https://www.facebook.com/p/x"].content_eligible is False    # hard skip wins
+    assert by["https://example.com/article"].content_eligible is True
+
+
 # ----- Module 11: entity-term merge -----------------------------------------
 
 def test_merge_entities_dual_signal_and_entity_only():
@@ -194,6 +225,15 @@ def test_merge_entities_dual_signal_and_entity_only():
     assert dual.is_entity and dual.source == "ngram_and_entity"
     assert "bradford white" in terms                          # entity_only added (lemmatized)
     assert terms["bradford white"].source == "entity_only" and terms["bradford white"].passes_coverage
+
+
+def test_merge_skips_entity_with_empty_lemma():
+    """Regression: an entity whose name lemmatizes to '' must not create an empty
+    required term (the blank `""` term seen in the first live run)."""
+    terms = {}
+    entities = [SimpleNamespace(term="   ", entity_category="x", ner_variants=[])]
+    merge_entities_into_terms(terms, entities, _lemma)
+    assert "" not in terms and all(k.strip() for k in terms)
 
 
 # ----- Module 10: dynamic semantic threshold --------------------------------

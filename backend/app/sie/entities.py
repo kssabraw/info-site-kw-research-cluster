@@ -147,7 +147,7 @@ def merge_entities_into_terms(
             matched.source = "ngram_and_entity"
         else:
             key = _lemmatize_phrase(ent.term, lemma_fn)
-            if key in terms:
+            if not key.strip() or key in terms:   # skip entities that lemmatize to ""
                 continue
             terms[key] = AggregatedTerm(
                 term=key, n=max(1, len(key.split())), is_entity=True,
