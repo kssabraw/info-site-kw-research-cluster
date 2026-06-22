@@ -872,3 +872,14 @@ export const startArticle = (
 
 export const getArticle = (sessionId: string, clusterId: string) =>
   request<ArticleResponse>(`/sessions/${sessionId}/clusters/${clusterId}/article`);
+
+export interface BulkGenerateResponse {
+  submitted: string[];
+  skipped: string[];
+  count: number;
+}
+export const generateArticles = (sessionId: string, clusterIds: string[]) =>
+  request<BulkGenerateResponse>(`/sessions/${sessionId}/generate-articles`, {
+    method: "POST",
+    body: JSON.stringify({ cluster_ids: clusterIds }),
+  });

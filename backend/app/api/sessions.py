@@ -1626,6 +1626,36 @@ def start_article(
     return {"status": "running", "keyword": keyword}
 
 
+class BulkGenerateBody(BaseModel):
+    cluster_ids: list[str]
+
+
+@router.post("/sessions/{session_id}/generate-articles")
+def start_articles(
+    session_id: str, body: BulkGenerateBody, user: AuthedUser = Depends(require_owner),
+) -> dict:
+    """Owner-only bulk generate: submit an article job for each cluster_id (skipping any
+    that already have a fresh article, are in-flight, or aren't visible). Jobs queue on the
+    bounded worker pool, so 'all at once' drains a few at a time — not N parallel calls."""
+    from app.writer import store as article_store
+
+    submitted: list[str] = []
+    skipped: list[str] = []
+    for cid in (body.cluster_ids or [])[:500]:
+        try:
+            keyword, location_code, sid = _cluster_keyword_and_location(user, session_id, cid)
+        except HTTPException:
+            skipped.append(cid)
+            continue
+        if article_store.get_latest_article(cid) or not jobs.submit_article(
+            sid, cid, keyword, location_code
+        ):
+            skipped.append(cid)
+            continue
+        submitted.append(cid)
+    return {"submitted": submitted, "skipped": skipped, "count": len(submitted)}
+
+
 @router.get("/sessions/{session_id}/clusters/{cluster_id}/article")
 def get_article(
     session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)

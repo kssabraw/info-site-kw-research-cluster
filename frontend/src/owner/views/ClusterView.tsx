@@ -10,6 +10,7 @@ import {
   deleteCluster,
   dismissGap,
   editCluster,
+  generateArticles,
   getClusterKeywords,
   getClusters,
   mergeClusters,
@@ -61,6 +62,32 @@ export function ClusterView() {
 
   const [mergeMode, setMergeMode] = useState(false);
   const [mergeSel, setMergeSel] = useState<Set<string>>(new Set());
+
+  // M15 — multi-select articles (clusters) for bulk "Generate selected".
+  const [genSel, setGenSel] = useState<Set<string>>(new Set());
+  const toggleGen = (id: string) =>
+    setGenSel((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  const setTopicGen = (ids: string[], on: boolean) =>
+    setGenSel((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
+      return next;
+    });
+  const bulkGen = useMutation({
+    mutationFn: (ids: string[]) => generateArticles(sessionId, ids),
+    onSuccess: (res) => {
+      setGenSel(new Set());
+      alert(
+        `Started generating ${res.count} article(s).` +
+          (res.skipped.length ? ` Skipped ${res.skipped.length} (already generated or in progress).` : ""),
+      );
+    },
+    onError: (e: Error) => alert(e.message),
+  });
 
   const byCluster = useMemo(() => {
     const m = new Map<string, Keyword[]>();
@@ -152,6 +179,20 @@ export function ClusterView() {
       </div>
       )}
 
+      {!isVA && genSel.size > 0 && (
+        <div className="bulk-bar">
+          <span>{genSel.size} article{genSel.size === 1 ? "" : "s"} selected</span>
+          <button
+            className="btn btn-sm"
+            disabled={bulkGen.isPending}
+            onClick={() => bulkGen.mutate([...genSel])}
+          >
+            {bulkGen.isPending ? "Starting…" : `Generate ${genSel.size} selected`}
+          </button>
+          <button className="link-btn" onClick={() => setGenSel(new Set())}>Clear</button>
+        </div>
+      )}
+
       <div className="cluster-tree">
         {topicsWithContent.map((t) => (
           <TopicGroup
@@ -167,6 +208,10 @@ export function ClusterView() {
             mergeMode={!isVA && mergeMode}
             mergeSel={mergeSel}
             toggleMerge={toggleMerge}
+            selectable={!isVA}
+            genSel={genSel}
+            toggleGen={toggleGen}
+            setTopicGen={setTopicGen}
           />
         ))}
       </div>
@@ -186,16 +231,33 @@ function TopicGroup(p: {
   mergeMode: boolean;
   mergeSel: Set<string>;
   toggleMerge: (id: string) => void;
+  selectable: boolean;
+  genSel: Set<string>;
+  toggleGen: (id: string) => void;
+  setTopicGen: (ids: string[], on: boolean) => void;
 }) {
   const [open, setOpen] = useState(true);
+  const ids = p.clusters.map((c) => c.id);
+  const allSelected = ids.length > 0 && ids.every((id) => p.genSel.has(id));
   return (
     <div className="topic-group">
-      <button className="topic-group-head" onClick={() => setOpen((o) => !o)}>
-        <span className="tree-caret">{open ? "▼" : "▶"}</span>
-        <span className="topic-group-name">{p.name}</span>
-        <span className="badge">{p.relationship}</span>
-        <span className="topic-group-count">{p.clusters.length} articles</span>
-      </button>
+      <div className="topic-group-head">
+        {p.selectable && (
+          <input
+            type="checkbox"
+            checked={allSelected}
+            title="Select all articles in this silo"
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => p.setTopicGen(ids, e.target.checked)}
+          />
+        )}
+        <button className="topic-group-toggle" onClick={() => setOpen((o) => !o)}>
+          <span className="tree-caret">{open ? "▼" : "▶"}</span>
+          <span className="topic-group-name">{p.name}</span>
+          <span className="badge">{p.relationship}</span>
+          <span className="topic-group-count">{p.clusters.length} articles</span>
+        </button>
+      </div>
       {open && (
         <div className="topic-group-body">
           {p.clusters.map((c) => (
@@ -210,6 +272,9 @@ function TopicGroup(p: {
               mergeMode={p.mergeMode}
               merged={p.mergeSel.has(c.id)}
               toggleMerge={p.toggleMerge}
+              selectable={p.selectable}
+              genChecked={p.genSel.has(c.id)}
+              toggleGen={p.toggleGen}
             />
           ))}
           {/* Gaps are auto-accepted into keyword-named placeholder articles, so
@@ -233,6 +298,9 @@ function ArticleRow(p: {
   mergeMode: boolean;
   merged: boolean;
   toggleMerge: (id: string) => void;
+  selectable: boolean;
+  genChecked: boolean;
+  toggleGen: (id: string) => void;
 }) {
   const { cluster: c, keywords, run } = p;
   const { role } = useSession();
@@ -293,6 +361,14 @@ function ArticleRow(p: {
         {p.mergeMode && (
           <input type="checkbox" checked={p.merged} onChange={() => p.toggleMerge(c.id)} title="Select for merge" />
         )}
+        {p.selectable && !p.mergeMode && (
+          <input
+            type="checkbox"
+            checked={p.genChecked}
+            title="Select this article for bulk generate"
+            onChange={() => p.toggleGen(c.id)}
+          />
+        )}
         <button className="article-head" onClick={() => setOpen((o) => !o)}>
           <span className="tree-caret">{open ? "▼" : "▶"}</span>
           {renaming ? (
@@ -330,6 +406,16 @@ function ArticleRow(p: {
             )}
           </span>
         </button>
+        {p.selectable && !p.mergeMode && (
+          <button
+            className="btn btn-sm article-gen-btn"
+            disabled={!primary?.keyword}
+            title="Generate the full article (ensures brief + SIE, then writes the draft)"
+            onClick={() => { setOpen(true); setShowArticle(true); }}
+          >
+            Generate
+          </button>
+        )}
       </div>
 
       {open && (
