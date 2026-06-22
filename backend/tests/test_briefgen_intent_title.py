@@ -129,3 +129,22 @@ def test_classify_intent_comparison_override():
     # a non-comparison keyword is left as the LLM labeled it
     res2 = classify_intent("what is retatrutide", serp_titles=[], serp_h2s=[], paa=[], llm=_LLM())
     assert res2.intent_type == "informational"
+
+
+def test_classify_intent_owner_override_wins():
+    from app.briefgen.intent import classify_intent
+
+    class _LLM:
+        def call_tool(self, **kw):
+            return {"intent_type": "informational", "intent_confidence": 0.9,
+                    "decision_fit_detection": {"is_multi_answer": False, "confidence": 0.1}}
+
+    # An owner-locked intent overrides both the LLM and the comparison heuristic.
+    res = classify_intent("retatrutide vs tirzepatide", serp_titles=[], serp_h2s=[], paa=[],
+                          llm=_LLM(), intent_override="how-to")
+    assert res.intent_type == "how-to"           # owner override wins over the vs-heuristic
+    assert res.intent_review_required is False
+    # an invalid override is ignored (falls through to the heuristic)
+    res2 = classify_intent("retatrutide vs tirzepatide", serp_titles=[], serp_h2s=[], paa=[],
+                           llm=_LLM(), intent_override="nonsense")
+    assert res2.intent_type == "comparison"

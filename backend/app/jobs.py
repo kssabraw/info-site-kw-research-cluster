@@ -700,6 +700,31 @@ def submit_brief(
     )
 
 
+def _cluster_intent_override(cluster_id: str) -> tuple[str | None, bool]:
+    """(intent_override, locked) for a cluster: the override is the cluster's intent only
+    when the owner deliberately locked it (intent_locked)."""
+    from app.storage import silo as store
+    cluster = store.get_cluster(cluster_id)
+    if cluster and cluster.get("intent_locked"):
+        return cluster.get("intent"), True
+    return None, False
+
+
+def _sync_cluster_intent(cluster_id: str, brief_output: dict, locked: bool) -> None:
+    """Write the brief's classified intent back to the cluster (cosmetic UI sync) unless
+    the owner locked it. Never fails the job."""
+    if locked:
+        return
+    intent = brief_output.get("intent_type")
+    if not intent:
+        return
+    try:
+        from app.storage import silo as store
+        store.sync_cluster_intent(cluster_id, intent)
+    except Exception:  # noqa: BLE001 — cosmetic sync; never fail the job
+        pass
+
+
 @_metered("brief_generation")
 @_cancellable
 def run_brief_job(
@@ -715,14 +740,21 @@ def run_brief_job(
     from app.briefgen.pipeline import build_brief_deps, generate_brief
     from app.cost_meter import current_meter
 
-    # Race guard: a fresh row may have landed between the endpoint's miss and here.
-    if not force_refresh and brief_cache.get_fresh_brief(keyword, location_code):
+    override, locked = _cluster_intent_override(cluster_id)
+    # Race/staleness guard: a fresh row is reusable unless a locked override now disagrees
+    # with its intent (then regenerate). Sync the dropdown even on a reuse.
+    existing = brief_cache.get_fresh_brief(keyword, location_code)
+    if not force_refresh and existing and not (
+        override and existing["output_json"].get("intent_type") != override
+    ):
+        _sync_cluster_intent(cluster_id, existing["output_json"], locked)
         return
     meter = current_meter()
     before = meter.snapshot()[0] if meter else 0.0
     try:
         deps = build_brief_deps(location_code)
-        output = generate_brief(keyword, location_code=location_code, deps=deps)
+        output = generate_brief(
+            keyword, location_code=location_code, deps=deps, intent_override=override)
     except Exception as exc:  # noqa: BLE001 — brief is a side analysis; never crash the worker
         logger.error(
             "step_failed",
@@ -736,6 +768,7 @@ def run_brief_job(
         output_json=output.model_dump(), cost_usd=cost,
         session_id=session_id, cluster_id=cluster_id,
     )
+    _sync_cluster_intent(cluster_id, output.model_dump(), locked)
     logger.info(
         "step_complete",
         extra={"event": "step_complete", "step": "brief_job", "keyword": keyword,
@@ -789,16 +822,24 @@ def run_article_job(
     meter = current_meter()
     before = meter.snapshot()[0] if meter else 0.0
     try:
-        # Stage 1a — ensure the Brief.
+        # Stage 1a — ensure the Brief. A locked owner intent overrides classification and
+        # forces a regenerate if the cached brief disagrees; otherwise sync the cluster
+        # dropdown to the brief's classified intent.
+        override, locked = _cluster_intent_override(cluster_id)
         brief_row = brief_cache.get_fresh_brief(keyword, location_code)
+        if brief_row and override and brief_row["output_json"].get("intent_type") != override:
+            brief_row = None
         if not brief_row:
             from app.briefgen.pipeline import build_brief_deps, generate_brief
-            b = generate_brief(keyword, location_code=location_code, deps=build_brief_deps(location_code))
+            b = generate_brief(
+                keyword, location_code=location_code,
+                deps=build_brief_deps(location_code), intent_override=override)
             brief_row = brief_cache.save_brief(
                 keyword=keyword, location_code=location_code, language_code="en",
                 output_json=b.model_dump(), cost_usd=None, session_id=session_id,
                 cluster_id=cluster_id,
             )
+        _sync_cluster_intent(cluster_id, brief_row["output_json"], locked)
         # Stage 1b — ensure the SIE analysis.
         sie_row = sie_cache.get_fresh_analysis(keyword, location_code)
         if not sie_row:

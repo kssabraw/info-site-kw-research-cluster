@@ -150,7 +150,7 @@ class IntentResult:
 
 def classify_intent(
     keyword: str, *, serp_titles: list[str], serp_h2s: list[str], paa: list[str], llm,
-    keyword_precheck_fired: bool = False,
+    keyword_precheck_fired: bool = False, intent_override: str | None = None,
 ) -> IntentResult:
     """Step 3.2 + A1 in one tool-use call. The LLM returns the intent label + confidence
     + the decision-fit detection; the template, format directives, review flag, and the
@@ -204,9 +204,13 @@ def classify_intent(
     )
     intent_type = out.get("intent_type", "informational")
     confidence = float(out.get("intent_confidence") or 0.0)
+    # Owner override (a locked cluster intent) is authoritative — honor it as-is.
+    if intent_override in INTENT_TYPES:
+        intent_type = intent_override
+        confidence = max(confidence, 0.95)
     # Deterministic comparison override — a "X vs Y" keyword is a comparison regardless
     # of the LLM label; bump confidence so it doesn't trip intent_review_required.
-    if looks_comparison(keyword) and intent_type != "comparison":
+    elif looks_comparison(keyword) and intent_type != "comparison":
         logger.info(
             "intent_comparison_override",
             extra={"event": "intent_comparison_override", "keyword": keyword,
