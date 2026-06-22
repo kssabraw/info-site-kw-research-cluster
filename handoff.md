@@ -2,11 +2,17 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-> **▶ Resume here (dead-simple):** the immediate next action is still finishing the
-> **M11 / M8–M10 live-validation checklist** in **§2** (deployed-stack browser + DB
-> checks the sandbox can't run). All of the 2026-06-09 work below — writer-owned
-> titles/H2s, ≤5 links/page, link-health audit, cost fixes — is shipped to `main`
-> and deployed; nothing is mid-flight.
+> **▶ Resume here (2026-06-22):** **M12 (SIE Term & Entity module) is DONE — deployed,
+> live-validated, and signed off** (full validation + the five first-run fixes in the
+> 2026-06-22 entry below). The next milestone is **M13 = Brief Generator, built
+> ANSWER-ENGINE-FIRST** per `docs/aio-optimization-plan.md` (+ `docs/brief-generator-module-plan.md`).
+> **First M13 task = the gated v2.6 plan-doc reconciliation** (map authority gaps → H3;
+> directive locked) before any code, then build in dependency slices like M12 and stop
+> for review per milestone discipline. Current working branch:
+> `claude/intelligent-keller-6sx8ho`.
+>
+> (Older standing item, unchanged: the **M11 / M8–M10 live-validation checklist** in
+> **§2** — deployed-stack browser + DB checks the sandbox can't run — remains open.)
 >
 > **Separately, the post-v1 sequence was re-set on 2026-06-12 (owner
 > decisions; see that day's dated entries): M12 = SIE Term & Entity module
@@ -36,6 +42,56 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > **stay in place (dormant)** for a future revisit (Embedding 2 at GA and/or
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
+
+_2026-06-22 — M12 (SIE) DEPLOYED, LIVE-VALIDATED, SIGNED OFF. Five first-run fixes
+landed (PRs #13–#16, all merged to `main` + deployed). Worked on
+`claude/intelligent-keller-6sx8ho`:_
+
+- **First live Term-analysis** (owner UI → Cluster view → expand article → "Term
+  analysis") on session `4ecefaa1`, keyword `is retatrutide a glp-3 drug`. First run
+  crashed; after fixes the full egress chain runs: DataForSEO SERP → ScrapeOwl
+  (+premium fallback) → TextRazor NER → OpenAI embeddings → Haiku classify / Sonnet
+  categorize → scoring → cache. **Final result: 13/19 pages, 15 required terms, 50
+  categorized entities, $0.19, no degraded warning**, persisted as Writer **Input C**
+  (`keyword_analyses.output_json`, schema 1.4).
+- **The five fixes (diagnosed from Railway logs + the `keyword_analyses` row):**
+  1. **Crash** `AttributeError("'NoneType' object has no attribute 'get'")` in
+     `extract_zones` — the Layer-1 strip iterated a materialized `soup.find_all(True)`
+     and called `el.decompose()` mid-iteration; bs4 clears a decomposed tag's `attrs`
+     to `None`, so a later `el.get(...)` on an already-decomposed child crashed. Any
+     page with nested nav/sidebar wrappers hit it (11/19 pages on the first clean run).
+     Fixed: **collect-then-decompose** (two passes) + a **per-page try/except** around
+     `extract_zones` so one bad page degrades, not the job (PRD per-page rule).
+  2. **ScrapeOwl hardening:** guard non-dict / empty / non-str-html 200 bodies (log the
+     real keys), timeout 60→35s, 4xx no-retry, 5xx single-retry.
+  3. **5xx → premium-proxy retry** (`sie_scrapeowl_premium_on_500`, default on,
+     env-toggleable): only the pages that 500 escalate to `premium_proxies:true` (~5×
+     cost, metered separately). 4xx/timeouts do **not** escalate. Confirmed firing live
+     (500→premium→200 recoveries in the logs).
+  4. **TextRazor 401 storm:** the NER pass fanned out at 6 workers and ~half the calls
+     401'd (concurrency rejection — the key is valid). New `sie_textrazor_max_workers=2`
+     + per-attempt backoff. Re-run: all NER calls 200.
+  5. **Polish:** hard-skip social/video domains (facebook/instagram/youtube/youtu.be/
+     pinterest/tiktok — `_is_skip_domain` in `serp.py`, forced `content_eligible=False`
+     regardless of the Haiku classifier, never scraped); drop entities that lemmatize to
+     `""` (no more blank Required term); display the **target keyword's original text**
+     not its spaCy lemma ("is retatrutide a glp-3 drug", was "be retatrutide a drug" —
+     `_force_target_score` relabels it, which also fixes the minimum-usage floor lookup
+     in `build_sie_output`).
+- **Pure tests grew 23 → 26** (nested-boilerplate extract regression, empty-lemma merge
+  skip, social-skip classify override). Egress clients stay validated live (no unit
+  tests, per the codebase pattern); the premium escalation was spike-validated
+  (monkeypatched httpx) + confirmed in prod logs.
+- **Ops during validation:** deleted the stale `keyword_analyses` cache row twice (the
+  7-day cache short-circuits a re-run, so clearing it is required to re-test the same
+  keyword after a deploy). `2840`/US locale on this session.
+- **Writer-plan reconciliation (`docs/writer-module-plan.md` §8):** real SIE entities
+  confirm the Δ4 relaxations as **fallback-only** (normal path uses real Input C). Live
+  entity categories skew biomedical ("Biomolecule / Hormone", "Drug Class / Mechanism"),
+  so M14 should treat the lede-eligible category set (§5.2.2) as **configurable**, not the
+  PRD's fixed local-services whitelist.
+- **Next:** M13 (Brief Generator, answer-engine-first). Don't start the SIE code further;
+  M12 is closed.
 
 _2026-06-21 — M12 (SIE Term & Entity module) CODE-COMPLETE, pending deploy:_
 

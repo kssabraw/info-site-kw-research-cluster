@@ -272,6 +272,24 @@ or mockable, no egress:
 
 ## 8. Sign-off decisions — ✅ RESOLVED 2026-06-15 (owner)
 
+> **M12-validation reconciliation (2026-06-22) — real SIE entities confirm item 5
+> as the normal path.** M12 (SIE) is now built, deployed, and live-validated: a real
+> Term-analysis run (`is retatrutide a glp-3 drug`) produced **50 categorized
+> entities** + 15 required terms with `is_entity`/`entity_category`, persisted as
+> Writer **Input C** (`keyword_analyses.output_json`, schema 1.4) in exactly the
+> `models.py` shape the M14 adapter reads natively (no adaptation layer). So the
+> Δ4 relaxations (item 5: lede-entity rule → top supporting keyword; flat term-zone
+> defaults) are now **confirmed fallback-only** — they fire only on the SIE-failure/
+> empty-`entities` path, which is the rare degraded case, not the norm. M14's
+> enrichment lede (§5.2.2, needs ≥1 entity in services/equipment/problems/methods)
+> and the `is_entity`→C6 citable-claim handling run against genuine entity grounding.
+> **M14 action:** drop the "stub `entities: []`" framing from §5.2.2/Δ4a as the
+> default assumption; treat real Input C as the primary path. (Live entity categories
+> observed skew biomedical — "Biomolecule / Hormone", "Drug Class / Mechanism" — i.e.
+> the PRD's services/equipment/problems/methods set is domain-dependent; M14 should
+> treat the lede-eligible category set as configurable, not a fixed local-services
+> whitelist.)
+
 > **Owner sign-off 2026-06-15 — all six resolved (originals retained below for context):**
 > 1. **Δ3 — keep citable-claim detection in no-citations mode — confirmed.**
 >    `writer_claim_coverage_enabled` default on; unsupported claims get
