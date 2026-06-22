@@ -375,8 +375,9 @@ class DataForSEOClient:
     def serp_advanced_items(
         self, keyword: str, depth: int = 20, *, load_async_aio: bool = True
     ) -> list[dict]:
-        """Brief Gen Step 1 (+ X.1 AIO capture) + Step 2A PAA in ONE SERP-advanced
-        call (efficiency E2/E3): returns the raw items[] (organic + ai_overview + PAA).
+        """Brief Gen Step 1 (+ X.1 AIO capture) + Step 2A PAA + Step 2B discussion
+        threads in ONE SERP-advanced call (efficiency E2/E3): returns the raw items[]
+        (organic + ai_overview + people_also_ask + discussions_and_forums).
         `load_async_aio` adds `load_async_ai_overview` to capture async AIOs too
         (+$0.0006, refunded if absent/cached; aio-optimization-plan.md §5.6)."""
         payload = {
@@ -387,19 +388,6 @@ class DataForSEOClient:
         if load_async_aio:
             payload["load_async_ai_overview"] = True
         task = self._post("/v3/serp/google/organic/live/advanced", [payload])
-        return (task.get("result") or [{}])[0].get("items") or []
-
-    def reddit_serp_items(self, keyword: str, depth: int = 10) -> list[dict]:
-        """Brief Gen Step 2B (Reddit discussions): a Google SERP scoped to reddit.com.
-        DataForSEO has no first-class Reddit search, so `site:reddit.com` on the SERP
-        endpoint is the reliable path (same account, no new product). Returns raw
-        items[]."""
-        task = self._post(
-            "/v3/serp/google/organic/live/advanced",
-            [{"keyword": f"{keyword} site:reddit.com",
-              "location_code": self._location_code,
-              "language_code": self._language_code, "depth": depth}],
-        )
         return (task.get("result") or [{}])[0].get("items") or []
 
     def llm_response_items(self, prompt: str, provider: str) -> list[dict]:

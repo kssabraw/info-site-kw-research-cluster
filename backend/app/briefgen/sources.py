@@ -89,26 +89,72 @@ def parse_aio(items: list[dict]) -> dict:
     return {"present": False, "answer_text": "", "cited_sources": []}
 
 
-def parse_reddit(items: list[dict], limit: int = 10) -> list[dict]:
-    """Reddit discussion results (organic items from the site:reddit.com SERP)."""
-    from urllib.parse import urlparse
-
+def parse_discussions_forums(items: list[dict]) -> list[dict]:
+    """Step 2B discovery: Reddit/forum threads from the native **Discussions and
+    Forums** SERP feature (Google-curated; mostly Reddit + Quora). Returns
+    {title, url, domain, posts_count}. Handles both the container item (`type:
+    discussions_and_forums` with nested `items`) and flat `..._element` items.
+    Shape is docs-derived — confirm live."""
     out: list[dict] = []
     for item in items:
-        if not isinstance(item, dict) or item.get("type") != "organic":
+        if not isinstance(item, dict):
             continue
-        url = item.get("url")
-        if not url:
-            continue
-        host = urlparse(url).netloc.lower()
-        if host != "reddit.com" and not host.endswith(".reddit.com"):
-            continue
-        out.append({
-            "title": item.get("title"), "url": url,
-            "description": item.get("description"),
-        })
-        if len(out) >= limit:
-            break
+        t = item.get("type")
+        if t == "discussions_and_forums":
+            for el in item.get("items") or []:
+                _add_forum(out, el)
+        elif t == "discussions_and_forums_element":
+            _add_forum(out, item)
+    return out
+
+
+def _add_forum(out: list[dict], el) -> None:
+    if not isinstance(el, dict):
+        return
+    url = el.get("url")
+    if not url:
+        return
+    out.append({
+        "title": el.get("title"), "url": url, "domain": el.get("domain"),
+        "posts_count": _coerce_int(el.get("posts_count")),
+    })
+
+
+def _is_reddit(url: str | None) -> bool:
+    from urllib.parse import urlparse
+
+    if not url:
+        return False
+    host = urlparse(url).netloc.lower()
+    return host == "reddit.com" or host.endswith(".reddit.com")
+
+
+def fetch_discussion_content(
+    threads: list[dict], scrapeowl, *, top_n: int = 4, char_limit: int = 4000
+) -> list[dict]:
+    """Scrape the top discussion threads (Reddit first) for real comment/pain-point
+    text — what `reddit_insights`/persona actually need. Reuses the SIE ScrapeOwl
+    client (premium fallback) + extract_zones; a failed/empty scrape yields
+    content=None for that thread (degrade, don't fail)."""
+    from app.sie.extract import extract_zones
+
+    ordered = sorted(threads, key=lambda t: 0 if _is_reddit(t.get("url")) else 1)
+    out: list[dict] = []
+    for t in ordered[:top_n]:
+        content = None
+        try:
+            sc = scrapeowl.scrape(t["url"])
+            if sc.scrape_status == "success" and sc.html:
+                page = extract_zones(sc.html, t["url"])
+                text = " ".join([*page.zones.paragraphs, *page.zones.lists]).strip()
+                content = text[:char_limit] or None
+        except Exception as exc:  # noqa: BLE001 — one bad thread degrades, not the brief
+            logger.warning(
+                "brief_discussion_scrape_failed",
+                extra={"event": "brief_discussion_scrape_failed",
+                       "url": t.get("url"), "reason": repr(exc)},
+            )
+        out.append({**t, "content": content})
     return out
 
 
@@ -146,6 +192,7 @@ class BriefSources:
     organic: list[dict] = field(default_factory=list)
     aio: dict = field(default_factory=lambda: {"present": False, "answer_text": "", "cited_sources": []})
     paa: list[str] = field(default_factory=list)
+    # Discussions/Forums threads (Reddit first) — {title,url,domain,posts_count,content}.
     reddit: list[dict] = field(default_factory=list)
     autocomplete: list[str] = field(default_factory=list)
     suggestions: list[str] = field(default_factory=list)
@@ -153,24 +200,32 @@ class BriefSources:
 
 
 def gather_sources(
-    keyword: str, dfs, *, depth: int = 20, llm_prompt: str | None = None,
-    llm_providers: tuple[str, ...] = DEFAULT_LLM_PROVIDERS, max_workers: int = 6,
+    keyword: str, dfs, *, scrapeowl=None, depth: int = 20, llm_prompt: str | None = None,
+    llm_providers: tuple[str, ...] = DEFAULT_LLM_PROVIDERS, max_discussion_threads: int = 4,
+    max_workers: int = 6,
 ) -> BriefSources:
-    """Run Steps 1-2 concurrently and assemble `BriefSources`. Per-source failures
-    degrade that source (logged) rather than failing the brief here; the pipeline
-    slice decides which sources are load-bearing. The shared SERP call (Step 1) yields
-    organic + AIO + PAA together (E2/E3)."""
+    """Run Steps 1-2 and assemble `BriefSources`. Step 1 is one SERP-advanced call
+    (organic + AIO + PAA + the Discussions/Forums thread list together — E2/E3); it
+    runs first because the discussion threads feed the Reddit scrape. The remaining
+    sources (discussion-content scrape, autocomplete, suggestions, LLM fan-out) run
+    concurrently. Per-source failures degrade that source (logged), not the brief."""
     prompt = llm_prompt or keyword
     src = BriefSources(keyword=keyword)
 
-    def _serp() -> None:
-        items = dfs.serp_advanced_items(keyword, depth=depth)
-        src.organic = parse_organic(items, depth)
-        src.aio = parse_aio(items)
-        src.paa = parse_paa(items)
+    # Step 1 (shared SERP) — blocking, yields the discussion threads the scrape needs.
+    items = dfs.serp_advanced_items(keyword, depth=depth)
+    src.organic = parse_organic(items, depth)
+    src.aio = parse_aio(items)
+    src.paa = parse_paa(items)
+    threads = parse_discussions_forums(items)
 
-    def _reddit() -> None:
-        src.reddit = parse_reddit(dfs.reddit_serp_items(keyword))
+    def _discussions() -> None:
+        if scrapeowl is not None and threads:
+            src.reddit = fetch_discussion_content(
+                threads, scrapeowl, top_n=max_discussion_threads
+            )
+        else:  # no scraper wired (or no threads) — keep the metadata-level threads
+            src.reddit = [{**t, "content": None} for t in threads[:max_discussion_threads]]
 
     def _autocomplete() -> None:
         src.autocomplete = dfs.autocomplete(keyword)
@@ -185,7 +240,7 @@ def gather_sources(
             ) or ""
         return run
 
-    tasks = [_serp, _reddit, _autocomplete, _suggestions, *(_llm(p) for p in llm_providers)]
+    tasks = [_discussions, _autocomplete, _suggestions, *(_llm(p) for p in llm_providers)]
 
     def _safe(fn):
         try:

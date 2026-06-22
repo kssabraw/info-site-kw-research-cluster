@@ -2,10 +2,10 @@
 
 from app.briefgen.sources import (
     parse_aio,
+    parse_discussions_forums,
     parse_llm_answer,
     parse_organic,
     parse_paa,
-    parse_reddit,
 )
 
 
@@ -50,14 +50,23 @@ def test_parse_aio_absent_is_normal():
     assert aio == {"present": False, "answer_text": "", "cited_sources": []}
 
 
-def test_parse_reddit_only_reddit_urls():
+def test_parse_discussions_forums_container_and_flat():
     items = [
-        {"type": "organic", "url": "https://www.reddit.com/r/x/abc", "title": "T", "description": "d"},
-        {"type": "organic", "url": "https://notreddit.com/y", "title": "N"},
-        {"type": "ai_overview"},
+        {"type": "organic", "url": "https://a.com"},
+        {"type": "discussions_and_forums", "items": [
+            {"type": "discussions_and_forums_element",
+             "title": "Anyone tried retatrutide?", "url": "https://www.reddit.com/r/x/1",
+             "domain": "reddit.com", "posts_count": 42},
+            {"title": "no url here"},  # dropped
+        ]},
+        # also accept a flat element at the top level
+        {"type": "discussions_and_forums_element", "title": "Quora q",
+         "url": "https://www.quora.com/q", "domain": "quora.com"},
     ]
-    out = parse_reddit(items)
-    assert len(out) == 1 and out[0]["url"].endswith("/abc") and out[0]["title"] == "T"
+    out = parse_discussions_forums(items)
+    assert [t["url"] for t in out] == ["https://www.reddit.com/r/x/1", "https://www.quora.com/q"]
+    assert out[0]["posts_count"] == 42 and out[0]["domain"] == "reddit.com"
+    assert out[1]["posts_count"] is None
 
 
 def test_parse_llm_answer_pulls_text_from_common_shapes():
