@@ -155,12 +155,15 @@ def _write_group(
         f"Article title: {brief.title}\nScope: {brief.scope_statement or ''}\n"
         f"Intent: {brief.intent_type.value} — {_INTENT_PATTERN_HINT.get(brief.intent_type, '')}\n"
         f"Write the section under this H2: \"{group.parent.text}\"\n"
-        + (f"Cover these H3 subsections (use `### ` headings for each):\n{h3_lines}\n" if group.children else "")
+        + (f"After the lead, cover these H3 subsections (use a `### ` heading for each):\n{h3_lines}\n"
+           if group.children else "")
         + f"Target length: ~{section_budget} words.\n"
         + (f"Weave in these terms naturally where relevant: {required}\n" if required else "")
         + (f"Do NOT use these terms: {avoid}\n" if avoid else "")
         + (f"Formatting: {', '.join(fmt_bits)}.\n" if fmt_bits else "")
-        + "Open with a direct answer sentence (<=25 words) before elaborating. "
+        + "Open with at least one answer-first paragraph (lead with a direct answer "
+        + "sentence <=25 words) BEFORE any `### ` subheading — never start the section with "
+        + "a subheading, and never make a subheading that merely restates the H2. "
         + f"Every paragraph <= {fd.max_sentences_per_paragraph} sentences. "
         + "Do NOT fabricate statistics, percentages, dates, or study citations. "
         + "Output GitHub-flavored Markdown for the section body only (no H1/H2 heading line)."
@@ -175,7 +178,11 @@ def _write_group(
 
 def _group_to_items(prose: str, group: budget_mod.Group, start_order: int) -> list[ArticleItem]:
     """Split a group's markdown into ordered article items: H2 heading + its lead body,
-    then each `### ` H3 as a heading + body item. Keeps MD/HTML serialization clean."""
+    then each `### ` H3 as a heading + body item. Keeps MD/HTML serialization clean.
+
+    Invariant (no H2 may go straight into an H3 with no body): if the model led with a
+    `### ` subheading, the first H3's prose is promoted to be the H2's lead paragraph and
+    that restating first subheading is dropped — every H2 then has answer-first body."""
     items: list[ArticleItem] = [
         ArticleItem(order=start_order, level="H2", type="content", heading=group.parent.text)
     ]
@@ -183,10 +190,15 @@ def _group_to_items(prose: str, group: budget_mod.Group, start_order: int) -> li
     # Split on H3 markers, keeping the heading text.
     parts = re.split(r"(?m)^\s*###\s+(.+?)\s*$", prose.strip())
     lead = parts[0].strip()
+    start_idx = 1
+    if not lead and len(parts) >= 3:
+        # Model opened with a subheading -> promote its prose to the H2 lead, drop the heading.
+        lead = parts[2].strip()
+        start_idx = 3
     if lead:
         items.append(ArticleItem(order=order, level="none", type="content", body=lead))
         order += 1
-    for i in range(1, len(parts), 2):
+    for i in range(start_idx, len(parts), 2):
         h3_text = parts[i].strip()
         h3_body = parts[i + 1].strip() if i + 1 < len(parts) else ""
         items.append(ArticleItem(order=order, level="H3", type="content", heading=h3_text))
