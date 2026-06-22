@@ -77,3 +77,5 @@ def test_parse_llm_answer_pulls_text_from_common_shapes():
     assert parse_llm_answer(nested) == "part a\npart b"
     # nothing usable -> None
     assert parse_llm_answer([{"type": "x"}, "junk"]) is None
+    # a non-list `sections` must not crash, and the sibling text still survives
+    assert parse_llm_answer([{"text": "good", "sections": {"x": "y"}}]) == "good"

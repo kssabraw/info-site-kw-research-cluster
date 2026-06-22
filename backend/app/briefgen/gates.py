@@ -60,14 +60,22 @@ def prefilter(
         return []
     full_vecs = embed_fn(candidates)
     stripped_cands = [strip_entity(c, main_entity) for c in candidates]
-    sc_vecs = embed_fn(stripped_cands)
     stripped_refs = [s for s in (strip_entity(r, main_entity) for r in references) if s]
-    sr_vecs = embed_fn(stripped_refs) if stripped_refs else []
+    # Embed only NON-EMPTY stripped text: OpenAI rejects "" inputs (400). A candidate
+    # that is JUST the entity strips to "" -> it has no residual idea, so its
+    # restatement is 0 (the relevance gate still judges its full heading). Keyed by
+    # text so duplicate stripped forms share one vector.
+    to_embed = sorted({s for s in (*stripped_cands, *stripped_refs) if s})
+    vec_by_text = dict(zip(to_embed, embed_fn(to_embed))) if to_embed else {}
+    sr_vecs = [vec_by_text[s] for s in stripped_refs]   # stripped_refs already non-empty
 
     results: list[GateResult] = []
-    for cand, fv, sv in zip(candidates, full_vecs, sc_vecs):
+    for cand, fv, sc in zip(candidates, full_vecs, stripped_cands):
         relevance = cosine(fv, topic_vec)
-        restatement = max((cosine(sv, rv) for rv in sr_vecs), default=0.0)
+        sv = vec_by_text.get(sc)
+        restatement = (
+            max((cosine(sv, rv) for rv in sr_vecs), default=0.0) if sv is not None else 0.0
+        )
         if relevance < floor:
             results.append(GateResult(cand, relevance, restatement, False, "below_relevance_floor"))
         elif restatement > ceiling:

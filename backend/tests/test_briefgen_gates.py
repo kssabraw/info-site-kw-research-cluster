@@ -42,6 +42,20 @@ def test_restatement_ceiling_uses_entity_stripped_text():
     assert res[0].restatement <= 0.78
 
 
+def test_bare_entity_heading_strips_empty_without_embedding_blank():
+    """A heading that IS the entity strips to '' — must NOT be embedded (OpenAI 400s
+    on ''); restatement is 0 and the full heading is still relevance-judged."""
+    me = MainEntity(canonical="retatrutide")
+
+    def embed(texts):
+        assert "" not in texts, "must never embed an empty string"
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+    res = prefilter(["Retatrutide"], topic_vec=[1, 0, 0], references=["How retatrutide works"],
+                    main_entity=me, embed_fn=embed)
+    assert res[0].passed is True and res[0].restatement == 0.0
+
+
 def test_restatement_ceiling_rejects_true_duplicate():
     me = MainEntity(canonical="retatrutide")
     cand = "How retatrutide is dosed"

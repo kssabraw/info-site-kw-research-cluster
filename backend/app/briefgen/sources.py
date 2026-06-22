@@ -169,9 +169,13 @@ def parse_llm_answer(items: list[dict]) -> str | None:
         for key in ("text", "message", "content", "answer"):
             if isinstance(item.get(key), str):
                 parts.append(item[key])
-        for sub in (item.get("sections") or []) + (item.get("items") or []):
-            if isinstance(sub, dict) and isinstance(sub.get("text"), str):
-                parts.append(sub["text"])
+        for nest_key in ("sections", "items"):
+            sub_list = item.get(nest_key)
+            if not isinstance(sub_list, list):   # a non-list `sections` must not crash
+                continue
+            for sub in sub_list:
+                if isinstance(sub, dict) and isinstance(sub.get("text"), str):
+                    parts.append(sub["text"])
     text = "\n".join(p for p in parts if p).strip()
     return text or None
 
@@ -238,6 +242,7 @@ def gather_sources(
             src.llm_answers[provider] = parse_llm_answer(
                 dfs.llm_response_items(prompt, provider)
             ) or ""
+        run.__name__ = f"llm[{provider}]"   # so a failure logs the provider, not "run"
         return run
 
     tasks = [_discussions, _autocomplete, _suggestions, *(_llm(p) for p in llm_providers)]
