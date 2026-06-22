@@ -793,3 +793,53 @@ export const getTermAnalysis = (sessionId: string, clusterId: string) =>
   request<TermAnalysisResponse>(
     `/sessions/${sessionId}/clusters/${clusterId}/term-analysis`,
   );
+
+// ----- M13 Brief Generator (answer-engine-first) — owner-only validation surface ----
+export interface BriefHeading {
+  text: string;
+  type?: string;
+  level: string; // H1 | H2 | H3
+  order: number;
+  parent_h2_text?: string | null;
+  source?: string | null;
+  exempt?: boolean;
+  parent_relevance?: number | null;
+  format_directive?: Record<string, unknown> | null;
+}
+export interface BriefFaq {
+  question: string;
+  answer?: string | null;
+}
+export interface BriefReport {
+  schema_version: string;
+  keyword: string;
+  h1: string;
+  title: string;
+  scope_statement?: string | null;
+  intent_type?: string | null;
+  intent_confidence?: number | null;
+  intent_review_required?: boolean;
+  format_directives?: Record<string, unknown>;
+  heading_structure: BriefHeading[];
+  faqs: BriefFaq[];
+  discarded_headings?: unknown[];
+  metadata?: Record<string, unknown>;
+}
+export interface BriefResponse {
+  status: "complete" | "running";
+  keyword: string;
+  brief?: BriefReport;
+}
+
+export const startBrief = (
+  sessionId: string,
+  clusterId: string,
+  body?: { force_refresh?: boolean },
+) =>
+  request<BriefResponse>(`/sessions/${sessionId}/clusters/${clusterId}/brief`, {
+    method: "POST",
+    body: JSON.stringify(body ?? {}),
+  });
+
+export const getBrief = (sessionId: string, clusterId: string) =>
+  request<BriefResponse>(`/sessions/${sessionId}/clusters/${clusterId}/brief`);

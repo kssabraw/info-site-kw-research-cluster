@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import TermAnalysisPanel from "./TermAnalysisPanel";
+import BriefPanel from "./BriefPanel";
 import {
   acceptGap,
   bulkKeywordMove,
@@ -242,6 +243,7 @@ function ArticleRow(p: {
   const [splitSel, setSplitSel] = useState<Set<string>>(new Set());
   const [showVariants, setShowVariants] = useState(false);
   const [showSie, setShowSie] = useState(false);   // M12 SIE Term-analysis panel
+  const [showBrief, setShowBrief] = useState(false);   // M13 Brief Generator panel
 
   // Display-time dedup: rows with dedupe_canonical_id are near-duplicates of
   // another keyword in this cluster (the canonical). Hide them from the main
@@ -335,7 +337,7 @@ function ArticleRow(p: {
           </DetailLine>
 
           {!isVA && (
-            <div style={{ margin: "6px 0" }}>
+            <div style={{ margin: "6px 0", display: "flex", gap: 8 }}>
               <button
                 className="btn btn-sm"
                 disabled={!primary?.keyword}
@@ -343,6 +345,14 @@ function ArticleRow(p: {
                 title="SurferSEO-style on-page term & entity analysis of the top-20 SERP"
               >
                 Term analysis
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={!primary?.keyword}
+                onClick={() => setShowBrief(true)}
+                title="Answer-engine-first content brief (heading skeleton, intent, format directives, FAQs)"
+              >
+                Content brief
               </button>
             </div>
           )}
@@ -352,6 +362,14 @@ function ArticleRow(p: {
               clusterId={c.id}
               keyword={primary.keyword}
               onClose={() => setShowSie(false)}
+            />
+          )}
+          {showBrief && primary?.keyword && (
+            <BriefPanel
+              sessionId={p.sessionId}
+              clusterId={c.id}
+              keyword={primary.keyword}
+              onClose={() => setShowBrief(false)}
             />
           )}
 
