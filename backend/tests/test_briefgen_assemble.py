@@ -154,10 +154,14 @@ def test_generate_brief_wires_end_to_end():
                    "decision_fit_detection": {"is_multi_answer": False, "confidence": 0.1}})
     title = _LLM({"title": "How Retatrutide Works", "scope_statement": "Explains it. Does not cover dosing.",
                   "title_rationale": "r"})
+    contract = _LLM({"explicit_question": "How does retatrutide work?",
+                     "implied_need": "the mechanism", "direct_answer": "It is a triple agonist.",
+                     "answer_heading": "Retatrutide is a triple-agonist drug",
+                     "must_cover": ["mechanism", "receptors"], "must_not_cover": ["dosing"]})
     deps = BriefDeps(
         dfs=_DFS(), scrapeowl=None, np_extract=lambda text: [],
         embed_3large=_embed, embed_aio_query=_embed, embed_aio_doc=_embed,
-        gen_llm=gen, intent_llm=intent, title_llm=title,
+        gen_llm=gen, intent_llm=intent, title_llm=title, contract_llm=contract,
     )
     b = generate_brief("retatrutide", location_code=2840, deps=deps)
     assert b.keyword == "retatrutide"
@@ -166,3 +170,7 @@ def test_generate_brief_wires_end_to_end():
     assert "does not cover" in b.scope_statement.lower()
     assert b.heading_structure and b.heading_structure[0].level == "H1"
     assert b.metadata["mcs"]["aio_present"] is True and b.metadata["mcs"]["chatgpt_present"] is True
+    # the answer contract's answer_heading leads the H2s
+    h2s = [h.text for h in b.heading_structure if h.level == "H2" and h.type == "content"]
+    assert h2s and h2s[0] == "Retatrutide is a triple-agonist drug"
+    assert b.metadata["answer_contract"]["must_not_cover"] == ["dosing"]
