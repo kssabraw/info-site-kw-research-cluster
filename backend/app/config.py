@@ -307,8 +307,10 @@ class Settings(BaseSettings):
     sie_scrape_max_workers: int = 6
     sie_textrazor_max_workers: int = 2         # TextRazor 401s on a high concurrent fan-out
     sie_max_transport_attempts: int = 3
+    sie_scrapeowl_premium_on_500: bool = True  # retry a 5xx page with premium proxies
     # Per-unit cost-meter estimates until first invoices (sie_analysis phase).
     scrapeowl_cost_per_scrape: float = 0.0008
+    scrapeowl_cost_per_scrape_premium: float = 0.005   # premium proxies cost ~5x
     textrazor_cost_per_request: float = 0.0006
 
     # CORS — comma-separated list of allowed frontend origins. "*" allows all.
