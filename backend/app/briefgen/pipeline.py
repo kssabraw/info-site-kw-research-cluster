@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .assemble import build_brief_output
+from .authority import generate_authority_gaps
 from .entity import derive_main_entity
 from .faq import generate_faqs
 from .gates import prefilter
@@ -136,8 +137,16 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
         gate_fn=gate_fn,
     )
 
-    # Step 6 persona (informational; degrades to empty) — gap questions feed the FAQ pool.
+    # Step 9 authority-gap H3s (enrichment; degrades to []) — differentiation under the H2s.
     h2_texts = [s.text for s in mcs.selected]
+    reddit_summaries = [d.get("content") or d.get("title") or "" for d in sources.reddit]
+    authority_h3s = generate_authority_gaps(
+        keyword, title=title.title, scope_statement=title.scope_statement,
+        intent_type=intent.intent_type, h2_texts=h2_texts, reddit_summaries=reddit_summaries,
+        llm=deps.gen_llm,
+    )
+
+    # Step 6 persona (informational; degrades to empty) — gap questions feed the FAQ pool.
     persona = generate_persona(
         keyword, intent_type=intent.intent_type, title=title.title,
         scope_statement=title.scope_statement, serp_h1s=serp_titles, serp_metas=serp_metas,
@@ -153,5 +162,5 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
 
     return build_brief_output(
         keyword=keyword, intent=intent, title=title, entity=entity, mcs=mcs, sources=sources,
-        persona=persona, faqs=faqs, extra_metadata=faq_meta,
+        persona=persona, faqs=faqs, authority_h3s=authority_h3s, extra_metadata=faq_meta,
     )
