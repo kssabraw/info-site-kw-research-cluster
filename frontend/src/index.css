@@ -864,7 +864,13 @@ body {
   background: var(--surface);
   overflow: hidden;
 }
-.topic-group-head,
+.topic-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 14px;
+}
+.topic-group-toggle,
 .article-head {
   display: flex;
   align-items: center;
@@ -877,7 +883,7 @@ body {
   font: inherit;
   cursor: pointer;
 }
-.topic-group-head:hover,
+.topic-group-toggle:hover,
 .article-head:hover {
   background: var(--bg);
 }
@@ -1087,6 +1093,9 @@ body {
 }
 .article-head-wrap .article-head {
   padding-left: 0;
+}
+.article-gen-btn {
+  flex: none;
 }
 .kw-edit-list {
   display: flex;
