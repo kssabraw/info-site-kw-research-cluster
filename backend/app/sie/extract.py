@@ -85,12 +85,22 @@ def extract_zones(html: str, url: str, rank: int | None = None) -> ZonePage:
     # Layer 1: structural strip — by tag, by class/id hint, by ARIA role.
     for tag in soup(list(_STRIP_TAGS)):
         tag.decompose()
-    for el in list(soup.find_all(True)):
+    # Collect first, then decompose: decomposing a parent mid-iteration clears its
+    # descendants' attrs (to None), so a later `el.get(...)` on an already-decomposed
+    # child raises "'NoneType' object has no attribute 'get'". Two passes avoid that.
+    to_strip = []
+    for el in soup.find_all(True):
+        classes = el.get("class") or []
+        if isinstance(classes, str):
+            classes = [classes]
         ident = " ".join(
-            filter(None, [" ".join(el.get("class", [])), el.get("id", "") or ""])
+            filter(None, [" ".join(classes), el.get("id") or ""])
         ).lower()
         role = (el.get("role") or "").lower()
         if role in _ARIA_STRIP_ROLES or any(h in ident for h in _BOILERPLATE_HINTS):
+            to_strip.append(el)
+    for el in to_strip:
+        if not getattr(el, "decomposed", False):
             el.decompose()
 
     z = Zones()
