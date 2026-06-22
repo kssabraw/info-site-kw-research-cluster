@@ -14,6 +14,7 @@ embedding calls (sanity check + low-confidence title tie-break + title fallback)
 from __future__ import annotations
 
 import math
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable
@@ -111,8 +112,10 @@ def _mergeable(a_norm: str, b_norm: str, a_head: str, b_head: str) -> bool:
 
 
 def cluster_phrases(phrases: list[NounPhrase]) -> list[_Cluster]:
-    """Group occurrences by exact norm, then greedily merge norm-groups into variant
-    clusters. Brand/org phrases are excluded (they're not the article's entity)."""
+    """Group occurrences by exact norm, then merge norm-groups into variant clusters as
+    connected components under `_mergeable` (union-find) — so the result is independent
+    of processing order and transitive (A~B, B~C ⇒ A,B,C cluster even if A≁C). Each
+    cluster's head lemma is the highest-count member's. Brand/org phrases are excluded."""
     groups: dict[str, _Cluster] = {}
     for p in phrases:
         if p.is_org or not p.norm.strip():
@@ -126,19 +129,35 @@ def cluster_phrases(phrases: list[NounPhrase]) -> list[_Cluster]:
         if p.is_subject:
             g.subject_count += 1
 
+    norms = list(groups)
+    parent = {n: n for n in norms}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, a in enumerate(norms):
+        for b in norms[i + 1:]:
+            if _mergeable(a, b, groups[a].head_lemma, groups[b].head_lemma):
+                parent[find(a)] = find(b)
+
+    comps: dict[str, list[str]] = {}
+    for n in norms:
+        comps.setdefault(find(n), []).append(n)
+
     clusters: list[_Cluster] = []
-    for norm, g in groups.items():
-        placed = False
-        for c in clusters:
-            if any(_mergeable(norm, cn, g.head_lemma, c.head_lemma) for cn in c.norms):
-                c.raws.update(g.raws)
-                c.count += g.count
-                c.subject_count += g.subject_count
-                c.norms.add(norm)
-                placed = True
-                break
-        if not placed:
-            clusters.append(g)
+    for members in comps.values():
+        merged = _Cluster(head_lemma=groups[members[0]].head_lemma, raws=Counter())
+        for n in members:
+            g = groups[n]
+            merged.raws.update(g.raws)
+            merged.count += g.count
+            merged.subject_count += g.subject_count
+            merged.norms.add(n)
+        merged.head_lemma = groups[max(members, key=lambda n: groups[n].count)].head_lemma
+        clusters.append(merged)
     return clusters
 
 
@@ -162,20 +181,26 @@ def derive_main_entity(
             confidence = winner.score / runner.score if runner and runner.score else float("inf")
             low_conf = confidence < CONFIDENCE_ACCEPT or winner.count < MIN_WINNER_FREQUENCY
 
-            kw_vec = embed_fn([keyword])[0]
-
             chosen, secondary = winner, None
             if low_conf and runner is not None:
-                # Tie-break the top two by title alignment (3-large).
-                tvec, w_vec, r_vec = _embed3(embed_fn, title, winner.canonical, runner.canonical)
+                # One batched embed (keyword + title + the two candidates) — tie-break
+                # the top two by title alignment; the chosen vector is reused for sanity.
+                kw_vec, tvec, w_vec, r_vec = embed_fn(
+                    [keyword, title, winner.canonical, runner.canonical]
+                )
                 cw, cr = cosine(w_vec, tvec), cosine(r_vec, tvec)
-                chosen = winner if cw >= cr else runner
-                secondary = (runner if chosen is winner else winner).canonical
+                if cw >= cr:
+                    chosen, chosen_vec, secondary = winner, w_vec, runner.canonical
+                else:
+                    chosen, chosen_vec, secondary = runner, r_vec, winner.canonical
                 if abs(cw - cr) <= TITLE_TIEBREAK_MARGIN and not comparison_intent:
                     return _title_fallback(title, keyword, np_extract, embed_fn)
+            else:
+                # One batched embed: keyword + the (already-known) chosen entity.
+                kw_vec, chosen_vec = embed_fn([keyword, chosen.canonical])
 
             # Sanity: the chosen entity must be on-topic vs the keyword (always checked).
-            if cosine(embed_fn([chosen.canonical])[0], kw_vec) < KEYWORD_SANITY_COSINE:
+            if cosine(chosen_vec, kw_vec) < KEYWORD_SANITY_COSINE:
                 return _title_fallback(title, keyword, np_extract, embed_fn)
 
             return MainEntity(
@@ -187,10 +212,6 @@ def derive_main_entity(
             )
 
     return _title_fallback(title, keyword, np_extract, embed_fn)
-
-
-def _embed3(embed_fn: EmbedFn, *texts: str) -> list[list[float]]:
-    return embed_fn(list(texts))
 
 
 def _title_fallback(
@@ -208,7 +229,22 @@ def _title_fallback(
     )
 
 
-_NLP = None
+_DET = {"the", "a", "an", "this", "that", "these", "those", "your", "my", "our", "its"}
+_TLS = threading.local()
+
+
+def _get_nlp():
+    """Thread-LOCAL spaCy `Language` (en_core_web_sm, full pipeline). spaCy's shared
+    `Vocab`/`StringStore` is not safe under concurrent `nlp()` calls (the brief worker
+    runs up to 3 articles in parallel), so each worker thread gets its own model rather
+    than sharing one — avoids both the load race and the inference race."""
+    nlp = getattr(_TLS, "nlp", None)
+    if nlp is None:
+        import spacy
+
+        nlp = spacy.load("en_core_web_sm")
+        _TLS.nlp = nlp
+    return nlp
 
 
 def build_np_extractor() -> NpExtractor:
@@ -216,18 +252,9 @@ def build_np_extractor() -> NpExtractor:
     without spaCy. Needs the FULL pipeline (parser for noun_chunks + subjects, NER for
     ORG/brand exclusion) — unlike SIE's lemmatizer, which disables both. Strips leading
     determiners/possessives + trailing punctuation; tags grammatical subjects + ORGs."""
-    global _NLP
-    if _NLP is None:
-        import spacy
-
-        _NLP = spacy.load("en_core_web_sm")
-    nlp = _NLP
-
-    _DET = {"the", "a", "an", "this", "that", "these", "those", "your", "my", "our", "its"}
 
     def extract(text: str) -> list[NounPhrase]:
-        doc = nlp(text or "")
-        org_spans = {e.text.lower() for e in doc.ents if e.label_ == "ORG"}
+        doc = _get_nlp()(text or "")
         out: list[NounPhrase] = []
         for chunk in doc.noun_chunks:
             tokens = [t for t in chunk if not t.is_punct]
@@ -241,7 +268,9 @@ def build_np_extractor() -> NpExtractor:
                 (head.lemma_.lower() if t is head else t.lower_) for t in tokens
             )
             is_subject = chunk.root.dep_ in ("nsubj", "nsubjpass")
-            is_org = raw.lower() in org_spans
+            # Token-level ORG tag (robust to determiner stripping, unlike matching the
+            # full NER span text): any token in the chunk tagged ORG -> brand, excluded.
+            is_org = any(t.ent_type_ == "ORG" for t in tokens)
             out.append(NounPhrase(raw=raw, norm=norm, head_lemma=head.lemma_.lower(),
                                   is_subject=is_subject, is_org=is_org))
         return out

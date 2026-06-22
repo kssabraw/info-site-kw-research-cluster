@@ -58,15 +58,17 @@ def prefilter(
     `discarded_headings` with a reason)."""
     if not candidates:
         return []
-    full_vecs = embed_fn(candidates)
     stripped_cands = [strip_entity(c, main_entity) for c in candidates]
     stripped_refs = [s for s in (strip_entity(r, main_entity) for r in references) if s]
-    # Embed only NON-EMPTY stripped text: OpenAI rejects "" inputs (400). A candidate
-    # that is JUST the entity strips to "" -> it has no residual idea, so its
-    # restatement is 0 (the relevance gate still judges its full heading). Keyed by
-    # text so duplicate stripped forms share one vector.
+    # ONE embed call: the full candidates + the deduped NON-EMPTY stripped text. OpenAI
+    # rejects "" inputs (400), so a candidate that is JUST the entity (strips to "") is
+    # never embedded — its restatement is 0 (no residual idea), but the relevance gate
+    # still judges its full heading. Stripped forms keyed by text so dups share a vector.
     to_embed = sorted({s for s in (*stripped_cands, *stripped_refs) if s})
-    vec_by_text = dict(zip(to_embed, embed_fn(to_embed))) if to_embed else {}
+    batch = [*candidates, *to_embed]
+    all_vecs = embed_fn(batch)
+    full_vecs = all_vecs[:len(candidates)]
+    vec_by_text = dict(zip(to_embed, all_vecs[len(candidates):]))
     sr_vecs = [vec_by_text[s] for s in stripped_refs]   # stripped_refs already non-empty
 
     results: list[GateResult] = []

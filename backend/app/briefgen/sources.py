@@ -130,17 +130,22 @@ def _is_reddit(url: str | None) -> bool:
 
 
 def fetch_discussion_content(
-    threads: list[dict], scrapeowl, *, top_n: int = 4, char_limit: int = 4000
+    threads: list[dict], scrapeowl, *, top_n: int = 4, char_limit: int = 4000,
+    max_workers: int = 4,
 ) -> list[dict]:
     """Scrape the top discussion threads (Reddit first) for real comment/pain-point
     text — what `reddit_insights`/persona actually need. Reuses the SIE ScrapeOwl
     client (premium fallback) + extract_zones; a failed/empty scrape yields
-    content=None for that thread (degrade, don't fail)."""
+    content=None for that thread (degrade, don't fail). The threads are scraped
+    CONCURRENTLY (each scrape can take 35s + a premium retry; serial would add
+    minutes to every brief). `pool.map` preserves the Reddit-first order."""
     from app.sie.extract import extract_zones
 
-    ordered = sorted(threads, key=lambda t: 0 if _is_reddit(t.get("url")) else 1)
-    out: list[dict] = []
-    for t in ordered[:top_n]:
+    ordered = sorted(threads, key=lambda t: 0 if _is_reddit(t.get("url")) else 1)[:top_n]
+    if not ordered:
+        return []
+
+    def _one(t: dict) -> dict:
         content = None
         try:
             sc = scrapeowl.scrape(t["url"])
@@ -154,8 +159,10 @@ def fetch_discussion_content(
                 extra={"event": "brief_discussion_scrape_failed",
                        "url": t.get("url"), "reason": repr(exc)},
             )
-        out.append({**t, "content": content})
-    return out
+        return {**t, "content": content}
+
+    with ContextThreadPoolExecutor(max_workers=min(max_workers, len(ordered))) as pool:
+        return list(pool.map(_one, ordered))
 
 
 def parse_llm_answer(items: list[dict]) -> str | None:

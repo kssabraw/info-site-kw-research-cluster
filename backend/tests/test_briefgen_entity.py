@@ -3,7 +3,9 @@
 `np_extract` and `embed_fn` are injected stubs, so the scoring/clustering/confidence
 logic is fully deterministic and sandbox-runnable (aio §13.X.8 test list a-g)."""
 
-from app.briefgen.entity import NounPhrase, derive_main_entity
+import itertools
+
+from app.briefgen.entity import NounPhrase, cluster_phrases, derive_main_entity
 
 
 def _np(raw, norm, head, subj=False, org=False):
@@ -97,6 +99,19 @@ def test_f_brand_org_excluded():
         embed_fn=_embed({"magnesium glycinate": (1, 0, 0)}),
     )
     assert me.canonical == "magnesium glycinate"   # 5x Healthline excluded as ORG
+
+
+def test_clustering_is_order_independent():
+    """Union-find clustering must give the same result for any input order (the greedy
+    first-match version was order-dependent)."""
+    a = _np("number 327", "number 327", "number")
+    b = _np("angel number 327", "angel number 327", "number")   # superset, same head
+    c = _np("327 angel number", "327 angel number", "number")   # token-set-equal to b
+    outcomes = set()
+    for perm in itertools.permutations([a, b, b, c]):
+        clusters = cluster_phrases(list(perm))
+        outcomes.add((len(clusters), clusters[0].canonical))
+    assert outcomes == {(1, "angel number 327")}   # always one cluster, same canonical
 
 
 def test_g_determinism():
