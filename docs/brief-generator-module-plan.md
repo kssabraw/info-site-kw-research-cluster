@@ -1,5 +1,33 @@
 # M13 — Brief Generator Module: Build Plan
 
+> **▶ BUILD STARTED 2026-06-22 — slice 1 (foundation) landed.** Built answer-engine-first
+> per `docs/aio-optimization-plan.md` (the source of truth; this plan is the organic-first
+> base it amends). Slice 1: migration `20260622000000_briefs.sql` (`fanout.briefs`,
+> mirrors `keyword_analyses` exactly — 7-day cross-session cache, RLS on day one);
+> `backend/app/briefgen/` package skeleton (build order in `__init__.py`); `models.py`
+> = **Brief Output v2.6** (Writer **Input A**) + `cache.py`. **v2.6 plan-doc reconciliation
+> (the gated first task) — resolved here:**
+> - **Schema is v2.6, not v2.3.** `models.py` is faithful to the production live contract
+>   (`docs/blog-writer-live-contract.md`), which wins over the bundle's v2.3 (live-contract
+>   rule). Real `brief_output` keys (`h1`/`title_rationale`/`scope_statement`/
+>   `intent_review_required`/`intent_format_template`/`heading_structure[]`/`format_directives`/
+>   `discarded_headings`/`metadata`, etc.) are modeled; `format_directives` matches the
+>   verified sample (require_tables / min_h2_body_words 180 / answer_first_paragraphs / …).
+> - **`intent_format_template` is carried on the brief** (live contract), so M14 copies it
+>   from a real brief rather than re-deriving the §9.2 static table.
+> - **Authority gaps → H3** (aio §0 #7): modeled as `HeadingItem(type="authority_gap_sme",
+>   level="H3")`, deliberately NOT entity-form-enforced. If a future v2.6 prob shows prod
+>   placing them at H2/Step-9b, move them down — no authority-H2 enforcement path exists.
+> - **`BriefOutput` is `extra="allow"`** so (a) prod scoring metadata rides along and (b) the
+>   answer-engine slices (MCS scores, `aio_target`, `chatgpt_answer`, decision-fit
+>   `format_directive`, X.8 metadata) extend the schema in their own slices without churn here.
+> - **MCS sizing — owner-resolved 2026-06-22:** bounded shared pool (~150–300) + Haiku,
+>   keep the $1.00 brief ceiling (pool size / beam rounds exposed as config). See aio §5.5.
+>
+> Foundation tests: `tests/test_briefgen_models.py` (2, guarded on pydantic) green; ruff
+> clean. **Next slice: sources.py (Steps 1–2 + AIO-block capture).** Migration NOT yet
+> applied to prod (apply at deploy, with owner go-ahead).
+
 **Status:** Draft for owner review (2026-06-12). Nothing built.
 **Owner decision driving this plan (2026-06-12, in-session):** the **full Brief
 Generator pipeline runs for every article, at write time only** — the same
