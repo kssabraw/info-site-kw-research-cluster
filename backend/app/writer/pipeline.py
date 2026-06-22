@@ -166,6 +166,7 @@ def _write_group(
         + "a subheading, and never make a subheading that merely restates the H2. "
         + f"Every paragraph <= {fd.max_sentences_per_paragraph} sentences. "
         + "Do NOT fabricate statistics, percentages, dates, or study citations. "
+        + _decision_fit_directive_text(group.parent.format_directive)
         + "Output GitHub-flavored Markdown for the section body only (no H1/H2 heading line)."
         + (f"\n\n{retry_directive}" if retry_directive else "")
     )
@@ -173,6 +174,31 @@ def _write_group(
         system="You are an expert writer producing SEO article sections. Markdown only.",
         user=user, purpose="writer_section",
         max_tokens=min(4000, max(512, section_budget * 3)), temperature=0.6,
+    )
+
+
+def _decision_fit_directive_text(directive: dict | None) -> str:
+    """Render a `decision_fit` format_directive (§A5 STAGE B) into section-prompt guidance:
+    the answer depends on the reader's situation, so the prose must work the condition→
+    recommendation branches in naturally (condition-first), plus the overarching default.
+    No forced 'which is right for you' heading — it's woven into the body. Empty for any
+    other / absent directive."""
+    if not directive or directive.get("type") != "decision_fit":
+        return ""
+    branches = [
+        b for b in (directive.get("branches") or [])
+        if isinstance(b, dict) and (b.get("condition") or "").strip() and (b.get("option") or "").strip()
+    ]
+    if len(branches) < 2:
+        return ""
+    lines = "\n".join(f"- If {b['condition'].strip()}: {b['option'].strip()}" for b in branches)
+    default = (directive.get("default_statement") or "").strip()
+    return (
+        "IMPORTANT — this section's best answer depends on the reader's situation. Work the "
+        "following condition->recommendation branches into the prose naturally, stating the "
+        "condition first in each; do NOT add a separate subheading or a 'which is right for "
+        f"you' label, and do not present them as a bulleted list verbatim:\n{lines}\n"
+        + (f"Across all cases, the overarching guidance is: {default}\n" if default else "")
     )
 
 
@@ -370,10 +396,13 @@ def generate_article(
     softened_log: list[dict] = []
     under_length: list[dict] = []
     entity_names = [e.term for e in sie.entities if e.term]
+    decision_fit_rendered = False
     order_cursor = 100  # provisional; re-sequenced at assembly
     for g in kept_groups:
         _check_timeout()
         sec_budget = alloc.get(g.parent.order, budget_mod.SECTION_FLOOR)
+        if _decision_fit_directive_text(g.parent.format_directive):
+            decision_fit_rendered = True
         prose = _write_group(deps, brief, sie, g, sec_budget)
 
         # §5.8.8 deterministic operational-claim soften (anti-fabrication guard).
@@ -477,6 +506,7 @@ def generate_article(
         "operational_claims_softened": softened_log,
         "under_length_h2_sections": under_length,
         "icp_callout_judge_status": "not_assigned",
+        "decision_fit_rendered": decision_fit_rendered,
         "schema_version": "1.7", "brief_schema_version": "2.6",
         "generation_time_ms": gen_ms,
     }
