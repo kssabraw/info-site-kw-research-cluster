@@ -1271,7 +1271,7 @@ def get_architecture(session_id: str) -> dict | None:
 # cluster from scratch), so membership-changing edits invalidate it (set NULL)
 # rather than paying for an embedding call the next dedup will discard anyway.
 _CLUSTER_COLS = (
-    "id, topic_id, name, primary_keyword_id, intent, suggested_h2s, "
+    "id, topic_id, name, primary_keyword_id, intent, intent_locked, suggested_h2s, "
     "peer_article_links, source_statistical_grouping_id, orchestrator_notes, "
     "is_user_edited, is_gap_placeholder, created_at"
 )
@@ -1300,11 +1300,26 @@ def cluster_session_id(cluster_id: str) -> str | None:
 
 def update_cluster(cluster_id: str, fields: dict) -> dict:
     """Edit an article's editorial fields (name / intent / H2s). Always flags the
-    row user-edited so a later re-gen knows it was touched (PRD §13)."""
+    row user-edited so a later re-gen knows it was touched (PRD §13). A deliberate
+    intent edit also locks it (`intent_locked`) so the Brief Generator honors it as an
+    authoritative override instead of re-classifying."""
+    extra = {"is_user_edited": True}
+    if "intent" in fields:
+        extra["intent_locked"] = True
     get_service_client().table("clusters").update(
-        {**fields, "is_user_edited": True}
+        {**fields, **extra}
     ).eq("id", cluster_id).execute()
     return get_cluster(cluster_id)
+
+
+def sync_cluster_intent(cluster_id: str, intent: str) -> None:
+    """Write the Brief Generator's freshly-classified intent back onto the cluster so the
+    Cluster-view dropdown reflects it. A SYSTEM write — it does NOT set is_user_edited or
+    intent_locked, so a later reclassification can still update it (and an owner's locked
+    choice is never reached here, since the caller skips the sync when locked)."""
+    get_service_client().table("clusters").update(
+        {"intent": intent}
+    ).eq("id", cluster_id).execute()
 
 
 def promote_primary(cluster_id: str, keyword_id: str) -> dict:

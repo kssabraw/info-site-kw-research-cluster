@@ -97,16 +97,20 @@ def build_brief_deps(location_code: int) -> BriefDeps:
     )
 
 
-def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> BriefOutput:
+def generate_brief(
+    keyword: str, *, location_code: int, deps: BriefDeps, intent_override: str | None = None,
+) -> BriefOutput:
     """Run the brief pipeline for one keyword and return the v2.6 BriefOutput. Raises on
     a load-bearing failure (SERP / title) — there is no degraded-brief fallback (owner
-    rule); the caller (the metered job) marks the run errored."""
+    rule); the caller (the metered job) marks the run errored. `intent_override` (a locked
+    cluster intent) forces the intent classification."""
     sources = gather_sources(keyword, deps.dfs, scrapeowl=deps.scrapeowl)
     serp_titles = [o.get("title") or "" for o in sources.organic]
     serp_metas = [o.get("description") or "" for o in sources.organic]
 
     intent = classify_intent(
         keyword, serp_titles=serp_titles, serp_h2s=[], paa=sources.paa, llm=deps.intent_llm,
+        intent_override=intent_override,
     )
     title = generate_title_scope(
         keyword, intent_type=intent.intent_type, serp_titles=serp_titles,
