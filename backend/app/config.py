@@ -321,6 +321,9 @@ class Settings(BaseSettings):
     # Clustered-keyword coverage audit (2b): a supporting keyword counts as "covered" when
     # its 3-large cosine to some brief heading clears this (lexical subset match also counts).
     brief_coverage_threshold: float = 0.62
+    # Auto-split: uncovered keywords within this cosine (3-small) are grouped into one new
+    # article (so near-duplicate phrasings don't each spawn a thin, cannibalizing page).
+    auto_split_group_threshold: float = 0.85
     brief_aio_query_task_type: str = "RETRIEVAL_QUERY"     # heading side (asymmetric)
     brief_aio_doc_task_type: str = "RETRIEVAL_DOCUMENT"    # answer side
     brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation

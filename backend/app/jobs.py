@@ -850,6 +850,84 @@ def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
         )
 
 
+def _attach_unused_keywords(cluster_id: str, brief_json: dict, article) -> None:
+    """Copy the brief coverage audit's uncovered keywords onto article.metadata.unused_keywords
+    (the source for the in-app 'write these as separate articles?' prompt). No-op on an
+    auto-split child cluster — its keywords are its own topic, so it never re-prompts."""
+    try:
+        from app.storage import silo as store
+
+        cluster = store.get_cluster(cluster_id)
+        if cluster and cluster.get("auto_split"):
+            return
+        cov = (brief_json.get("metadata") or {}).get("cluster_keyword_coverage") or {}
+        uncovered = [u.get("keyword") for u in cov.get("uncovered", []) if u.get("keyword")]
+        if uncovered:
+            article.metadata["unused_keywords"] = uncovered
+    except Exception as exc:  # noqa: BLE001 — annotation only; never fail the article
+        logger.warning(
+            "unused_keyword_attach_failed",
+            extra={"event": "unused_keyword_attach_failed", "cluster_id": cluster_id,
+                   "reason": repr(exc)},
+        )
+
+
+def split_uncovered_and_write(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+) -> dict:
+    """Owner-confirmed: group the cluster's uncovered keywords (cosine ~0.85 so near-dupes
+    share one article, never one-per-keyword), split each group into a new auto-split article,
+    and queue it for generation. Returns the created articles + counts. Recursion-guarded by
+    the auto_split flag; uncapped (owner choice)."""
+    from app.briefgen import cache as brief_cache
+    from app.briefgen.coverage import _dedupe, greedy_group
+    from app.config import get_settings
+    from app.llm import get_llm
+    from app.storage import silo as store
+
+    brief_row = brief_cache.get_fresh_brief(keyword, location_code)
+    cov = ((brief_row or {}).get("output_json", {}).get("metadata") or {}).get(
+        "cluster_keyword_coverage") or {}
+    uncovered_texts = _dedupe([u.get("keyword") for u in cov.get("uncovered", []) if u.get("keyword")])
+    if not uncovered_texts:
+        return {"created": [], "submitted": 0, "uncovered": 0}
+
+    # Map uncovered texts -> the cluster's actual keyword rows (non-primary members).
+    rows = store.get_cluster_keyword_rows(cluster_id)
+    id_by_text = {
+        r["keyword"].strip().lower(): r["id"]
+        for r in rows if r.get("keyword") and not r.get("is_primary_for_cluster")
+    }
+    pairs = [(t, id_by_text[t.strip().lower()]) for t in uncovered_texts if t.strip().lower() in id_by_text]
+    if not pairs:
+        return {"created": [], "submitted": 0, "uncovered": len(uncovered_texts)}
+
+    texts = [t for t, _ in pairs]
+    vecs = get_llm().embed(texts)
+    groups = greedy_group(texts, vecs, threshold=get_settings().auto_split_group_threshold)
+    id_of = {t: kid for t, kid in pairs}
+
+    created: list[dict] = []
+    for group in groups:
+        # Representative = the longest phrasing (most specific) -> the new article's primary + name.
+        rep = max(group, key=lambda t: (len(t.split()), len(t)))
+        group_ids = [id_of[t] for t in group]
+        try:
+            new_cluster = store.split_cluster(cluster_id, group_ids, new_name=rep, new_primary_id=id_of[rep])
+        except ValueError:
+            continue
+        store.mark_cluster_auto_split(new_cluster["id"])
+        submitted = submit_article(session_id, new_cluster["id"], rep, location_code)
+        created.append({"cluster_id": new_cluster["id"], "name": rep,
+                        "keywords": group, "submitted": submitted})
+
+    return {
+        "created": created,
+        "submitted": sum(1 for c in created if c["submitted"]),
+        "uncovered": len(uncovered_texts),
+    }
+
+
 @_metered("article_generation")
 @_cancellable
 def run_article_job(
@@ -880,9 +958,11 @@ def run_article_job(
             brief_row = None
         if not brief_row:
             from app.briefgen.pipeline import build_brief_deps, generate_brief
+            from app.storage import silo as store
             b = generate_brief(
                 keyword, location_code=location_code,
-                deps=build_brief_deps(location_code), intent_override=override)
+                deps=build_brief_deps(location_code), intent_override=override,
+                supporting_keywords=store.get_cluster_supporting_keywords(cluster_id))
             brief_row = brief_cache.save_brief(
                 keyword=keyword, location_code=location_code, language_code="en",
                 output_json=b.model_dump(), cost_usd=None, session_id=session_id,
@@ -913,6 +993,9 @@ def run_article_job(
         )
         # M15 — deterministic internal-link injection (enrichment; never fails the article).
         _inject_internal_links(session_id, cluster_id, article)
+        # Surface the clustered keywords no heading covered, so the UI can prompt the owner
+        # to write them as separate articles. Suppressed on auto-split children (recursion guard).
+        _attach_unused_keywords(cluster_id, brief_row["output_json"], article)
     except WriterAbort as exc:
         logger.error(
             "step_failed",

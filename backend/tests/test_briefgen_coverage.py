@@ -6,6 +6,7 @@ from app.briefgen.coverage import (
     _tokens,
     as_h3_candidates,
     audit,
+    greedy_group,
 )
 
 
@@ -60,3 +61,15 @@ def test_audit_empty_supporting_is_safe():
 def test_audit_no_headings_marks_all_uncovered():
     res = audit(["a", "b"], heading_texts=[], used_texts=[], embed_fn=_bag_embed, threshold=0.62)
     assert {u["keyword"] for u in res["uncovered"]} == {"a", "b"}
+
+
+def test_greedy_group_collapses_near_duplicates():
+    # Two structure phrasings cluster together; the half-life one stands alone.
+    texts = ["retatrutide amino acid sequence", "retatrutide aa sequence", "retatrutide half life"]
+    vecs = _bag_embed(texts)
+    groups = greedy_group(texts, vecs, threshold=0.5)
+    # the two sequence phrasings share a group; half-life is its own
+    assert any(set(g) == {"retatrutide amino acid sequence", "retatrutide aa sequence"} for g in groups)
+    assert ["retatrutide half life"] in groups
+    # every keyword lands in exactly one group
+    assert sorted(k for g in groups for k in g) == sorted(texts)

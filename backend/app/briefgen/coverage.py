@@ -105,3 +105,24 @@ def audit(
     result["covered_count"] = len(result["covered"])
     result["uncovered_count"] = len(result["uncovered"])
     return result
+
+
+def greedy_group(texts: list[str], vecs: list[list[float]], *, threshold: float) -> list[list[str]]:
+    """Group near-duplicate keywords so each *group* becomes one split article (never one
+    article per keyword, which would recreate the thin-content/cannibalization problem).
+    Greedy: each text joins the first existing group whose representative (first member) is
+    within `threshold` cosine, else it opens a new group. Order-stable."""
+    groups: list[list[str]] = []
+    reps: list[list[float]] = []
+    for t, v in zip(texts, vecs):
+        placed = False
+        for gi, rv in enumerate(reps):
+            if cosine(v, rv) >= threshold:
+                groups[gi].append(t)
+                placed = True
+                break
+        if not placed:
+            groups.append([t])
+            reps.append(v)
+    return groups
+
