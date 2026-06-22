@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from .answer_contract import AnswerContract, build_scope_gate, generate_answer_contract
 from .assemble import build_brief_output
 from .authority import generate_authority_gaps
 from .decision_fit import build_decision_fit_directive, detect_partner_factor
@@ -27,7 +28,7 @@ from .faq import generate_faqs
 from .gates import prefilter
 from .h3 import merge_h3s, select_h3s
 from .intent import classify_intent
-from .mcs import MCSDeps, run_mcs
+from .mcs import MCSDeps, MCSResult, ScoredHeading, run_mcs
 from .models import BriefOutput
 from .persona import generate_persona
 from .sources import gather_sources
@@ -47,6 +48,7 @@ class BriefDeps:
     gen_llm: object             # Haiku — MCS candidate generation
     intent_llm: object          # Haiku — intent + A1 classification
     title_llm: object           # Sonnet — title/scope
+    contract_llm: object        # Opus — answer contract (query understanding guardrail)
 
 
 def build_brief_deps(location_code: int) -> BriefDeps:
@@ -91,6 +93,7 @@ def build_brief_deps(location_code: int) -> BriefDeps:
         gen_llm=AnthropicLLM(api_key=s.anthropic_api_key, model=s.brief_gen_model),
         intent_llm=AnthropicLLM(api_key=s.anthropic_api_key, model=s.brief_intent_model),
         title_llm=AnthropicLLM(api_key=s.anthropic_api_key, model=s.brief_title_model),
+        contract_llm=AnthropicLLM(api_key=s.anthropic_api_key, model=s.brief_answer_contract_model),
     )
 
 
@@ -116,18 +119,29 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
         embed_fn=deps.embed_3large, comparison_intent=(intent.intent_type == "comparison"),
     )
 
+    # Answer contract (Opus): structured query understanding -> guardrail for MCS. The
+    # answer_heading becomes the guaranteed lead H2; must_not_cover gates the candidate pool.
+    contract = generate_answer_contract(
+        keyword, title=title.title, scope_statement=title.scope_statement or "",
+        intent_type=intent.intent_type, aio_answer=sources.aio.get("answer_text", ""),
+        chatgpt_answer=sources.llm_answers.get("chat_gpt") or "", llm=deps.contract_llm,
+    )
+    scope_gate = build_scope_gate(contract, deps.embed_3large)
+
     topic_vec = deps.embed_3large([keyword])[0]
 
     def gate_fn(cands: list[str]) -> list[str]:
         # Eligibility pre-filter (X.3): on-topic to the keyword + not a bare restatement
-        # of the title (cross-candidate redundancy is handled by MCS coverage).
+        # of the title (cross-candidate redundancy is handled by MCS coverage), then the
+        # answer-contract scope gate drops candidates that fall under must_not_cover.
         results = prefilter(
             cands, topic_vec=topic_vec, references=[title.title], main_entity=entity,
             embed_fn=deps.embed_3large,
         )
-        return [r.heading for r in results if r.passed]
+        return scope_gate([r.heading for r in results if r.passed])
 
     tpl = intent.intent_format_template
+    max_h2 = tpl.get("max_h2_count", 12)
     mcs = run_mcs(
         entity=entity.canonical, aio=sources.aio,
         chatgpt_answer=sources.llm_answers.get("chat_gpt"), keyword=keyword,
@@ -135,9 +149,10 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
             gen_llm=deps.gen_llm, embed_aio_query=deps.embed_aio_query,
             embed_aio_doc=deps.embed_aio_doc, embed_3large=deps.embed_3large,
         ),
-        min_count=tpl.get("min_h2_count", 3), max_count=tpl.get("max_h2_count", 12),
+        min_count=tpl.get("min_h2_count", 3), max_count=max_h2,
         gate_fn=gate_fn,
     )
+    _prepend_answer_lead(mcs, contract, max_count=max_h2)
 
     h2_texts = [s.text for s in mcs.selected]
     reddit_summaries = [d.get("content") or d.get("title") or "" for d in sources.reddit]
@@ -186,8 +201,21 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
     return build_brief_output(
         keyword=keyword, intent=intent, title=title, entity=entity, mcs=mcs, sources=sources,
         persona=persona, faqs=faqs, h3s_by_h2=h3s_by_h2, decision_fit_directive=directive,
-        extra_metadata=faq_meta,
+        extra_metadata={**faq_meta, "answer_contract": contract.as_metadata()},
     )
+
+
+def _prepend_answer_lead(mcs: MCSResult, contract: AnswerContract, *, max_count: int) -> None:
+    """Make the answer contract's `answer_heading` the guaranteed lead H2 (in place):
+    drop any selected heading that merely restates it (case-insensitive containment), insert
+    it first, and trim back to `max_count`. No-op without an answer_heading."""
+    head = (contract.answer_heading or "").strip()
+    if not head:
+        return
+    low = head.lower()
+    kept = [s for s in mcs.selected if low not in s.text.lower() and s.text.lower() not in low]
+    lead = ScoredHeading(text=head, point_cosines=[], chatgpt_cosine=0.0, aio_headline=0.0, blended=1.0)
+    mcs.selected = [lead, *kept][:max_count]
 
 
 def _h3_candidates(sources, persona) -> list:

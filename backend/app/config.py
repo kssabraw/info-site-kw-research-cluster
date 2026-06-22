@@ -323,6 +323,10 @@ class Settings(BaseSettings):
     brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation
     brief_intent_model: str = "claude-haiku-4-5"           # intent + A1 classification
     brief_title_model: str = "claude-sonnet-4-6"           # title/scope (quality cascades)
+    # Answer-contract (query understanding → must/must-not-cover guardrail for MCS). Opus
+    # on purpose: it sets the brief's whole direction + must correct a false premise; one
+    # small call, well under the per-brief ceiling. Env-overridable.
+    brief_answer_contract_model: str = "claude-opus-4-8"
     # DataForSEO AI-Optimization "LLM Responses" requires a per-provider model_name
     # (omitting it -> task error 40501 "Invalid Field: 'model_name'"). Env-overridable;
     # confirmed-valid values from the provider models endpoints (tune to a cheaper
