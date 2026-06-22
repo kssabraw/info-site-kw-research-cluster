@@ -231,3 +231,23 @@ def test_write_group_injects_decision_fit_into_prompt():
     _write_group(deps, brief, sie, Group(parent=parent), 200)
     assert "condition->recommendation branches" in captured["user"]
     assert "If wants max weight loss: retatrutide" in captured["user"]
+
+
+def test_write_group_strips_dangling_bullet():
+    from app.writer.budget import Group
+    from app.writer.models import Brief, BriefHeading, SieInput
+    from app.writer.pipeline import WriterDeps, _write_group
+
+    class _Trunc:
+        def complete_text(self, *, system, user, purpose, max_tokens=None, temperature=None):
+            # simulate a truncated section ending on an empty bullet
+            return "Answer-first lead.\n\nKey points:\n- first complete point\n- "
+
+    brief = Brief(keyword="k", title="T", intent_type="informational")
+    sie = SieInput(keyword="k", word_count={"target": 2500, "min": 2000, "max": 3000},
+                   target_keyword={"term": "k", "minimum_usage": {"h2": 1, "h3": 0, "paragraphs": 6}},
+                   terms={"required": [], "avoid": []})
+    deps = WriterDeps(section_llm=_Trunc(), short_llm=_Trunc(), embed_fn=lambda t: [[1.0] for _ in t])
+    out = _write_group(deps, brief, sie, Group(parent=BriefHeading(order=1, level="H2", text="H2")), 200)
+    assert out.endswith("first complete point")          # the dangling "- " was dropped
+    assert not out.rstrip().endswith("-")

@@ -170,11 +170,16 @@ def _write_group(
         + "Output GitHub-flavored Markdown for the section body only (no H1/H2 heading line)."
         + (f"\n\n{retry_directive}" if retry_directive else "")
     )
-    return deps.section_llm.complete_text(
+    prose = deps.section_llm.complete_text(
         system="You are an expert writer producing SEO article sections. Markdown only.",
         user=user, purpose="writer_section",
-        max_tokens=min(4000, max(512, section_budget * 3)), temperature=0.6,
+        # ~4 tokens/word headroom (tables/lists add markdown overhead); generous cap so a
+        # multi-H3 group is never truncated mid-content.
+        max_tokens=min(6000, max(768, section_budget * 4)), temperature=0.6,
     )
+    # Defensive: if a draft still ends on a dangling/empty list marker (e.g. a truncated
+    # "- "), drop that incomplete trailing bullet so it never renders.
+    return re.sub(r"\n\s*[-*+]\s*$", "", prose).rstrip()
 
 
 def _decision_fit_directive_text(directive: dict | None) -> str:
@@ -400,7 +405,11 @@ def generate_article(
     order_cursor = 100  # provisional; re-sequenced at assembly
     for g in kept_groups:
         _check_timeout()
-        sec_budget = alloc.get(g.parent.order, budget_mod.SECTION_FLOOR)
+        # The whole group (parent H2 + all H3s) is written in one call, so size its budget
+        # (and thus max_tokens) from the SUM of the parent + child allocations — not the
+        # parent alone, which truncated multi-H3 sections mid-content.
+        sec_budget = alloc.get(g.parent.order, budget_mod.SECTION_FLOOR) + sum(
+            alloc.get(c.order, 0) for c in g.children)
         if _decision_fit_directive_text(g.parent.format_directive):
             decision_fit_rendered = True
         prose = _write_group(deps, brief, sie, g, sec_budget)
