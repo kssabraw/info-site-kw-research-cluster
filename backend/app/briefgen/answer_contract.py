@@ -102,7 +102,7 @@ def generate_answer_contract(
             tool_description="The structured answer contract.",
             input_schema=_SCHEMA,
             purpose="brief_answer_contract",
-            max_tokens=1024, temperature=0.2,
+            max_tokens=1024,   # NOTE: no temperature — Opus 4.8 rejects it ("deprecated for this model")
         )
     except Exception as exc:  # noqa: BLE001 — enhancement; degrade to unguided MCS
         logger.warning(
