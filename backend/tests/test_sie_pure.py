@@ -196,6 +196,15 @@ def test_merge_entities_dual_signal_and_entity_only():
     assert terms["bradford white"].source == "entity_only" and terms["bradford white"].passes_coverage
 
 
+def test_merge_skips_entity_with_empty_lemma():
+    """Regression: an entity whose name lemmatizes to '' must not create an empty
+    required term (the blank `""` term seen in the first live run)."""
+    terms = {}
+    entities = [SimpleNamespace(term="   ", entity_category="x", ner_variants=[])]
+    merge_entities_into_terms(terms, entities, _lemma)
+    assert "" not in terms and all(k.strip() for k in terms)
+
+
 # ----- Module 10: dynamic semantic threshold --------------------------------
 
 def test_dynamic_threshold_lowers_when_few_pass():

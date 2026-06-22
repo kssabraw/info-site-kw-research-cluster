@@ -305,6 +305,7 @@ class Settings(BaseSettings):
     sie_textrazor_relevance_min: float = 0.40  # M11 pass-1 salience proxy
     sie_min_eligible_pages: int = 5            # below -> degraded-confidence warning
     sie_scrape_max_workers: int = 6
+    sie_textrazor_max_workers: int = 2         # TextRazor 401s on a high concurrent fan-out
     sie_max_transport_attempts: int = 3
     # Per-unit cost-meter estimates until first invoices (sie_analysis phase).
     scrapeowl_cost_per_scrape: float = 0.0008

@@ -123,7 +123,8 @@ def analyze(
         )
 
     # M11 pass-1: per-page NER (parallel) — feeds the M8 entity exception + merge.
-    with ContextThreadPoolExecutor(max_workers=s.sie_scrape_max_workers) as pool:
+    # TextRazor rejects (401) under a high concurrent fan-out, so cap it lower.
+    with ContextThreadPoolExecutor(max_workers=s.sie_textrazor_max_workers) as pool:
         per_page_ner = list(pool.map(
             lambda p: (p.url, deps.textrazor.extract_entities(_body_text(p))), pages
         ))
@@ -158,7 +159,7 @@ def analyze(
     required = [
         t for t in terms.values()
         if t.passes_coverage and t.passes_tfidf and t.passes_semantic
-        and not t.low_coverage and t.term not in anomalies
+        and not t.low_coverage and t.term not in anomalies and t.term.strip()
     ]
     required = _ensure_target_keyword(required, terms, keyword, deps.lemma_fn)
 
@@ -206,3 +207,8 @@ def _force_target_score(required: list[AggregatedTerm], keyword: str, lemma_fn: 
             t.recommendation_score = 1.0
             t.confidence = "high"
             t.reason = "Target keyword — always required."
+            # Display the original keyword, not its lemma (e.g. "is retatrutide a
+            # glp-3 drug" lemmatizes to "be retatrutide a drug"). Matching/coverage
+            # is already done, so renaming the label here is safe — and it lets
+            # build_sie_output match the target term for its minimum-usage floor.
+            t.term = keyword
