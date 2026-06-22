@@ -819,7 +819,7 @@ def run_article_job(
         article = generate_article(
             brief, sie, warnings=warnings, deps=build_writer_deps(),
             word_budget=s.writer_word_budget, coverage_enabled=s.writer_claim_coverage_enabled,
-            timeout_s=s.writer_timeout_s,
+            timeout_s=s.writer_timeout_s, adherence_threshold=s.writer_adherence_threshold,
         )
     except WriterAbort as exc:
         logger.error(

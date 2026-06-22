@@ -336,8 +336,16 @@ class Settings(BaseSettings):
     writer_section_model: str = "claude-sonnet-4-6"
     writer_short_model: str = "claude-haiku-4-5"
     writer_word_budget: int = 2500
-    writer_timeout_s: float = 90.0                 # §7 end-to-end budget -> generation_timeout
+    # §7 names 90s, but that target predates sequential Sonnet section writing: one
+    # section ran ~30s live, so a 4-6 section article needs more headroom. The job is an
+    # async polled background job (not request-bound), so a larger budget is safe.
+    writer_timeout_s: float = 240.0                # end-to-end budget -> generation_timeout
     writer_claim_coverage_enabled: bool = True     # §8 #1: keep §5.8.8 detect+soften in no-citations mode
+    # Topic-adherence drop (§5.4.2). The PRD's 0.62 (calibrated on generic 3-small)
+    # over-drops here: brief H2s are already MCS-vetted on-topic yet score 0.48-0.58
+    # vs the specific title, so 0.62 left only 1 of 4 sections live. Lowered to 0.40 —
+    # still cleanly separates genuinely off-topic headings (~0 cosine). Env-overridable.
+    writer_adherence_threshold: float = 0.40
 
     # CORS — comma-separated list of allowed frontend origins. "*" allows all.
     cors_allow_origins: str = "*"

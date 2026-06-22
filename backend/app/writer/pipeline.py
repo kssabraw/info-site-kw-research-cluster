@@ -302,7 +302,7 @@ def _content_h2_texts(brief: Brief) -> list[str]:
 def generate_article(
     brief: Brief, sie: SieInput, *, warnings: dict, deps: WriterDeps,
     word_budget: int | None = None, coverage_enabled: bool = True,
-    timeout_s: float = 90.0,
+    timeout_s: float = 90.0, adherence_threshold: float = budget_mod.ADHERENCE_THRESHOLD,
 ) -> WriterOutput:
     """Run the degraded `1.7-no-context` writer flow and return the §6 WriterOutput.
     `warnings` is the adapter's cross-validation result (no_citations / word_count_conflict).
@@ -327,7 +327,8 @@ def generate_article(
         for h in brief.heading_structure:
             if h.level == "H2" and h.type == "content":
                 scores[h.order] = _cosine(vec_by_text[h.text], title_vec)
-    kept_orders, dropped = budget_mod.drop_low_adherence(brief.heading_structure, scores)
+    kept_orders, dropped = budget_mod.drop_low_adherence(
+        brief.heading_structure, scores, threshold=adherence_threshold)
     kept_order_set = set(kept_orders)
     kept_groups = [
         g for g in budget_mod.group_headings(brief.heading_structure)
