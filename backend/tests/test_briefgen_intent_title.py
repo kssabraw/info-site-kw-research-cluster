@@ -109,3 +109,23 @@ def test_generate_title_scope_aborts_after_retries():
     with pytest.raises(TitleGenerationError):
         generate_title_scope("k", intent_type="informational", serp_titles=[], serp_h1s=[],
                              serp_metas=[], llm_answers={}, llm=llm)
+
+
+def test_classify_intent_comparison_override():
+    from app.briefgen.intent import classify_intent
+
+    class _LLM:
+        def call_tool(self, **kw):
+            # LLM misreads a "vs" query as informational
+            return {"intent_type": "informational", "intent_confidence": 0.6,
+                    "decision_fit_detection": {"is_multi_answer": True, "confidence": 0.9,
+                                               "candidate_conditions": [{"condition": "a"}, {"condition": "b"}]}}
+
+    res = classify_intent("cagrilintide peptide vs retatrutide", serp_titles=[], serp_h2s=[],
+                          paa=[], llm=_LLM())
+    assert res.intent_type == "comparison"
+    assert res.intent_confidence >= 0.95               # bumped so it doesn't trip review
+    assert res.intent_review_required is False
+    # a non-comparison keyword is left as the LLM labeled it
+    res2 = classify_intent("what is retatrutide", serp_titles=[], serp_h2s=[], paa=[], llm=_LLM())
+    assert res2.intent_type == "informational"

@@ -13,12 +13,27 @@ gate, the review-required rule. Egress: `classify_intent` (one tool-use call).
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 INTENT_TYPES = (
     "informational", "listicle", "how-to", "comparison", "ecom",
     "local-seo", "news", "informational-commercial",
 )
+
+# Unambiguous comparison markers in the keyword itself — "X vs Y" is comparison by
+# definition, so a deterministic override beats an occasional LLM misread (live: the
+# classifier called "cagrilintide peptide vs retatrutide" informational).
+_COMPARISON_RE = re.compile(
+    r"\b(vs\.?|versus|compared\s+(?:to|with)|comparison)\b", re.IGNORECASE
+)
+
+
+def looks_comparison(keyword: str) -> bool:
+    return bool(_COMPARISON_RE.search(keyword or ""))
 # Classifier aliases collapse to canonical intents (bundle §Step 3.3).
 ALIASES = {"guide": "informational", "definition": "informational", "review": "informational-commercial"}
 
@@ -189,6 +204,16 @@ def classify_intent(
     )
     intent_type = out.get("intent_type", "informational")
     confidence = float(out.get("intent_confidence") or 0.0)
+    # Deterministic comparison override — a "X vs Y" keyword is a comparison regardless
+    # of the LLM label; bump confidence so it doesn't trip intent_review_required.
+    if looks_comparison(keyword) and intent_type != "comparison":
+        logger.info(
+            "intent_comparison_override",
+            extra={"event": "intent_comparison_override", "keyword": keyword,
+                   "llm_intent": intent_type},
+        )
+        intent_type = "comparison"
+        confidence = max(confidence, 0.95)
     template = get_intent_template(intent_type)
     detection = out.get("decision_fit_detection") or {}
     return IntentResult(
