@@ -843,3 +843,32 @@ export const startBrief = (
 
 export const getBrief = (sessionId: string, clusterId: string) =>
   request<BriefResponse>(`/sessions/${sessionId}/clusters/${clusterId}/brief`);
+
+// ----- M14 Content Writer (article generation) — owner-only -----------------
+export interface ArticleOutput {
+  keyword: string;
+  intent_type: string;
+  title: string;
+  article_markdown: string;
+  article_html: string;
+  key_takeaways: string[];
+  metadata: Record<string, unknown>;
+}
+export interface ArticleResponse {
+  status: "complete" | "running";
+  keyword: string;
+  article?: ArticleOutput;
+}
+
+export const startArticle = (
+  sessionId: string,
+  clusterId: string,
+  body?: { force_refresh?: boolean },
+) =>
+  request<ArticleResponse>(
+    `/sessions/${sessionId}/clusters/${clusterId}/generate-article`,
+    { method: "POST", body: JSON.stringify(body ?? {}) },
+  );
+
+export const getArticle = (sessionId: string, clusterId: string) =>
+  request<ArticleResponse>(`/sessions/${sessionId}/clusters/${clusterId}/article`);

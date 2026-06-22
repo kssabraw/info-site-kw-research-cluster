@@ -16,6 +16,7 @@ resume lands.
 """
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, wraps
 
@@ -739,4 +740,117 @@ def run_brief_job(
         "step_complete",
         extra={"event": "step_complete", "step": "brief_job", "keyword": keyword,
                "headings": len(output.heading_structure), "cost_usd": cost},
+    )
+
+
+# ----- M14 Content Writer (article generation) ------------------------------
+# Per-cluster in-process guard so a double-submit doesn't run two generations
+# concurrently (single Railway instance; survives within one process only — flagged).
+_article_inflight: set[str] = set()
+_article_lock = threading.Lock()
+
+
+def article_inflight(cluster_id: str) -> bool:
+    with _article_lock:
+        return cluster_id in _article_inflight
+
+
+def submit_article(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+    *, force_refresh: bool = False,
+) -> bool:
+    """Claim the cluster + submit. Returns False if that cluster is already generating."""
+    with _article_lock:
+        if cluster_id in _article_inflight:
+            return False
+        _article_inflight.add(cluster_id)
+    _EXECUTOR.submit(run_article_job, session_id, cluster_id, keyword, location_code, force_refresh)
+    return True
+
+
+@_metered("article_generation")
+@_cancellable
+def run_article_job(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+    force_refresh: bool = False,
+) -> None:
+    """Generate one article for a cluster's keyword. Stage 1 ensures the Brief (Input A)
+    and SIE (Input C) exist (running them on a miss), then the Writer runs the degraded
+    1.7-no-context flow and the result is persisted to `fanout.article_outputs`. On a
+    WriterAbort / load-bearing failure, logs and persists nothing (the GET then 404s)."""
+    from app.briefgen import cache as brief_cache
+    from app.cost_meter import current_meter
+    from app.sie import cache as sie_cache
+    from app.writer.adapter import build_writer_inputs
+    from app.writer.models import WriterAbort
+    from app.writer.pipeline import build_writer_deps, generate_article
+
+    s = get_settings()
+    meter = current_meter()
+    before = meter.snapshot()[0] if meter else 0.0
+    try:
+        # Stage 1a — ensure the Brief.
+        brief_row = brief_cache.get_fresh_brief(keyword, location_code)
+        if not brief_row:
+            from app.briefgen.pipeline import build_brief_deps, generate_brief
+            b = generate_brief(keyword, location_code=location_code, deps=build_brief_deps(location_code))
+            brief_row = brief_cache.save_brief(
+                keyword=keyword, location_code=location_code, language_code="en",
+                output_json=b.model_dump(), cost_usd=None, session_id=session_id,
+                cluster_id=cluster_id,
+            )
+        # Stage 1b — ensure the SIE analysis.
+        sie_row = sie_cache.get_fresh_analysis(keyword, location_code)
+        if not sie_row:
+            from app.sie import pipeline as sie_pipeline
+            out = sie_pipeline.analyze(
+                keyword, location_code=location_code, language_code="en",
+                outlier_mode="safe", deps=sie_pipeline.build_deps(location_code),
+            )
+            sie_row = sie_cache.save_analysis(
+                keyword=keyword, location_code=location_code, language_code="en",
+                outlier_mode="safe", output_json=out.model_dump(), cost_usd=None,
+                session_id=session_id, cluster_id=cluster_id,
+            )
+        # Stage 2 — Writer.
+        brief, sie, warnings = build_writer_inputs(
+            brief_row["output_json"], sie_row["output_json"],
+        )
+        article = generate_article(
+            brief, sie, warnings=warnings, deps=build_writer_deps(),
+            word_budget=s.writer_word_budget, coverage_enabled=s.writer_claim_coverage_enabled,
+            timeout_s=s.writer_timeout_s,
+        )
+    except WriterAbort as exc:
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "article_job", "keyword": keyword,
+                   "reason": f"{exc.code}: {exc.message}"},
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 — side analysis; never crash the worker
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "article_job", "keyword": keyword,
+                   "reason": repr(exc)},
+        )
+        return
+    finally:
+        with _article_lock:
+            _article_inflight.discard(cluster_id)
+
+    cost = round((meter.snapshot()[0] if meter else 0.0) - before, 6)
+    from app.writer import store as article_store
+    article_store.save_article(
+        cluster_id=cluster_id, session_id=session_id, article_json=article.model_dump(),
+        article_markdown=article.article_markdown, article_html=article.article_html,
+        total_word_count=article.metadata.get("total_word_count"), cost_usd=cost,
+        schema_version_effective=article.client_context_summary.get(
+            "schema_version_effective", "1.7-no-context"),
+    )
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "article_job", "keyword": keyword,
+               "words": article.metadata.get("total_word_count"),
+               "sections": article.metadata.get("section_count"), "cost_usd": cost},
     )

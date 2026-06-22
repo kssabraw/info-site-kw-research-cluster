@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import TermAnalysisPanel from "./TermAnalysisPanel";
 import BriefPanel from "./BriefPanel";
+import ArticlePanel from "./ArticlePanel";
 import {
   acceptGap,
   bulkKeywordMove,
@@ -244,6 +245,7 @@ function ArticleRow(p: {
   const [showVariants, setShowVariants] = useState(false);
   const [showSie, setShowSie] = useState(false);   // M12 SIE Term-analysis panel
   const [showBrief, setShowBrief] = useState(false);   // M13 Brief Generator panel
+  const [showArticle, setShowArticle] = useState(false);   // M14 Writer panel
 
   // Display-time dedup: rows with dedupe_canonical_id are near-duplicates of
   // another keyword in this cluster (the canonical). Hide them from the main
@@ -354,6 +356,14 @@ function ArticleRow(p: {
               >
                 Content brief
               </button>
+              <button
+                className="btn btn-sm"
+                disabled={!primary?.keyword}
+                onClick={() => setShowArticle(true)}
+                title="Generate the full article (ensures brief + SIE, then writes the degraded 1.7-no-context draft)"
+              >
+                Generate article
+              </button>
             </div>
           )}
           {showSie && primary?.keyword && (
@@ -370,6 +380,14 @@ function ArticleRow(p: {
               clusterId={c.id}
               keyword={primary.keyword}
               onClose={() => setShowBrief(false)}
+            />
+          )}
+          {showArticle && primary?.keyword && (
+            <ArticlePanel
+              sessionId={p.sessionId}
+              clusterId={c.id}
+              keyword={primary.keyword}
+              onClose={() => setShowArticle(false)}
             />
           )}
 
