@@ -15,7 +15,15 @@ export default function BriefPanel(props: {
   const [status, setStatus] = useState<"running" | "complete" | "error">("running");
   const [brief, setBrief] = useState<BriefReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const timer = useRef<number | null>(null);
+
+  // Elapsed-time counter while the brief generates (reassurance for a ~3–5 min job).
+  useEffect(() => {
+    if (status !== "running") return;
+    const id = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,7 +88,14 @@ export default function BriefPanel(props: {
         </header>
 
         {status === "running" && (
-          <p className="muted">Generating the answer-engine-first brief (SERP + AIO + LLM fan-out + MCS)… this runs ~3–5 min on a cache miss.</p>
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <div className="spinner" />
+            <p className="progress-stage">Generating the content brief…</p>
+            <p className="progress-meta">
+              SERP + AI Overview + LLM fan-out + dual-space MCS · {elapsed}s elapsed
+              <br />usually 3–5 min on a cache miss
+            </p>
+          </div>
         )}
         {status === "error" && <p className="banner banner-error">{error}</p>}
 
