@@ -330,6 +330,15 @@ class Settings(BaseSettings):
     brief_chatgpt_model: str = "gpt-4.1-mini"
     brief_gemini_model: str = "gemini-2.5-pro"
 
+    # ----- M14 Content Writer (degraded 1.7-no-context + no_citations path) -----
+    # Sonnet for prose (sections/intro/FAQ/conclusion/takeaways), Haiku for short calls
+    # (CTA); no Opus (PRD §17). Embeddings reuse the app embedder (3-small, 1536-dim).
+    writer_section_model: str = "claude-sonnet-4-6"
+    writer_short_model: str = "claude-haiku-4-5"
+    writer_word_budget: int = 2500
+    writer_timeout_s: float = 90.0                 # §7 end-to-end budget -> generation_timeout
+    writer_claim_coverage_enabled: bool = True     # §8 #1: keep §5.8.8 detect+soften in no-citations mode
+
     # CORS — comma-separated list of allowed frontend origins. "*" allows all.
     cors_allow_origins: str = "*"
 
