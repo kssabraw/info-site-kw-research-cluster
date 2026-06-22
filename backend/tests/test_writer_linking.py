@@ -94,3 +94,67 @@ def test_inject_links_pillar_renders_in_this_guide_list():
     assert res.article[guide_idx + 1].body.count("](https://s.com/silo/") == 2
     assert set(res.linked) == {c.url for c in children}
     assert guide_idx > 0 and res.article[0].level == "H1"        # after H1/intro, not before
+
+
+# ----- targets builder (architecture graph -> LinkTargets) ------------------
+
+def _architecture():
+    return {
+        "pillars": [
+            {"topic_id": "t1", "silo_name": "Retatrutide Basics", "title": "Retatrutide: Complete Guide",
+             "target_keyword": "retatrutide", "supporting_article_ids": ["c1", "c2"], "lateral_pillar_links": []},
+        ],
+        "supporting_articles": [
+            {"article_id": "c1", "name": "Retatrutide Dosing", "intent": "informational",
+             "parent_pillar_topic_id": "t1", "lateral_article_links": ["c2"]},
+            {"article_id": "c2", "name": "Retatrutide Side Effects", "intent": "informational",
+             "parent_pillar_topic_id": "t1", "lateral_article_links": ["c1"]},
+        ],
+    }
+
+
+def test_build_targets_supporting_article_uplink_and_lateral():
+    from app.writer.link_targets import build_targets
+
+    clusters_by_id = {
+        "c1": {"id": "c1", "topic_id": "t1", "name": "Retatrutide Dosing", "primary_keyword_id": "k1", "slug": "retatrutide-dosing"},
+        "c2": {"id": "c2", "topic_id": "t1", "name": "Retatrutide Side Effects", "primary_keyword_id": "k2", "slug": "retatrutide-side-effects"},
+    }
+    topics_by_id = {"t1": {"id": "t1", "name": "Retatrutide Basics"}}
+    keywords_by_id = {"k1": "retatrutide dosing", "k2": "retatrutide side effects"}
+
+    targets, is_pillar = build_targets(
+        "c1", architecture=_architecture(), clusters_by_id=clusters_by_id,
+        topics_by_id=topics_by_id, keywords_by_id=keywords_by_id, base_url="https://site.com/")
+    assert is_pillar is False
+    urls = [t.url for t in targets]
+    # up-link to the pillar (silo root) + lateral to c2
+    assert "https://site.com/retatrutide-basics/" in urls
+    assert "https://site.com/retatrutide-basics/retatrutide-side-effects" in urls
+    up = next(t for t in targets if t.url.endswith("/retatrutide-basics/"))
+    assert "retatrutide" in up.anchors
+    peer = next(t for t in targets if t.url.endswith("retatrutide-side-effects"))
+    assert "retatrutide side effects" in peer.anchors
+
+
+def test_build_targets_empty_for_non_supporting_cluster():
+    from app.writer.link_targets import build_targets
+
+    targets, is_pillar = build_targets(
+        "unknown", architecture=_architecture(), clusters_by_id={}, topics_by_id={},
+        keywords_by_id={}, base_url="https://site.com")
+    assert targets == [] and is_pillar is False
+
+
+def test_build_targets_skips_peer_without_slug():
+    from app.writer.link_targets import build_targets
+
+    clusters_by_id = {  # c2 has no slug yet -> the lateral link is skipped
+        "c1": {"id": "c1", "topic_id": "t1", "name": "A", "primary_keyword_id": "k1", "slug": "a"},
+        "c2": {"id": "c2", "topic_id": "t1", "name": "B", "primary_keyword_id": "k2", "slug": None},
+    }
+    targets, _ = build_targets(
+        "c1", architecture=_architecture(), clusters_by_id=clusters_by_id,
+        topics_by_id={"t1": {"id": "t1", "name": "Silo"}}, keywords_by_id={}, base_url="https://s.com")
+    assert all("/silo/b" not in t.url for t in targets)     # peer without slug dropped
+    assert any(t.url == "https://s.com/silo/" for t in targets)   # up-link still present

@@ -1000,6 +1000,56 @@ def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
     }
 
 
+def list_clusters_link_info(session_id: str) -> list[dict]:
+    """Minimal per-cluster fields the M15 link injector needs (id, topic_id, name,
+    primary_keyword_id, slug), joined up through topics."""
+    topic_ids = [t["id"] for t in list_topics(session_id)]
+    if not topic_ids:
+        return []
+    res = (
+        get_service_client()
+        .table("clusters")
+        .select("id, topic_id, name, primary_keyword_id, slug")
+        .in_("topic_id", topic_ids)
+        .order("created_at")
+        .execute()
+    )
+    return res.data
+
+
+def ensure_session_slugs(session_id: str) -> dict[str, str]:
+    """Assign a stable `clusters.slug` to every cluster in the session that lacks one
+    (deduped within its silo/topic), persist the new ones, and return `{cluster_id: slug}`.
+    Idempotent — after the first run every cluster has a slug, so later calls write nothing
+    (drip-safe: a target's URL is fixed before it's generated)."""
+    from collections import defaultdict
+
+    from app.writer.slugs import assign_slugs
+
+    clusters = list_clusters_link_info(session_id)
+    if not clusters:
+        return {}
+    kw = get_keyword_texts([c["primary_keyword_id"] for c in clusters if c.get("primary_keyword_id")])
+
+    by_topic: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    existing: dict[str, dict[str, str]] = defaultdict(dict)
+    for c in clusters:
+        src = kw.get(c.get("primary_keyword_id")) or c.get("name") or "page"
+        by_topic[c["topic_id"]].append((c["id"], src))
+        if c.get("slug"):
+            existing[c["topic_id"]][c["id"]] = c["slug"]
+
+    result: dict[str, str] = {}
+    client = get_service_client()
+    for tid, items in by_topic.items():
+        assigned = assign_slugs(items, existing=existing[tid])
+        for cid, slug in assigned.items():
+            result[cid] = slug
+            if existing[tid].get(cid) != slug:   # only write the new/changed ones
+                client.table("clusters").update({"slug": slug}).eq("id", cid).execute()
+    return result
+
+
 def list_clusters(session_id: str) -> list[dict]:
     """Article units for a session, joined up through topics. Read-only summary
     (full editing UI is M7); never returns the centroid embedding."""

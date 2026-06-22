@@ -801,6 +801,51 @@ def submit_article(
     return True
 
 
+def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
+    """M15 — wrap the M6 architecture link graph into the article as absolute internal
+    links, then re-serialize. No-op when the session has no `site_base_url` or no generated
+    architecture. Enrichment only — any failure is swallowed (the article still ships)."""
+    try:
+        from app.storage import silo as store
+        from app.writer.link_injector import inject_links
+        from app.writer.link_targets import build_targets
+        from app.writer.serialize import to_html, to_markdown
+
+        session = store.get_session(session_id)
+        base_url = (session or {}).get("site_base_url")
+        arch_row = store.get_architecture(session_id)
+        if not base_url or not arch_row:
+            return
+        architecture = arch_row["architecture_json"]
+        slugs = store.ensure_session_slugs(session_id)
+        clusters = store.list_clusters_link_info(session_id)
+        clusters_by_id = {c["id"]: {**c, "slug": slugs.get(c["id"], c.get("slug"))} for c in clusters}
+        topics_by_id = {t["id"]: t for t in store.list_topics(session_id)}
+        keywords_by_id = store.get_keyword_texts(
+            [c["primary_keyword_id"] for c in clusters if c.get("primary_keyword_id")])
+
+        targets, is_pillar = build_targets(
+            cluster_id, architecture=architecture, clusters_by_id=clusters_by_id,
+            topics_by_id=topics_by_id, keywords_by_id=keywords_by_id, base_url=base_url)
+        if not targets:
+            return
+        result = inject_links(article.article, targets, is_pillar=is_pillar)
+        article.article = result.article
+        article.article_markdown = to_markdown(result.article)
+        article.article_html = to_html(result.article)
+        article.metadata["internal_links"] = {
+            "linked": result.linked,
+            "related_fallback": [t.url for t in result.related],
+            "target_count": len(targets),
+        }
+    except Exception as exc:  # noqa: BLE001 — linking is enrichment; never fail the article
+        logger.warning(
+            "internal_link_injection_failed",
+            extra={"event": "internal_link_injection_failed", "cluster_id": cluster_id,
+                   "reason": repr(exc)},
+        )
+
+
 @_metered("article_generation")
 @_cancellable
 def run_article_job(
@@ -862,6 +907,8 @@ def run_article_job(
             word_budget=s.writer_word_budget, coverage_enabled=s.writer_claim_coverage_enabled,
             timeout_s=s.writer_timeout_s, adherence_threshold=s.writer_adherence_threshold,
         )
+        # M15 — deterministic internal-link injection (enrichment; never fails the article).
+        _inject_internal_links(session_id, cluster_id, article)
     except WriterAbort as exc:
         logger.error(
             "step_failed",
