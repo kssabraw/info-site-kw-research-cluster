@@ -24,6 +24,26 @@ _ELIGIBLE = {
 _NEAR_DUP_WINDOW = 500
 _NEAR_DUP_THRESHOLD = 0.90
 
+# Social/video platforms are never content-eligible — decided deterministically here
+# rather than left to the LLM classifier. They aren't on-page SEO competitors and
+# routinely block scraping (so they'd burn a ScrapeOwl call and degrade anyway).
+_SKIP_DOMAINS = (
+    "facebook.com", "instagram.com", "youtube.com", "youtu.be",
+    "pinterest.com", "tiktok.com",
+)
+
+
+def _is_skip_domain(url: str) -> bool:
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(url).netloc.lower().split(":")[0]
+    except ValueError:
+        return False
+    if host.startswith("www."):
+        host = host[4:]
+    return any(host == d or host.endswith("." + d) for d in _SKIP_DOMAINS)
+
 
 @dataclass
 class ClassifiedURL:
@@ -81,6 +101,13 @@ def classify_results(results: list[dict], keyword: str, llm) -> list[ClassifiedU
     by_url = {c["url"]: c for c in out.get("classifications", [])}
     classified: list[ClassifiedURL] = []
     for r in results:
+        if _is_skip_domain(r["url"]):
+            classified.append(ClassifiedURL(
+                url=r["url"], rank=r.get("rank"), title=r.get("title"),
+                page_category="social media result", content_eligible=False,
+                reason="skipped (social/video platform)",
+            ))
+            continue
         c = by_url.get(r["url"], {})
         category = c.get("page_category", "irrelevant result")
         classified.append(ClassifiedURL(
