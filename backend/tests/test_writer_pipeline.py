@@ -187,3 +187,47 @@ def test_generate_article_drops_low_adherence_h2():
     out = generate_article(brief, sie, warnings=warnings, deps=deps, word_budget=2500)
     dropped = out.metadata["dropped_for_low_topic_adherence"]
     assert any("gardening" in d["heading"] for d in dropped)
+
+
+def test_decision_fit_directive_text_renders_branches():
+    from app.writer.pipeline import _decision_fit_directive_text
+
+    directive = {"type": "decision_fit", "default_statement": "Clarify the mechanisms first.",
+                 "branches": [
+                     {"condition": "the reader wants maximal weight loss", "option": "favor retatrutide"},
+                     {"condition": "the reader is side-effect sensitive", "option": "weigh tolerability"}]}
+    txt = _decision_fit_directive_text(directive)
+    assert "depends on the reader's situation" in txt
+    assert "If the reader wants maximal weight loss: favor retatrutide" in txt
+    assert "Clarify the mechanisms first." in txt
+    # non-decision / absent / under-2-branches -> empty
+    assert _decision_fit_directive_text(None) == ""
+    assert _decision_fit_directive_text({"type": "other"}) == ""
+    assert _decision_fit_directive_text({"type": "decision_fit", "branches": [{"condition": "a", "option": "b"}]}) == ""
+
+
+def test_write_group_injects_decision_fit_into_prompt():
+    from app.writer.budget import Group
+    from app.writer.models import Brief, BriefHeading, SieInput
+    from app.writer.pipeline import WriterDeps, _write_group
+
+    captured = {}
+
+    class _Cap:
+        def complete_text(self, *, system, user, purpose, max_tokens=None, temperature=None):
+            captured["user"] = user
+            return "Answer-first lead. More detail here."
+
+    brief = Brief(keyword="cagrilintide peptide vs retatrutide", title="T",
+                  intent_type="comparison", scope_statement="s")
+    sie = SieInput(keyword="k", word_count={"target": 2500, "min": 2000, "max": 3000},
+                   target_keyword={"term": "k", "minimum_usage": {"h2": 1, "h3": 0, "paragraphs": 6}},
+                   terms={"required": [], "avoid": []})
+    parent = BriefHeading(order=1, level="H2", text="Retatrutide vs cagrilintide",
+                          format_directive={"type": "decision_fit", "default_statement": "d",
+                                            "branches": [{"condition": "wants max weight loss", "option": "retatrutide"},
+                                                         {"condition": "side-effect sensitive", "option": "cagrilintide"}]})
+    deps = WriterDeps(section_llm=_Cap(), short_llm=_Cap(), embed_fn=lambda t: [[1.0] for _ in t])
+    _write_group(deps, brief, sie, Group(parent=parent), 200)
+    assert "condition->recommendation branches" in captured["user"]
+    assert "If wants max weight loss: retatrutide" in captured["user"]

@@ -67,6 +67,7 @@ class BriefHeading(BaseModel):
     parent_h2_text: str | None = None
     citation_ids: list[str] = Field(default_factory=list)
     embedding: list[float] | None = None      # brief H2 embedding (else embed on the fly)
+    format_directive: dict | None = None      # per-section typed directive (e.g. decision_fit, §A5)
 
 
 class BriefFormatDirectives(BaseModel):

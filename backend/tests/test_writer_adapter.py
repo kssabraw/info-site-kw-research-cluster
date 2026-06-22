@@ -130,3 +130,15 @@ def test_build_writer_inputs_clamps_faqs_over_five():
     assert len(fq) == 5
     assert [h.order for h in brief.heading_structure] == list(range(1, len(brief.heading_structure) + 1))
     assert warnings["no_citations"] is True
+
+
+def test_adapt_brief_preserves_format_directive():
+    bj = _brief_json(faq_count=3)
+    bj["heading_structure"][1]["format_directive"] = {
+        "type": "decision_fit",
+        "branches": [{"condition": "a", "option": "x"}, {"condition": "b", "option": "y"}],
+        "default_statement": "d"}
+    b = adapt_brief(bj)
+    anchor = next(h for h in b.heading_structure if h.text == "Retatrutide is a triple agonist")
+    assert anchor.format_directive["type"] == "decision_fit"
+    assert len(anchor.format_directive["branches"]) == 2
