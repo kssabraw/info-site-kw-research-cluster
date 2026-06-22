@@ -99,11 +99,14 @@ def build_brief_deps(location_code: int) -> BriefDeps:
 
 def generate_brief(
     keyword: str, *, location_code: int, deps: BriefDeps, intent_override: str | None = None,
+    supporting_keywords: list[str] | None = None,
 ) -> BriefOutput:
     """Run the brief pipeline for one keyword and return the v2.6 BriefOutput. Raises on
     a load-bearing failure (SERP / title) — there is no degraded-brief fallback (owner
     rule); the caller (the metered job) marks the run errored. `intent_override` (a locked
-    cluster intent) forces the intent classification."""
+    cluster intent) forces the intent classification. `supporting_keywords` (the cluster's
+    secondary keywords) feed the H3 subtopic pool and a post-assembly coverage audit so the
+    clustered research is used + surfaced rather than silently dropped."""
     sources = gather_sources(keyword, deps.dfs, scrapeowl=deps.scrapeowl)
     serp_titles = [o.get("title") or "" for o in sources.organic]
     serp_metas = [o.get("description") or "" for o in sources.organic]
@@ -181,8 +184,10 @@ def generate_brief(
         embed_3large=deps.embed_3large, classify_llm=deps.gen_llm, concern_llm=deps.gen_llm,
     )
     # Step 8.6 regular H3 selection (coverage-graph regions) + merge with authority H3s.
+    # The cluster's supporting keywords join the H3 candidate pool — the band/region/MMR
+    # filters decide which actually land as subtopics (so good clustered keywords get USED).
     regular_by_h2 = select_h3s(
-        h2_texts=h2_texts, candidates=_h3_candidates(sources, persona),
+        h2_texts=h2_texts, candidates=_h3_candidates(sources, persona, supporting_keywords),
         scope_statement=title.scope_statement, embed_3large=deps.embed_3large,
     )
     authority_by_h2: dict[str, list[dict]] = {}
@@ -202,11 +207,28 @@ def generate_brief(
             llm=deps.intent_llm,
         )
 
-    return build_brief_output(
+    output = build_brief_output(
         keyword=keyword, intent=intent, title=title, entity=entity, mcs=mcs, sources=sources,
         persona=persona, faqs=faqs, h3s_by_h2=h3s_by_h2, decision_fit_directive=directive,
         extra_metadata={**faq_meta, "answer_contract": contract.as_metadata()},
     )
+
+    # Coverage audit (2b): which clustered keywords a heading covers vs. fell through.
+    if supporting_keywords:
+        from app.config import get_settings
+
+        from .coverage import audit
+
+        heading_texts = [h["text"] for h in output.heading_structure if h.get("text")]
+        heading_texts += [f.get("question", "") for f in output.faqs if f.get("question")]
+        used_texts = [
+            h["text"] for h in output.heading_structure if h.get("source") == "cluster_keyword"
+        ]
+        output.metadata["cluster_keyword_coverage"] = audit(
+            supporting_keywords, heading_texts=heading_texts, used_texts=used_texts,
+            embed_fn=deps.embed_3large, threshold=get_settings().brief_coverage_threshold,
+        )
+    return output
 
 
 def _prepend_answer_lead(mcs: MCSResult, contract: AnswerContract, *, max_count: int) -> None:
@@ -222,9 +244,9 @@ def _prepend_answer_lead(mcs: MCSResult, contract: AnswerContract, *, max_count:
     mcs.selected = [lead, *kept][:max_count]
 
 
-def _h3_candidates(sources, persona) -> list:
+def _h3_candidates(sources, persona, supporting_keywords: list[str] | None = None) -> list:
     """Build the H3 subtopic candidate pool (info-gain sources: PAA + autocomplete +
-    suggestions + persona gaps), deduped."""
+    suggestions + persona gaps + the cluster's supporting keywords), deduped."""
     from .h3 import H3Candidate
 
     seen: set[str] = set()
@@ -243,4 +265,6 @@ def _h3_candidates(sources, persona) -> list:
         _add(s, "keyword_suggestion")
     for g in persona.gap_questions:
         _add(g.get("question"), "persona_gap")
+    for k in supporting_keywords or []:
+        _add(k, "cluster_keyword")
     return out

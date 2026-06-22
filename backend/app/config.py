@@ -318,6 +318,9 @@ class Settings(BaseSettings):
     # ChatGPT proximity; Gemini (RETRIEVAL_* task types) for AIO proximity. The Gemini
     # path here is INDEPENDENT of the app-wide embedding_provider (which stays openai).
     brief_embedding_model_large: str = "text-embedding-3-large"
+    # Clustered-keyword coverage audit (2b): a supporting keyword counts as "covered" when
+    # its 3-large cosine to some brief heading clears this (lexical subset match also counts).
+    brief_coverage_threshold: float = 0.62
     brief_aio_query_task_type: str = "RETRIEVAL_QUERY"     # heading side (asymmetric)
     brief_aio_doc_task_type: str = "RETRIEVAL_DOCUMENT"    # answer side
     brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation
