@@ -2,15 +2,25 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-> **▶ Resume here (2026-06-22):** **M12 (SIE Term & Entity module) is DONE — deployed,
-> live-validated, and signed off** (full validation + the five first-run fixes in the
-> 2026-06-22 entry below). The next milestone is **M13 = Brief Generator, built
-> ANSWER-ENGINE-FIRST** per `docs/aio-optimization-plan.md` (+ `docs/brief-generator-module-plan.md`).
-> **First M13 task = the gated v2.6 plan-doc reconciliation** (map authority gaps → H3;
-> directive locked) before any code, then build in dependency slices like M12 and stop
-> for review per milestone discipline. Current working branch:
-> `claude/intelligent-keller-6sx8ho`.
+> **▶ Resume here (2026-06-22, late):** **M13 (Brief Generator, answer-engine-first) is
+> fully BUILT and merged to `main` — but DORMANT and NOT live-validated.** All of slices
+> 1–5c are on `main` + deployed (PRs #17–#20; M12 close-out + M13 1–4 + 5a + 5b + 5c).
+> `backend/app/briefgen/` runs the complete answer-engine flow end-to-end (stub-validated;
+> 81 brief-gen+SIE tests green). **Nothing in production calls it yet** and the
+> `fanout.briefs` migration (`20260622000000_briefs.sql`) is **NOT applied to prod** — so
+> it's behavior-neutral. See the 2026-06-22 M13 entry below for the slice map + the
+> docs-derived egress shapes to confirm live.
 >
+> **NEXT = the M13 activation layer** (mirrors M12's pattern): build `run_brief_job`
+> (`@_metered("brief_generation")`) + the `fanout.briefs` cache wiring (`get_fresh_brief`/
+> `save_brief` already exist) + an owner-only "Generate brief" API + report UI (like M12's
+> `term-analysis` + `TermAnalysisPanel`) → **apply the `briefs` migration to prod** →
+> deploy → **live-validate** the first real brief (the only way to confirm the DataForSEO
+> LLM-Responses / Discussions&Forums / AIO-block field shapes + Gemini `RETRIEVAL_*`
+> discrimination — expect first-run calibration like M12). Then M14 = Writer, M15 =
+> scheduling. Current working branch: `claude/intelligent-keller-6sx8ho`.
+>
+> **M12 (SIE) is DONE — deployed, live-validated, signed off** (2026-06-22 entry below).
 > (Older standing item, unchanged: the **M11 / M8–M10 live-validation checklist** in
 > **§2** — deployed-stack browser + DB checks the sandbox can't run — remains open.)
 >
@@ -42,6 +52,63 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > **stay in place (dormant)** for a future revisit (Embedding 2 at GA and/or
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
+
+_2026-06-22 (late) — M13 (Brief Generator, ANSWER-ENGINE-FIRST) BUILT + merged to
+`main`, DORMANT, not yet live-validated. Built in slices on
+`claude/intelligent-keller-6sx8ho`; landed via PRs #17–#20:_
+
+- **The whole Brief Generator is built** (`backend/app/briefgen/`). `generate_brief`
+  (`pipeline.py`) runs the answer-engine-first flow end-to-end (stub-validated, **81
+  briefgen+SIE tests green, ruff clean**):
+  sources → intent(+A1) → title/scope → main-entity → MCS H2 skeleton (gate pre-filtered)
+  → persona → authority-gap H3s → FAQ → regular H3s (merged) → decision-fit directive →
+  assemble the **v2.6 `BriefOutput`** (Writer **Input A**).
+- **Slice map (each its own PR-merged commit set):**
+  - **1 foundation** — migration `20260622000000_briefs.sql` (`fanout.briefs`, 7-day
+    cross-session cache, RLS day-one, mirrors `keyword_analyses`); `models.py` (Brief
+    Output v2.6 = Writer Input A, faithful to the live contract, `extra="allow"`);
+    `cache.py` (`get_fresh_brief`/`save_brief`).
+  - **2 sources** — `dataforseo/client.py` `serp_advanced_items` (SERP **+ AIO capture**
+    `load_async_ai_overview` + PAA + Discussions&Forums, one call) + `llm_response_items`
+    (AI-Optimization "LLM Responses", chat_gpt+gemini, E4); `sources.py` pure parsers +
+    `gather_sources`. **Reddit = Discussions&Forums SERP feature → ScrapeOwl thread-content
+    scrape** (owner decision — not the `site:reddit.com` hack).
+  - **3 entity + gates** — `entity.py` (X.2 main-entity: spaCy boundary + pure union-find
+    clustering/scoring/confidence + title fallback; **thread-local spaCy**); `gates.py`
+    (X.3 relevance floor + **entity-stripped** restatement ceiling, collision §4.5-A).
+  - **4 MCS** — `mcs.py`: **dual-space scalar-blended** scoring (Gemini AIO + 3-large
+    ChatGPT, never mixes vectors) + greedy **set-coverage** selection + Haiku entity+one-point
+    candidate gen + beam rounds + gate hook.
+  - **5a intent + title** — `intent.py` (Step 3 + A1 detector folded in; 8-intent template
+    registry; `format_directives`; `intent_review_required`); `title.py` (Step 3.5, `does
+    not cover` clause, retry-then-abort).
+  - **5b assembly + pipeline** — `assemble.py` (v2.6 BriefOutput); `pipeline.py`
+    `generate_brief` + `build_brief_deps` (the **dual embedders**: OpenAI 3-large +
+    **two Gemini embedders with `RETRIEVAL_QUERY`/`RETRIEVAL_DOCUMENT`** task types, built
+    DIRECTLY, independent of the app-wide `embedding_provider=openai`).
+  - **5c** — `persona.py` (Step 6), `faq.py` (Steps 10/10.5 two-stage intent gate),
+    `authority.py` (Step 9 authority-gap H3s), `h3.py` (Step 8.6 regular H3s: parent-band
+    [0.65,0.85] + Louvain same-region + MMR, `merge_h3s` authority-priority),
+    `decision_fit.py` (A3/A4/A5 directive).
+- **Config added (`config.py`):** `brief_embedding_model_large` (`text-embedding-3-large`),
+  `brief_aio_query/doc_task_type` (`RETRIEVAL_QUERY`/`RETRIEVAL_DOCUMENT`),
+  `brief_gen/intent/title_model` (Haiku/Haiku/Sonnet).
+- **Owner MCS decision (2026-06-22):** bounded shared candidate pool + Haiku, **keep the
+  $1.00 brief ceiling** (recorded in `aio-optimization-plan.md` §6).
+- **Adversarial self-review fixed 8 issues** before merge (empty-string-embed 400 in gates,
+  `parse_llm_answer` non-list crash, serial→parallel reddit scrapes, redundant embeds
+  batched, order-dependent clustering→union-find, spaCy thread-safety→thread-local,
+  brand-exclusion token-level ORG, log labels).
+- **EGRESS UNVALIDATED — confirm on the first live brief run** (write-from-docs pattern,
+  same as SIE): the **DataForSEO LLM-Responses** endpoint path/shape
+  (`/v3/ai_optimization/{provider}/llm_responses/live`, `user_prompt`/`web_search`), the
+  **Discussions&Forums** item shape (`discussions_and_forums[_element]`), the **AIO block**
+  (`ai_overview` item: text + references), and **Gemini `RETRIEVAL_*` discrimination** (the
+  06-16 rollback was on `SEMANTIC_SIMILARITY`; the brief uses Gemini for AIO proximity ONLY,
+  scalars-blended, so it can't poison the OpenAI gates — but validate it actually
+  discriminates). `briefs` migration **not yet applied to prod**.
+- **NEXT = activation layer** (see the resume banner): `run_brief_job` + cache wiring +
+  owner API/UI → apply migration → deploy → live-validate. M14 Writer consumes this output.
 
 _2026-06-22 — M12 (SIE) DEPLOYED, LIVE-VALIDATED, SIGNED OFF. Five first-run fixes
 landed (PRs #13–#16, all merged to `main` + deployed). Worked on
