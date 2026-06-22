@@ -2,25 +2,30 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-> **▶ Resume here (2026-06-22, latest):** **M13 (Brief Generator, answer-engine-first)
-> is DONE — built, deployed, and LIVE-VALIDATED (signed off).** Slices 1–5c (PRs #17–#20)
-> + the activation layer (`run_brief_job` + `fanout.briefs` cache + owner-only `brief` API
-> + `BriefPanel`, PR #21) are on `main` + deployed; migration `20260622000000_briefs.sql`
-> applied to prod (RLS on + 4 policies). First live brief produced a real answer-engine
-> output (session `4ecefaa1` / `is retatrutide a glp-3 drug`): 4 MCS H2s + coverage-graph
-> H3s, MCS pool 38, AIO proximity 0.871, ChatGPT proximity 0.624, $0.21. Three first-run
-> fixes shipped (PRs #22–#23): the `model_name` blocker, the loading spinner, the entity
-> title-fallback strip. See the 2026-06-22 (signoff) entry below.
+> **▶ Resume here (2026-06-22, latest):** **M14 (Content Writer) is DONE — built,
+> deployed, and LIVE-VALIDATED (signed off).** Full `backend/app/writer/` package in 5
+> slices (PR #25) + 8 review-driven refinement PRs (#26–#33), all on `main` + deployed.
+> Migrations applied to prod: `20260623000000_writer_foundation.sql` (`fanout.article_outputs`)
+> + `20260623100000_cluster_intent_lock.sql` (`clusters.intent_locked`). The Writer runs the
+> degraded `1.7-no-context` + `no_citations` path: adapter maps `fanout.briefs` (Input A) +
+> `fanout.keyword_analyses` (Input C) → sequential Sonnet prose / Haiku short calls →
+> `fanout.article_outputs`. `run_article_job` ensures Brief+SIE as stage 1 (cache or
+> generate), then writes. Owner-only `generate-article`/`article` API + `ArticlePanel`
+> + "Generate article" button. **Live-validated** on session `4ecefaa1` (`cagrilintide
+> peptide vs retatrutide`, `is retatrutide a glp-3 drug`, `retatrutide peptide dallas`):
+> ~1.4–1.6k-word articles, ~$0.34–0.53. See the 2026-06-22 (M14 signoff) entry below for the
+> refinement list + the validated evidence.
 >
-> **NEXT = M14 (Writer module)** — `docs/writer-module-plan.md`, PRD #1 (Writer v1.7,
-> §17/§18/§20). Consumes the M13 brief as **Input A** (heading structure + format
-> directives) + the M12 SIE output as **Input C** (terms/entities). Sonnet 4.6 prose +
-> Haiku 4.5 short calls; `1.7-no-context` + `no_citations` degraded mode. Build in
-> dependency slices like M12/M13; stop for review. (M15 = scheduling + link injection.)
+> **NEXT = M15 (scheduling + link injection)** — `docs/writer-module-plan.md` §9:
+> `content_schedules`/`scheduled_article_runs` + asyncio worker + `Schedule all` modal + $90
+> VA approval gate; `link_injector` + `clusters.slug` + `sessions.site_base_url`; fuller
+> article/schedule UI. **Also still open before/around M15:** the owner-expanded **pillar**
+> generation path (silo-level brief — the deferred M14 scope item); the **Opus-authoritative
+> intent** idea (let the answer-contract own the final intent label beyond the `vs` guard).
 > Current working branch: `claude/intelligent-keller-6sx8ho`.
 >
-> **M12 (SIE) + M13 (Brief Gen) are both DONE — deployed, live-validated, signed off**
-> (2026-06-22 entries below).
+> **M12 (SIE) + M13 (Brief Gen) + M14 (Writer) are all DONE — deployed, live-validated,
+> signed off** (2026-06-22 entries below).
 > (Older standing item, unchanged: the **M11 / M8–M10 live-validation checklist** in
 > **§2** — deployed-stack browser + DB checks the sandbox can't run — remains open.)
 >
@@ -52,6 +57,52 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > **stay in place (dormant)** for a future revisit (Embedding 2 at GA and/or
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
+
+_2026-06-22 (M14 signoff) — M14 (Content Writer) DONE — built, deployed, LIVE-VALIDATED,
+signed off. Worked on `claude/intelligent-keller-6sx8ho`:_
+
+- **Build (PR #25, 5 slices, `backend/app/writer/`):** foundation (`models.py`; migration
+  `20260623000000_writer_foundation.sql` = `fanout.article_outputs` + RLS), adapter (pure
+  field-mapper `fanout.briefs` [Input A] + `fanout.keyword_analyses` [Input C] → Writer
+  models; appends faq/conclusion heading rows; Step 0 cross-validation; Δ4 degraded-SIE
+  fallback), pure core (`templates`/`validators`/`budget`/`serialize` — per-intent floors +
+  CTA templates, citable-claim C1–C9 detect + C7–C9 soften, §5.4 budget + 0.62→0.40
+  adherence drop, §5.19 MD/HTML), pipeline (`pipeline.py` sequential step runner; Sonnet
+  prose + Haiku CTA; `anthropic_client` gained `complete_text` + per-call max_tokens/
+  temperature), activation (`run_article_job` `@_metered("article_generation")` + per-cluster
+  inflight guard, ensures Brief+SIE stage 1; owner `generate-article`/`article` API;
+  `ArticlePanel` + button). Degraded `1.7-no-context` + `no_citations`; dep `titlecase==2.4.1`.
+- **Live-validated** (session `4ecefaa1`): full chain brief+SIE cache → sequential
+  Sonnet/Haiku → persisted article. Confirmed on `cagrilintide peptide vs retatrutide`:
+  intent=comparison, Opus answer-contract lead H2, `decision_fit_rendered:true` with the
+  conditional guidance woven into prose, 0 H2→H3-without-body, 4 sections / 1625 words / $0.34.
+- **8 review-driven refinement PRs (all merged + deployed):**
+  - **#26** adherence 0.62→0.40 + writer timeout 90→240s (the filter over-dropped on-topic
+    H2s on 3-small — only 1 of 4 sections survived).
+  - **#27 + #29 Opus answer-contract** (`briefgen/answer_contract.py`, `claude-opus-4-8`):
+    distils `{explicit_question, implied_need, direct_answer, answer_heading, must_cover,
+    must_not_cover}`; `answer_heading` → guaranteed lead H2, `must_not_cover` → MCS scope
+    gate. Fixes briefs that wandered off-question/off-scope. (#29 = omit `temperature`, which
+    Opus 4.8 rejects.)
+  - **#30 decision-fit STAGE B** — the Writer now renders the per-anchor `decision_fit`
+    `format_directive` (condition→recommendation branches as prose, no templated heading);
+    the brief mapped it all along, the Writer just ignored it.
+  - **#28 H2-lead structure** — `_group_to_items` guarantees an H2 always has answer-first
+    body before any H3 (promotes a leading `###`'s prose up); prompt reinforces it.
+  - **#31 comparison `vs` override** — `vs`/`versus`/`compared` keyword forces `comparison`
+    intent (LLM mislabeled the cagrilintide query informational).
+  - **#32 intent sync ↔ dropdown** (migration `20260623100000_cluster_intent_lock.sql`):
+    brief's classified intent syncs back to `clusters.intent`; a deliberate dropdown edit
+    sets `intent_locked` → authoritative override the Brief Generator honors. `intent_locked`
+    distinguishes a real choice from the coarse `is_user_edited`.
+  - **#33 section-truncation fix** — size the group write's `max_tokens` from the whole H2
+    group (parent + child budgets), not the parent alone, so multi-H3 sections aren't cut off;
+    +defensive dangling-bullet strip.
+- **Flagged carried into M15:** owner-expanded **pillar** generation (silo-level brief) is the
+  remaining M14 scope item, deferred; §5.8.8 LLM coverage rewrite-retry reduced to
+  deterministic C7–C9 soften + flag; paragraph/intro one-shot retries accept-and-flag; the
+  **Opus-authoritative-intent** idea (contract owns the final intent label) noted as a future
+  robustness improvement. **NEXT = M15 (scheduling + link injection).**
 
 _2026-06-22 (signoff) — M13 (Brief Generator, ANSWER-ENGINE-FIRST) DONE — activation
 layer shipped, deployed, LIVE-VALIDATED, signed off. Worked on

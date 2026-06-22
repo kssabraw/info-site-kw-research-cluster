@@ -152,13 +152,60 @@ supabase gen types typescript --project-id <ref> > frontend/src/shared/db-types.
 
 ## Active milestone
 
-**M14 — Writer module: NEXT, not yet started.** Build plan: `docs/writer-module-plan.md`;
-spec: PRD #1 (Writer v1.7, §17 Call Inventory / §18 Prompt Scaffolds / §20 golden
-example). Consumes the M13 Brief Generator output as **Input A** (heading structure +
-format directives) and the M12 SIE output as **Input C** (terms/entities). Sonnet 4.6
-prose + Haiku 4.5 short/classification calls; `1.7-no-context` + `no_citations` degraded
-mode. Build in dependency slices like M12/M13; stop for review after. (M15 = scheduling +
-link injection follows.)
+**M15 — scheduling + link injection: NEXT, not yet started.** Per `docs/writer-module-plan.md` §9:
+`content_schedules` / `scheduled_article_runs` + asyncio worker + `Schedule all` modal +
+$90 VA approval gate; `link_injector` + `clusters.slug` + `sessions.site_base_url`; the
+fuller article/schedule UI surfaces. Build in dependency slices; stop for review.
+
+**M14 — Writer module: ✅ DONE — built, deployed, and LIVE-VALIDATED (signed off
+2026-06-22).** Build plan: `docs/writer-module-plan.md`; spec: PRD #1 (Writer v1.7). Built
+in 5 dependency slices (`backend/app/writer/`, PR #25): foundation (migration
+`20260623000000_writer_foundation.sql` = `fanout.article_outputs` + RLS; `models.py` —
+Input A `Brief`, Input C reused as `SieInput`=`SIEOutput`, `ArticleItem`, `WriterOutput`,
+`WriterAbort`); adapter (`adapter.py` — pure field-mapper from `fanout.briefs` +
+`fanout.keyword_analyses`; appends faq/conclusion rows; Step 0 cross-validation; Δ4
+degraded-SIE fallback); pure core (`templates.py`/`validators.py`/`budget.py`/`serialize.py`
+— floor/CTA registries, C1–C9 detect + C7–C9 soften, §5.4 budget + adherence, §5.19 MD/HTML);
+pipeline (`pipeline.py` — sequential step runner + Sonnet prose / Haiku short calls;
+`anthropic_client` gained `complete_text` + per-call max_tokens/temperature); activation
+(`run_article_job` `@_metered("article_generation")` + per-cluster inflight guard, ensures
+Brief+SIE as stage 1; owner-only `generate-article`/`article` API; `ArticlePanel` +
+"Generate article" button). Runs the **degraded `1.7-no-context` + `no_citations`** path
+(no Research module). New dep `titlecase==2.4.1`. Migration applied to prod.
+
+**Live-validated end-to-end** (session `4ecefaa1`; `cagrilintide peptide vs retatrutide`,
+`is retatrutide a glp-3 drug`, `retatrutide peptide dallas`): brief+SIE cache → sequential
+Sonnet/Haiku writer → persisted `BriefOutput`-driven article (~1.4–1.6k words, ~$0.34–0.53),
+no crash.
+
+**Refinements driven by live review (all merged + deployed; PRs #26–#33):**
+- **Adherence threshold 0.62→0.40 + writer timeout 90→240s** (PR #26) — the §5.4.2 filter
+  over-dropped on-topic H2s on 3-small; only 1 of 4 sections survived. Env-overridable.
+- **Opus answer-contract** (M13, PR #27 + temperature fix #29) — a `claude-opus-4-8` call
+  distils `{explicit_question, implied_need, direct_answer, answer_heading, must_cover,
+  must_not_cover}`; the `answer_heading` becomes the guaranteed lead H2 and `must_not_cover`
+  gates the MCS candidate pool. Fixes briefs that wandered off-question / off-scope. (Opus
+  rejects `temperature` → omitted.)
+- **Decision-fit STAGE B** (PR #30) — the Writer now renders the per-anchor `decision_fit`
+  `format_directive` (condition→recommendation branches woven into the prose, no templated
+  heading). The brief already mapped it (A1→gate→partner-factor→A3/A5); the Writer ignored
+  it until now.
+- **H2-lead structure** (PR #28) — `_group_to_items` guarantees an H2 always has answer-first
+  body before any H3 (promotes a leading `###`'s prose up); section prompt reinforces it.
+- **Comparison-intent override** (PR #31) — a `vs`/`versus`/`compared` keyword forces
+  `comparison` intent (the LLM mislabeled "cagrilintide … vs retatrutide" informational).
+- **Intent sync ↔ cluster dropdown** (PR #32, migration `20260623100000_cluster_intent_lock.sql`)
+  — the brief's classified intent syncs back to `clusters.intent`; a deliberate dropdown
+  edit sets `intent_locked` and becomes an authoritative override the Brief Generator honors.
+- **Section truncation fix** (PR #33) — size the group write's `max_tokens` from the whole
+  H2 group (parent + child budgets), not the parent alone, so multi-H3 sections aren't cut
+  off mid-content; +defensive dangling-bullet strip.
+
+**Flagged (carried):** the owner-expanded **pillar** generation path (silo-level brief) is
+the remaining M14 scope item, deferred to a follow-up; the §5.8.8 LLM coverage rewrite-retry
+is reduced to deterministic C7–C9 soften + flag; paragraph/intro one-shot retries are
+accept-and-flag. The **Opus-authoritative-intent** idea (let the contract own the final
+intent label, beyond the `vs` guard) is noted as a future robustness improvement.
 
 **M13 — Brief Generator (answer-engine-first): ✅ DONE — built, deployed, and
 LIVE-VALIDATED (signed off 2026-06-22).** Build plan: `docs/brief-generator-module-plan.md`
@@ -1031,3 +1078,4 @@ M5 grew well beyond §7.10 while validating live on `retatrutide` (session
 | 1.15 | 2026-06-16 | **Gemini embeddings ROLLED BACK to OpenAI `text-embedding-3-small` (owner decision).** In write-time calibration on `retatrutide`, Gemini Embedding 2 showed **poor relevance discrimination** — off-topic keywords passed the relevance gate even after sweeping `relevance_threshold` 0.65 → 0.85 → 0.88 → 0.90 via `/regate` (cosines compressed too high to separate on-topic from off-topic; likely the `SEMANTIC_SIMILARITY` task type and/or preview-model behavior). Reverted live by setting **`EMBEDDING_PROVIDER=openai`** on the Railway service — one env var, no code change, no recalibration (OpenAI's 8 thresholds were never altered). Caught entirely in calibration; **no production data affected** (the staged "deploy-dormant → calibrate-before-real-work" plan did its job). Code cleanup: `config.gemini_embedding_model` default reverted preview → GA `gemini-embedding-001` (saner dormant default). **The provider/model-pluggable embedder, the per-session `embedding_model` 409 guard, the cost rates, and `GET /debug/embedding-health` all stay in place (dormant)** — revisiting Gemini later (Embedding 2 at GA, or `RETRIEVAL_*` task types) is a re-embed + recalibration, not re-engineering. The `sessions.embedding_model` column + migration stay (harmless; all live sessions tag `text-embedding-3-small`). |
 | 1.16 | 2026-06-22 | **M12 (SIE Term & Entity module) DONE — deployed + LIVE-VALIDATED + signed off.** First real egress run surfaced and fixed five first-run issues (merged + deployed across PRs #13–#16): (1) the `extract_zones` crash (mid-iteration bs4 `decompose()` → `None.get` on decomposed children → collect-then-decompose + per-page try/except); (2) ScrapeOwl parse hardening (non-dict/empty-body guards, 35s timeout, 4xx no-retry / 5xx single-retry); (3) **5xx → premium-proxy retry** (`sie_scrapeowl_premium_on_500`, cost-aware; confirmed firing live); (4) **TextRazor 401 storm** fixed (`sie_textrazor_max_workers=2` + backoff; NER now all 200); (5) polish — hard-skip social/video domains (FB/IG/YouTube/Pinterest/TikTok), drop empty-lemma entity terms, display the target keyword's original text not its lemma. Live result on session `4ecefaa1` / `is retatrutide a glp-3 drug`: **13/19 pages, 15 terms, 50 entities**, $0.19, no degraded warning; persisted as Writer **Input C** (`keyword_analyses.output_json`, schema 1.4) — the native shape the M14 adapter reads (no adaptation layer). Writer-plan §8 reconciled (real entities confirm Δ4 fallback-only; lede-eligible category set is domain-dependent → make configurable in M14). **M13 (Brief Generator, answer-engine-first per `docs/aio-optimization-plan.md`) is next**; first M13 task = the gated v2.6 plan-doc reconciliation. Worked on `claude/intelligent-keller-6sx8ho`. |
 | 1.17 | 2026-06-22 | **M13 (Brief Generator, answer-engine-first) DONE — deployed + LIVE-VALIDATED + signed off.** The whole `backend/app/briefgen/` package (slices 1–5c, PRs #17–#20) plus the **activation layer** (PR #21): `run_brief_job` (`@_metered("brief_generation")`) + `fanout.briefs` 7-day cache + owner-only `brief` API + `BriefPanel` (mirrors M12's `term-analysis` + `TermAnalysisPanel`). Migration `20260622000000_briefs.sql` applied to prod (`wvcthtmmcmhkybcesirb`; RLS on + 4 policies). The answer-engine-first flow runs end-to-end live: sources (SERP + AIO + DataForSEO LLM-Responses fan-out + Discussions/Forums) → intent(+A1) → title/scope → main-entity → **dual-space MCS** (OpenAI 3-large = ChatGPT proximity + gates; Gemini `RETRIEVAL_*` = AIO proximity; scalars blended, vectors never mixed) → persona → authority-gap H3s → FAQ → regular H3s → decision-fit → v2.6 `BriefOutput` (Writer **Input A**). **Live validation (session `4ecefaa1` / `is retatrutide a glp-3 drug`):** 4 MCS H2s + coverage-graph H3s (9 headings), MCS pool 38, AIO proximity 0.871, ChatGPT proximity 0.624, **$0.21**. **Three first-run fixes (merged + deployed):** (1) **blocker** — DataForSEO `llm_responses/live` requires a per-provider `model_name` (task error 40501); both LLM answers empty → `run_mcs` no-targets short-circuit → only an H1. Added env-overridable `brief_chatgpt_model=gpt-4.1-mini` / `brief_gemini_model=gemini-2.5-pro` + payload `model_name` (PR #22). (2) **Loading spinner** + elapsed timer on the brief/term panels (PR #23). (3) **Entity title-fallback** strip ("Is Retatrutide" → "Retatrutide", PR #23). **M14 (Writer) is next** — consumes this brief as Input A + the SIE output as Input C. Worked on `claude/intelligent-keller-6sx8ho`. |
+| 1.18 | 2026-06-22 | **M14 (Content Writer) DONE — built, deployed, LIVE-VALIDATED + signed off.** Full `backend/app/writer/` package in 5 slices (PR #25): foundation (`models.py` + migration `20260623000000_writer_foundation.sql` = `fanout.article_outputs` + RLS), adapter (pure field-mapper `fanout.briefs`+`fanout.keyword_analyses` → Writer Input A/C), pure core (`templates`/`validators`/`budget`/`serialize` — C1–C9 soften, §5.4 budget+adherence, §5.19 MD/HTML), pipeline (sequential Sonnet prose / Haiku short calls; `anthropic_client.complete_text` added), activation (`run_article_job` + owner `generate-article` API + `ArticlePanel`). Degraded `1.7-no-context` + `no_citations` path; new dep `titlecase==2.4.1`. **Live-validated** on session `4ecefaa1` (cagrilintide-vs / glp-3 / dallas keywords): brief+SIE → writer → persisted article (~1.4–1.6k words, ~$0.34–0.53). **Refinements driven by live review (PRs #26–#33, all merged+deployed):** adherence 0.62→0.40 + timeout 90→240 (#26); **Opus `claude-opus-4-8` answer-contract** (query understanding → `answer_heading` lead + `must_not_cover` MCS gate, #27, temperature-omit #29); **decision-fit STAGE B** Writer rendering (#30); **H2-lead structure** guarantee (#28); **comparison-intent `vs` override** (#31); **intent sync ↔ cluster dropdown + `intent_locked` override** (#32, migration `20260623100000_cluster_intent_lock.sql`); **section-truncation fix** (group-sum max_tokens, #33). Flagged carried: **pillar** generation path (silo-level) deferred; coverage rewrite-retry = deterministic soften; Opus-authoritative-intent noted as future. **M15 (scheduling + link injection) is next.** Worked on `claude/intelligent-keller-6sx8ho`. |
