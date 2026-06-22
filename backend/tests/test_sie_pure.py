@@ -303,6 +303,33 @@ def test_target_keyword_always_required_at_score_1():
     assert tk.recommendation_score == 1.0 and tk.confidence == "high"
 
 
+# ----- Extract: nested-boilerplate decompose regression (needs bs4) ---------
+
+def test_extract_zones_handles_nested_boilerplate():
+    """Regression (first live run): decomposing boilerplate mid-iteration cleared
+    descendants' attrs, so a later `el.get(...)` on an already-decomposed child hit
+    `None.get(...)` -> AttributeError, which failed 11/19 pages. Collect-then-decompose
+    fixes it. Skipped where bs4 isn't installed (the pure-test sandbox)."""
+    try:
+        import bs4  # noqa: F401
+
+        from app.sie.extract import extract_zones
+    except ImportError:
+        return  # no bs4 — covered on CI/deploy
+    html = (
+        '<html><head><title>T</title></head><body>'
+        '<nav class="menu"><ul><li><a href="/x">Home</a></li></ul></nav>'
+        '<div class="sidebar"><div class="widget"><p>Subscribe to our newsletter now</p></div></div>'
+        '<main><h1>Heading one</h1>'
+        '<p>Retatrutide is a triple agonist for weight loss and glycemic control.</p></main>'
+        "</body></html>"
+    )
+    page = extract_zones(html, "https://example.com/x", rank=1)
+    assert page.zones.h1 == ["Heading one"]
+    assert any("triple agonist" in p for p in page.zones.paragraphs)
+    assert all("newsletter" not in p for p in page.zones.paragraphs)  # boilerplate stripped
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
