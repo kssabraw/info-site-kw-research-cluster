@@ -23,36 +23,45 @@ from .title import TitleScope
 def build_brief_output(
     *, keyword: str, intent: IntentResult, title: TitleScope, entity: MainEntity,
     mcs: MCSResult, sources: BriefSources, persona: Persona | None = None,
-    faqs: list[dict] | None = None, authority_h3s: list[dict] | None = None,
-    extra_metadata: dict | None = None,
+    faqs: list[dict] | None = None, h3s_by_h2: dict[str, list[dict]] | None = None,
+    decision_fit_directive: dict | None = None, extra_metadata: dict | None = None,
 ) -> BriefOutput:
     """Assemble the v2.6 BriefOutput. heading_structure = H1 (the title, verbatim per the
-    Writer's D6 contract) + the MCS-selected H2s, with the authority-gap H3s (Step 9)
-    interleaved under their parent H2 (<=2/H2). Discarded MCS candidates are recorded with
-    their proximity scores for the X.6 measurement loop / spin-off intel."""
-    auth_by_parent: dict[str, list[dict]] = {}
-    for a in (authority_h3s or []):
-        auth_by_parent.setdefault(a.get("parent_h2_text", ""), []).append(a)
+    Writer's D6 contract) + the MCS-selected H2s, with their H3s (regular Step-8.6 +
+    authority-gap Step-9, already merged per `merge_h3s`) interleaved under each parent.
+    The decision-fit `format_directive` (A5) attaches to its reserved anchor H2."""
+    h3s_by_h2 = h3s_by_h2 or {}
 
     headings: list[dict] = [{
         "text": title.title, "type": "content", "level": "H1", "order": 1, "source": "title",
     }]
     order = 2
     for sh in mcs.selected:
-        headings.append({
+        h2 = {
             "text": sh.text, "type": "content", "level": "H2", "order": order, "source": "mcs",
             # answer-engine proximity readouts (X.8) — extra fields kept by extra="allow".
             "aio_cosine": round(sh.aio_headline, 4),
             "chatgpt_cosine": round(sh.chatgpt_cosine, 4),
             "mcs_blended": round(sh.blended, 4),
-        })
+        }
+        if decision_fit_directive and decision_fit_directive.get("anchor_h2_text") == sh.text:
+            d = {k: v for k, v in decision_fit_directive.items() if k != "anchor_h2_text"}
+            d["section_id"] = order
+            h2["format_directive"] = d
+        headings.append(h2)
         order += 1
-        for a in auth_by_parent.get(sh.text, [])[:2]:   # <=2 H3s per H2
-            headings.append({
-                "text": a["text"], "type": "content", "level": "H3", "order": order,
-                "parent_h2_text": sh.text, "source": "authority_gap_sme", "exempt": True,
-                "scope_alignment_note": a.get("scope_alignment_note", ""),
-            })
+        for h3 in h3s_by_h2.get(sh.text, []):
+            item = {
+                "text": h3["text"], "type": "content", "level": "H3", "order": order,
+                "parent_h2_text": sh.text, "source": h3.get("source", "coverage_graph"),
+            }
+            if h3.get("source") == "authority_gap_sme":
+                item["exempt"] = True
+                item["scope_alignment_note"] = h3.get("scope_alignment_note", "")
+            else:
+                item["parent_relevance"] = h3.get("parent_relevance")
+                item["region_id"] = h3.get("region_id")
+            headings.append(item)
             order += 1
 
     discarded = [{
@@ -77,6 +86,7 @@ def build_brief_output(
             "set_mean_chatgpt_cosine": round(mean([s.chatgpt_cosine for s in selected]), 4) if selected else 0.0,
         },
         "decision_fit_qualifies": intent.decision_fit_qualifies,
+        "decision_fit_directive_emitted": decision_fit_directive is not None,
         "sources": {
             "organic": len(sources.organic), "paa": len(sources.paa),
             "discussions": len(sources.reddit), "llm_answers": sorted(sources.llm_answers),
