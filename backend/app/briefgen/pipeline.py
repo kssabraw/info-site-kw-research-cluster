@@ -20,11 +20,14 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .assemble import build_brief_output
+from .authority import generate_authority_gaps
 from .entity import derive_main_entity
+from .faq import generate_faqs
 from .gates import prefilter
 from .intent import classify_intent
 from .mcs import MCSDeps, run_mcs
 from .models import BriefOutput
+from .persona import generate_persona
 from .sources import gather_sources
 from .title import generate_title_scope
 
@@ -134,6 +137,30 @@ def generate_brief(keyword: str, *, location_code: int, deps: BriefDeps) -> Brie
         gate_fn=gate_fn,
     )
 
+    # Step 9 authority-gap H3s (enrichment; degrades to []) — differentiation under the H2s.
+    h2_texts = [s.text for s in mcs.selected]
+    reddit_summaries = [d.get("content") or d.get("title") or "" for d in sources.reddit]
+    authority_h3s = generate_authority_gaps(
+        keyword, title=title.title, scope_statement=title.scope_statement,
+        intent_type=intent.intent_type, h2_texts=h2_texts, reddit_summaries=reddit_summaries,
+        llm=deps.gen_llm,
+    )
+
+    # Step 6 persona (informational; degrades to empty) — gap questions feed the FAQ pool.
+    persona = generate_persona(
+        keyword, intent_type=intent.intent_type, title=title.title,
+        scope_statement=title.scope_statement, serp_h1s=serp_titles, serp_metas=serp_metas,
+        candidate_headings=h2_texts, llm=deps.intent_llm,
+    )
+    # Steps 10/10.5 FAQ generation + intent gate.
+    faqs, faq_meta = generate_faqs(
+        paa=sources.paa, discussions=sources.reddit, persona_gaps=persona.gap_questions,
+        intent_type=intent.intent_type, title=title.title, scope_statement=title.scope_statement,
+        primary_goal=persona.primary_goal, heading_texts=[title.title, *h2_texts],
+        embed_3large=deps.embed_3large, classify_llm=deps.gen_llm, concern_llm=deps.gen_llm,
+    )
+
     return build_brief_output(
         keyword=keyword, intent=intent, title=title, entity=entity, mcs=mcs, sources=sources,
+        persona=persona, faqs=faqs, authority_h3s=authority_h3s, extra_metadata=faq_meta,
     )

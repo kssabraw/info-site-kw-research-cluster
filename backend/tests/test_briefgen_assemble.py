@@ -52,6 +52,48 @@ def test_build_brief_output_assembles_v26():
     assert b.metadata["mcs"]["selected_count"] == 2
 
 
+def test_build_brief_output_interleaves_authority_h3s():
+    intent = _intent("informational")
+    title = TitleScope(title="T", scope_statement="Covers x. Does not cover y.")
+    entity = MainEntity(canonical="e")
+    mcs = MCSResult(
+        selected=[ScoredHeading("H2 one", [0.9], 0.8, 0.9, 0.85),
+                  ScoredHeading("H2 two", [0.8], 0.7, 0.8, 0.75)],
+        pool=["a"], discarded=[])
+    authority = [
+        {"text": "deep H3", "parent_h2_text": "H2 one", "scope_alignment_note": "in scope"},
+        {"text": "extra H3", "parent_h2_text": "H2 one"},
+        {"text": "third H3", "parent_h2_text": "H2 one"},          # >2 -> dropped
+        {"text": "orphan", "parent_h2_text": "nope"},               # no parent -> dropped
+    ]
+    b = build_brief_output(keyword="k", intent=intent, title=title, entity=entity, mcs=mcs,
+                           sources=BriefSources(keyword="k"), authority_h3s=authority)
+    assert [(h.level, h.text) for h in b.heading_structure] == [
+        ("H1", "T"), ("H2", "H2 one"), ("H3", "deep H3"), ("H3", "extra H3"), ("H2", "H2 two")]
+    assert [h.order for h in b.heading_structure] == [1, 2, 3, 4, 5]
+    h3 = b.heading_structure[2]
+    assert h3.source == "authority_gap_sme" and h3.parent_h2_text == "H2 one" and h3.exempt is True
+
+
+def test_generate_authority_gaps_restricts_parent_to_h2s():
+    from app.briefgen.authority import generate_authority_gaps
+
+    class _LLM:
+        def call_tool(self, **kw):
+            return {"h3s": [
+                {"text": "valid", "parent_h2_text": "H2 a", "scope_alignment_note": "n"},
+                {"text": "bad parent", "parent_h2_text": "not an h2"},   # dropped
+                {"text": "", "parent_h2_text": "H2 a"},                  # empty -> dropped
+            ]}
+
+    out = generate_authority_gaps("k", title="t", scope_statement="s", intent_type="informational",
+                                  h2_texts=["H2 a", "H2 b"], reddit_summaries=[], llm=_LLM())
+    assert out == [{"text": "valid", "parent_h2_text": "H2 a", "scope_alignment_note": "n"}]
+    # no H2s -> no call, empty
+    assert generate_authority_gaps("k", title="t", scope_statement="s", intent_type="x",
+                                   h2_texts=[], reddit_summaries=[], llm=_LLM()) == []
+
+
 # ----- generate_brief wiring (all deps stubbed) -----------------------------
 
 

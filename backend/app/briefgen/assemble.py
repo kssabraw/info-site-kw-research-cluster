@@ -9,32 +9,51 @@ from __future__ import annotations
 
 from statistics import mean
 
+from dataclasses import asdict
+
 from .entity import MainEntity
 from .intent import IntentResult
 from .mcs import MCSResult
 from .models import SCHEMA_VERSION, BriefOutput
+from .persona import Persona
 from .sources import BriefSources
 from .title import TitleScope
 
 
 def build_brief_output(
     *, keyword: str, intent: IntentResult, title: TitleScope, entity: MainEntity,
-    mcs: MCSResult, sources: BriefSources,
+    mcs: MCSResult, sources: BriefSources, persona: Persona | None = None,
+    faqs: list[dict] | None = None, authority_h3s: list[dict] | None = None,
+    extra_metadata: dict | None = None,
 ) -> BriefOutput:
     """Assemble the v2.6 BriefOutput. heading_structure = H1 (the title, verbatim per the
-    Writer's D6 contract) + the MCS-selected H2s; discarded MCS candidates are recorded
-    with their proximity scores for the X.6 measurement loop / spin-off intel."""
+    Writer's D6 contract) + the MCS-selected H2s, with the authority-gap H3s (Step 9)
+    interleaved under their parent H2 (<=2/H2). Discarded MCS candidates are recorded with
+    their proximity scores for the X.6 measurement loop / spin-off intel."""
+    auth_by_parent: dict[str, list[dict]] = {}
+    for a in (authority_h3s or []):
+        auth_by_parent.setdefault(a.get("parent_h2_text", ""), []).append(a)
+
     headings: list[dict] = [{
         "text": title.title, "type": "content", "level": "H1", "order": 1, "source": "title",
     }]
-    for i, sh in enumerate(mcs.selected, start=2):
+    order = 2
+    for sh in mcs.selected:
         headings.append({
-            "text": sh.text, "type": "content", "level": "H2", "order": i, "source": "mcs",
+            "text": sh.text, "type": "content", "level": "H2", "order": order, "source": "mcs",
             # answer-engine proximity readouts (X.8) — extra fields kept by extra="allow".
             "aio_cosine": round(sh.aio_headline, 4),
             "chatgpt_cosine": round(sh.chatgpt_cosine, 4),
             "mcs_blended": round(sh.blended, 4),
         })
+        order += 1
+        for a in auth_by_parent.get(sh.text, [])[:2]:   # <=2 H3s per H2
+            headings.append({
+                "text": a["text"], "type": "content", "level": "H3", "order": order,
+                "parent_h2_text": sh.text, "source": "authority_gap_sme", "exempt": True,
+                "scope_alignment_note": a.get("scope_alignment_note", ""),
+            })
+            order += 1
 
     discarded = [{
         "text": d.text, "reason": "not_selected_by_mcs",
@@ -63,6 +82,8 @@ def build_brief_output(
             "discussions": len(sources.reddit), "llm_answers": sorted(sources.llm_answers),
         },
     }
+    if extra_metadata:
+        metadata.update(extra_metadata)
 
     return BriefOutput(
         schema_version=SCHEMA_VERSION,
@@ -74,7 +95,8 @@ def build_brief_output(
         intent_format_template=intent.intent_format_template,
         format_directives=intent.format_directives,           # dict -> FormatDirectives (coerced)
         heading_structure=headings,
-        faqs=[], persona=None,                                  # 5c enrichment
+        faqs=list(faqs or []),
+        persona=asdict(persona) if persona is not None else None,
         discarded_headings=discarded,
         metadata=metadata,
     )
