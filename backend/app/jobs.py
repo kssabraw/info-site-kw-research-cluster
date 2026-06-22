@@ -686,3 +686,57 @@ def run_sie_job(
         extra={"event": "step_complete", "step": "sie_job", "keyword": keyword,
                "required_terms": len(output.terms.required), "cost_usd": cost},
     )
+
+
+# ----- M13 Brief Generator (answer-engine-first) ----------------------------
+def submit_brief(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+    *, language_code: str = "en", force_refresh: bool = False,
+) -> None:
+    _EXECUTOR.submit(
+        run_brief_job, session_id, cluster_id, keyword, location_code,
+        language_code, force_refresh,
+    )
+
+
+@_metered("brief_generation")
+@_cancellable
+def run_brief_job(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+    language_code: str = "en", force_refresh: bool = False,
+) -> None:
+    """Run the Brief Generator for one cluster keyword and cache the v2.6 BriefOutput
+    (Writer Input A) in `fanout.briefs`. Mirrors `run_sie_job`: metered under the
+    `brief_generation` phase, runs lazily at write time only. `generate_brief` raises
+    on a load-bearing failure (no degraded-brief fallback, owner rule) — caught here so
+    the worker survives; the cache stays empty and the report GET then 404s."""
+    from app.briefgen import cache as brief_cache
+    from app.briefgen.pipeline import build_brief_deps, generate_brief
+    from app.cost_meter import current_meter
+
+    # Race guard: a fresh row may have landed between the endpoint's miss and here.
+    if not force_refresh and brief_cache.get_fresh_brief(keyword, location_code):
+        return
+    meter = current_meter()
+    before = meter.snapshot()[0] if meter else 0.0
+    try:
+        deps = build_brief_deps(location_code)
+        output = generate_brief(keyword, location_code=location_code, deps=deps)
+    except Exception as exc:  # noqa: BLE001 — brief is a side analysis; never crash the worker
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "brief_job",
+                   "keyword": keyword, "reason": repr(exc)},
+        )
+        return
+    cost = round((meter.snapshot()[0] if meter else 0.0) - before, 6)
+    brief_cache.save_brief(
+        keyword=keyword, location_code=location_code, language_code=language_code,
+        output_json=output.model_dump(), cost_usd=cost,
+        session_id=session_id, cluster_id=cluster_id,
+    )
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "brief_job", "keyword": keyword,
+               "headings": len(output.heading_structure), "cost_usd": cost},
+    )

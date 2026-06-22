@@ -1555,3 +1555,43 @@ def get_term_analysis(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No analysis yet")
     return {"status": "complete", "keyword": keyword, "report": row["output_json"]}
+
+
+# ----- M13 Brief Generator (answer-engine-first; owner-only validation surface) ----
+class BriefBody(BaseModel):
+    force_refresh: bool = False
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/brief")
+def start_brief(
+    session_id: str, cluster_id: str, response: Response,
+    body: BriefBody | None = None, user: AuthedUser = Depends(require_owner),
+) -> dict:
+    """Owner-only (M13 validation surface). Generate the content brief (Writer Input A)
+    for a cluster's primary keyword. Cache hit -> 200 + stored brief; miss -> 202 + the
+    brief job is submitted (poll GET until present). Runs lazily at write time only."""
+    from app.briefgen import cache as brief_cache
+
+    body = body or BriefBody()
+    keyword, location_code, sid = _cluster_keyword_and_location(user, session_id, cluster_id)
+    if not body.force_refresh:
+        row = brief_cache.get_fresh_brief(keyword, location_code)
+        if row:
+            return {"status": "complete", "keyword": keyword, "brief": row["output_json"]}
+    jobs.submit_brief(sid, cluster_id, keyword, location_code, force_refresh=body.force_refresh)
+    response.status_code = status.HTTP_202_ACCEPTED
+    return {"status": "running", "keyword": keyword}
+
+
+@router.get("/sessions/{session_id}/clusters/{cluster_id}/brief")
+def get_brief(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """The cached content brief for a cluster's keyword (404 until generated)."""
+    from app.briefgen import cache as brief_cache
+
+    keyword, location_code, _sid = _cluster_keyword_and_location(user, session_id, cluster_id)
+    row = brief_cache.get_fresh_brief(keyword, location_code)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No brief yet")
+    return {"status": "complete", "keyword": keyword, "brief": row["output_json"]}
