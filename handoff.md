@@ -2,30 +2,41 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-> **▶ Resume here (2026-06-22, latest):** **M14 (Content Writer) is DONE — built,
-> deployed, and LIVE-VALIDATED (signed off).** Full `backend/app/writer/` package in 5
-> slices (PR #25) + 8 review-driven refinement PRs (#26–#33), all on `main` + deployed.
-> Migrations applied to prod: `20260623000000_writer_foundation.sql` (`fanout.article_outputs`)
-> + `20260623100000_cluster_intent_lock.sql` (`clusters.intent_locked`). The Writer runs the
-> degraded `1.7-no-context` + `no_citations` path: adapter maps `fanout.briefs` (Input A) +
-> `fanout.keyword_analyses` (Input C) → sequential Sonnet prose / Haiku short calls →
-> `fanout.article_outputs`. `run_article_job` ensures Brief+SIE as stage 1 (cache or
-> generate), then writes. Owner-only `generate-article`/`article` API + `ArticlePanel`
-> + "Generate article" button. **Live-validated** on session `4ecefaa1` (`cagrilintide
-> peptide vs retatrutide`, `is retatrutide a glp-3 drug`, `retatrutide peptide dallas`):
-> ~1.4–1.6k-word articles, ~$0.34–0.53. See the 2026-06-22 (M14 signoff) entry below for the
-> refinement list + the validated evidence.
+> **▶ Resume here (2026-06-23, latest):** **M15 (scheduling + link injection) is DONE —
+> built, adversarially reviewed, deployed, and the prod worker is live-verified (signed off).**
+> 6 slices on `claude/intelligent-keller-6sx8ho` (PRs #35 + #38), all on `main` + deployed.
+> **Internal linking** (`writer/slugs.py` + `link_injector.py` + `link_targets.py`) injects the
+> M6 architecture graph as absolute internal links after generation, gated on
+> `sessions.site_base_url`. **Scheduling**: `content_schedules` + `scheduled_article_runs` +
+> an **in-process asyncio worker** (`scheduler.py`, ~60s tick, cap 3, startup recovery sweep)
+> that claims due runs via the `claim_scheduled_runs` RPC and writes each via the shared
+> `generate_article_core`. **`api/schedules.py`** = estimate/schedule/list/pause/resume/cancel,
+> with **3 modes (all-at-once / drip N-day / specific-date)**, **subset selection**, a
+> double-book guard, and the **VA `Schedule all` > $90 → owner approval** gate. UI: `ScheduleModal`
+> + `ScheduleView` + a **Schedule tab** + "Schedule N selected…" in the Cluster bulk bar.
+> All 3 pending migrations applied to prod (`20260625000000_content_scheduling.sql`,
+> `20260625100000_atomic_session_cost.sql`, + the earlier `20260624*` linking/auto-split);
+> PR #38 deploy `d1a8e690` SUCCESS; prod logs confirm `scheduler_started` (cap=3, tick=60s) +
+> the recovery sweep + the first `claim_scheduled_runs` RPC → 200, no `scheduler_tick_failed`.
+> **Adversarial-review fixes baked in before deploy:** `tzdata` dep (ZoneInfo on
+> `python:3.11-slim`); **atomic session-cost increment** (`increment_session_cost` RPC +
+> delta-flush in `cost_attribution` — the scheduler runs several same-session writes at once,
+> which the old read-base+absolute-write meter lost); paged `schedule_store` reads (>1000-row
+> cap); + 6 LOW cleanups. **#35 also shipped** bulk generation (`POST /generate-articles`), the
+> **2b clustered-keyword coverage** audit (`briefgen/coverage.py`, surfaced in `BriefPanel`),
+> and **confirm-to-write auto-split** of uncovered keywords (`clusters.auto_split`). See the
+> 2026-06-23 entry below for the full slice list + review findings.
 >
-> **NEXT = M15 (scheduling + link injection)** — `docs/writer-module-plan.md` §9:
-> `content_schedules`/`scheduled_article_runs` + asyncio worker + `Schedule all` modal + $90
-> VA approval gate; `link_injector` + `clusters.slug` + `sessions.site_base_url`; fuller
-> article/schedule UI. **Also still open before/around M15:** the owner-expanded **pillar**
-> generation path (silo-level brief — the deferred M14 scope item); the **Opus-authoritative
-> intent** idea (let the answer-contract own the final intent label beyond the `vs` guard).
+> **NOT yet done:** the first **real end-to-end schedule run** (owner drives it from the
+> Schedule tab — pick All-at-once for an immediate test, or a specific date). **Still open /
+> carried:** the VA over-$90 path blocks rather than routing the full M9 approval round-trip;
+> the owner-expanded **pillar** generation path (silo-level brief — the deferred M14 scope item);
+> the **Opus-authoritative intent** idea (answer-contract owns the final intent label beyond the
+> `vs` guard); the app-shell due-soon/failed schedule badge (descoped from slice 6).
 > Current working branch: `claude/intelligent-keller-6sx8ho`.
 >
-> **M12 (SIE) + M13 (Brief Gen) + M14 (Writer) are all DONE — deployed, live-validated,
-> signed off** (2026-06-22 entries below).
+> **M12 (SIE) + M13 (Brief Gen) + M14 (Writer) + M15 (scheduling) are all DONE — deployed,
+> signed off** (M12–M14 live-validated; M15 worker live-verified, first batch pending).
 > (Older standing item, unchanged: the **M11 / M8–M10 live-validation checklist** in
 > **§2** — deployed-stack browser + DB checks the sandbox can't run — remains open.)
 >
@@ -57,6 +68,58 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > **stay in place (dormant)** for a future revisit (Embedding 2 at GA and/or
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
+
+_2026-06-23 (M15 signoff) — M15 (scheduling + link injection) DONE — built, adversarially
+reviewed, deployed, prod worker live-verified, signed off. Worked on
+`claude/intelligent-keller-6sx8ho` (PRs #35 + #38):_
+
+- **Internal linking (slices 1–2, PR #35):** `writer/slugs.py` (deterministic/deduped/idempotent
+  slugs), `link_injector.py` (M6 graph → absolute internal links; inline first-occurrence, pillar
+  "In This Guide", unmatched → "Related Articles"), `link_targets.py` (up-link + lateral targets
+  from `architecture_json`). `run_article_job` injects after generation, **no-op without
+  `site_base_url`/architecture**. Migration `20260624000000_writer_linking.sql`.
+- **Also in #35:** **bulk generation** (per-article Generate + per-silo select-all +
+  `POST /sessions/{id}/generate-articles`, drains on the bounded pool); the **2b
+  clustered-keyword coverage** audit (`briefgen/coverage.py` — the cluster's supporting keywords
+  feed the H3 candidate pool + a post-brief audit; covered/uncovered surfaced in `BriefPanel`);
+  **confirm-to-write auto-split** (uncovered keywords grouped ~0.85 → new `auto_split` clusters +
+  queued for generation; migration `20260624100000_cluster_auto_split.sql` is the recursion guard).
+- **Scheduling (slices 3–6, PR #38):** migration `20260625000000_content_scheduling.sql`
+  (`content_schedules` + `scheduled_article_runs`, real RLS, `article_outputs.
+  scheduled_article_run_id` FK, `claim_scheduled_runs` FOR UPDATE SKIP LOCKED fn joined to the
+  active parent, a **partial unique index** = a cluster can't be double-queued). Pure
+  `schedule_planner.py` (pillars-first order; all-at-once / drip N-day / **specific-date** modes;
+  ≤365-day guard + `min_per_day` hint; tz→UTC). In-process asyncio **worker** (`scheduler.py`,
+  FastAPI lifespan, ~60s tick, cap 3, startup recovery sweep, bounded shutdown drain;
+  `run_article_job` refactored to share `generate_article_core(... scheduled_article_run_id=)`).
+  API `api/schedules.py` (estimate/schedule/list/pause/resume/cancel; **subset selection** +
+  **specific-date**; double-book guard; `site_base_url` persistence; **VA `Schedule all` > $90 →
+  owner approval**, `writer_schedule_approval_threshold_usd`, owner never gated). UI:
+  `ScheduleModal` (mode toggle + live preview + base URL), `ScheduleView` + **Schedule tab**
+  (owner + VA), "Schedule N selected…" in the Cluster bulk bar.
+- **Owner-requested feature:** the **specific-date** mode ("deliver July 4 → write July 3");
+  compose per (set, date) to build a delivery calendar — each is its own schedule; the worker
+  drains all by `scheduled_at`.
+- **Adversarial review pass (all fixed before deploy):** **tzdata** dep (ZoneInfo finds no tz db
+  on `python:3.11-slim` → non-UTC drip/fixed schedules would 400); **atomic session-cost
+  increment** — migration `20260625100000_atomic_session_cost.sql` + `increment_session_cost`
+  RPC (row-locked) + delta-flush rewrite in `cost_attribution` (the scheduler drains several
+  same-session writes concurrently, which the old read-base-once + absolute-write meter lost —
+  could under-report a batch's cost ~⅔); **paged `schedule_store` reads** (`progress_by_schedule`,
+  `pending_cluster_ids`, `list_runs` — correct above PostgREST's ~1000-row cap); run-table shows
+  article names; estimate skips the architecture read; base-URL persisted only after validation;
+  bounded shutdown (`scheduler_shutdown_grace_s`); claim on the default executor; N+1 progress →
+  one paged scan.
+- **Deployed + live-verified (2026-06-23):** 3 pending migrations applied to prod
+  (`wvcthtmmcmhkybcesirb`, verified: 2 tables + FK col + unique index + 2 fns + 8 RLS policies);
+  PR #38 deploy `d1a8e690` SUCCESS; prod logs show `scheduler_started` (cap=3, tick=60s), the
+  startup recovery sweep PATCH → 200, and the first `claim_scheduled_runs` RPC → 200 (0 rows) —
+  **worker running clean, no `scheduler_tick_failed`.** **Not yet exercised with a real schedule
+  end-to-end** — the owner drives the first batch from the Schedule tab.
+- **Flagged carried:** VA over-$90 **blocks** (clear message) rather than the full M9 approval
+  round-trip; owner-expanded **pillar** generation still deferred; app-shell due-soon/failed
+  badge descoped. Cost note: delta-flush trades the old lost-update for a rare double-count on a
+  committed-but-unacked flush retry (telemetry, acceptable).
 
 _2026-06-22 (M14 signoff) — M14 (Content Writer) DONE — built, deployed, LIVE-VALIDATED,
 signed off. Worked on `claude/intelligent-keller-6sx8ho`:_
