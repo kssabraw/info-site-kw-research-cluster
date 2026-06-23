@@ -42,6 +42,14 @@ create index scheduled_article_runs_due_idx
 create index scheduled_article_runs_schedule_idx
   on fanout.scheduled_article_runs (content_schedule_id);
 
+-- Atomic backstop for the API's double-book guard: a cluster can have at most one *pending*
+-- (queued/running) run at a time. Completed/failed/cancelled runs are unindexed, so a cluster
+-- is freely re-schedulable once its prior run finished. The app-level pre-filter skips known
+-- duplicates gracefully; this only fires on a true concurrent-schedule race (rejecting the
+-- second insert) so two schedules can never both queue — and thus double-write — the same cluster.
+create unique index scheduled_runs_one_pending_per_cluster
+  on fanout.scheduled_article_runs (cluster_id) where status in ('queued', 'running');
+
 -- Tie a generated article back to the run that produced it (null for ad-hoc generations).
 alter table fanout.article_outputs
   add column scheduled_article_run_id uuid

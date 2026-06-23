@@ -41,16 +41,22 @@ class ScheduleBody(BaseModel):
 # ----- helpers --------------------------------------------------------------
 
 
-def _resolve_targets(session_id: str, cluster_ids: list[str] | None) -> tuple[list[str], dict]:
-    """Ordered (pillars-first) target cluster ids for this schedule + the architecture dict.
-    A subset is intersected with the session's clusters (and ordered the same way)."""
-    architecture = (store.get_architecture(session_id) or {}).get("architecture_json")
-    all_ids = [c["id"] for c in store.list_clusters(session_id)]
-    ordered = order_clusters(architecture, all_ids)
+def _session_cluster_ids(session_id: str, cluster_ids: list[str] | None) -> list[str]:
+    """The session's cluster ids (deduped), filtered to the requested subset. Unordered —
+    enough for the estimate's count (ordering doesn't change the set)."""
+    ids = list(dict.fromkeys(c["id"] for c in store.list_clusters(session_id) if c.get("id")))
     if cluster_ids:
         chosen = set(cluster_ids)
-        ordered = [cid for cid in ordered if cid in chosen]
-    return ordered, architecture
+        ids = [i for i in ids if i in chosen]
+    return ids
+
+
+def _ordered_targets(session_id: str, cluster_ids: list[str] | None) -> list[str]:
+    """Pillars-first ordered target cluster ids (reads the architecture). Used by create,
+    where write order matters; the estimate skips this and just counts the set."""
+    ids = _session_cluster_ids(session_id, cluster_ids)
+    architecture = (store.get_architecture(session_id) or {}).get("architecture_json")
+    return order_clusters(architecture, ids)
 
 
 def _estimate(count: int, mode: str, per_day: int | None, start: date | None) -> dict:
@@ -78,11 +84,11 @@ def schedule_estimate(
     """Preview a schedule without creating it: count (after the double-book filter), cost,
     drip finish date, and whether a VA would need owner approval."""
     _require_session(user, session_id)
-    ordered, _ = _resolve_targets(session_id, body.cluster_ids)
+    candidates = _session_cluster_ids(session_id, body.cluster_ids)
     pending = schedule_store.pending_cluster_ids(session_id)
-    targets = [c for c in ordered if c not in pending]
+    targets = [c for c in candidates if c not in pending]
     est = _estimate(len(targets), body.mode, body.per_day, body.start_date)
-    est["already_scheduled"] = len(ordered) - len(targets)
+    est["already_scheduled"] = len(candidates) - len(targets)
     s = get_settings()
     est["requires_approval"] = (
         get_role(user) != "owner" and est["cost_estimate_usd"] > s.writer_schedule_approval_threshold_usd
@@ -100,16 +106,16 @@ def create_schedule(
     A VA over the $90 batch threshold is refused with `requires_approval` (owner not gated)."""
     session = _require_session(user, session_id)
 
+    # Base URL must be available (links are absolute), but don't persist it until the whole
+    # request is validated/approved/planned — so a request that 400s leaves no side effect.
     base_url = (body.site_base_url or "").strip() or session.get("site_base_url")
     if not base_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A site base URL is required so internal links are absolute. Set it in the modal.",
         )
-    if body.site_base_url and body.site_base_url.strip() != session.get("site_base_url"):
-        store.update_session(session_id, {"site_base_url": body.site_base_url.strip()})
 
-    ordered, architecture = _resolve_targets(session_id, body.cluster_ids)
+    ordered = _ordered_targets(session_id, body.cluster_ids)
     pending = schedule_store.pending_cluster_ids(session_id)
     targets = [c for c in ordered if c not in pending]
     skipped = len(ordered) - len(targets)
@@ -139,6 +145,10 @@ def create_schedule(
             detail={"message": str(exc), "min_per_day": exc.min_per_day},
         ) from exc
 
+    # Validated + approved + planned — now it's safe to persist the base URL.
+    if body.site_base_url and body.site_base_url.strip() != session.get("site_base_url"):
+        store.update_session(session_id, {"site_base_url": body.site_base_url.strip()})
+
     schedule = schedule_store.create_schedule(
         session_id=session_id, user_id=session["user_id"], mode=body.mode, runs=runs,
         per_day=body.per_day, start_date=body.start_date, time_of_day=body.time_of_day,
@@ -155,8 +165,10 @@ def list_schedules(session_id: str, user: AuthedUser = Depends(require_user)) ->
     """The session's schedule batches with live progress counts (for the overview UI)."""
     _require_session(user, session_id)
     schedules = schedule_store.list_schedules(session_id)
+    progress = schedule_store.progress_by_schedule(session_id)        # one paged scan, no N+1
+    empty = {s: 0 for s in ("queued", "running", "complete", "failed", "cancelled")} | {"total": 0}
     for sch in schedules:
-        sch["progress"] = schedule_store.schedule_progress(sch["id"])
+        sch["progress"] = progress.get(sch["id"], dict(empty))
     return {"schedules": schedules}
 
 

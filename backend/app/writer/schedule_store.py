@@ -55,21 +55,26 @@ def get_schedule(schedule_id: str) -> dict | None:
 _STATUSES = ("queued", "running", "complete", "failed", "cancelled")
 
 
-def schedule_progress(schedule_id: str) -> dict:
-    """{queued, running, complete, failed, cancelled, total} counts for a schedule's runs.
-    Uses per-status exact head counts so it stays correct above PostgREST's ~1000-row read
-    cap (a 315-article schedule undercounts otherwise)."""
+def progress_by_schedule(session_id: str) -> dict[str, dict]:
+    """Per-schedule status counts for every schedule in a session, in one paged scan (avoids
+    the N+1 of calling schedule_progress per row). {schedule_id: {queued,…,total}}."""
     client = get_service_client()
-    out: dict = {}
-    total = 0
-    for st in _STATUSES:
-        res = (client.table("scheduled_article_runs").select("id", count="exact")
-               .eq("content_schedule_id", schedule_id).eq("status", st)
-               .limit(1).execute())
-        out[st] = res.count or 0
-        total += out[st]
-    out["total"] = total
-    return out
+    agg: dict[str, dict] = {}
+    page = 0
+    while True:
+        rows = (client.table("scheduled_article_runs").select("content_schedule_id, status")
+                .eq("session_id", session_id)
+                .range(page * 1000, page * 1000 + 999).execute().data or [])
+        for r in rows:
+            sid = r["content_schedule_id"]
+            if sid is None:
+                continue
+            counts = agg.setdefault(sid, {s: 0 for s in _STATUSES} | {"total": 0})
+            counts[r["status"]] = counts.get(r["status"], 0) + 1
+            counts["total"] += 1
+        if len(rows) < 1000:
+            return agg
+        page += 1
 
 
 def pending_cluster_ids(session_id: str) -> set[str]:

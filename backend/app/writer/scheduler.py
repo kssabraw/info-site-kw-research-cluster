@@ -49,13 +49,20 @@ async def start() -> None:
 
 
 async def stop() -> None:
-    """Stop the loop + let in-flight writes finish (called from lifespan shutdown)."""
+    """Stop the loop + let in-flight writes finish, but bounded by `scheduler_shutdown_grace_s`
+    so a minutes-long write can't hang shutdown past the platform's grace period — an abandoned
+    `running` row is recovered by the next startup sweep."""
     global _loop_task
     if _loop_task:
         _loop_task.cancel()
         _loop_task = None
     if _inflight:
-        await asyncio.gather(*_inflight, return_exceptions=True)
+        grace = float(get_settings().scheduler_shutdown_grace_s)
+        try:
+            await asyncio.wait_for(asyncio.gather(*_inflight, return_exceptions=True), timeout=grace)
+        except asyncio.TimeoutError:
+            logger.warning("scheduler_shutdown_timeout",
+                           extra={"event": "scheduler_shutdown_timeout", "in_flight": len(_inflight)})
     if _executor:
         _executor.shutdown(wait=False)
 
@@ -79,7 +86,9 @@ async def _tick() -> None:
     if cap <= 0:
         return
     loop = asyncio.get_running_loop()
-    rows = await loop.run_in_executor(_executor, _claim_due, cap)
+    # Claim on the default executor (a quick DB call), not `_executor` — so it never waits on a
+    # cap-sized worker thread that an in-flight article write is holding.
+    rows = await loop.run_in_executor(None, _claim_due, cap)
     for row in rows:
         task = asyncio.create_task(_dispatch(row))
         _inflight.add(task)

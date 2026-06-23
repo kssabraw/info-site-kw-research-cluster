@@ -329,6 +329,7 @@ class Settings(BaseSettings):
     scheduler_tick_seconds: int = 60
     scheduler_concurrency_cap: int = 3        # in-flight article writes (LLM rate-limit guard)
     scheduler_stuck_minutes: int = 30         # startup sweep: running rows older than this requeue
+    scheduler_shutdown_grace_s: float = 20.0  # max wait for in-flight writes on shutdown
     writer_schedule_approval_threshold_usd: float = 90.0   # VA Schedule-all > this -> M9 approval
     writer_article_cost_estimate_usd: float = 0.30         # per-article preview figure (§9.4)
     brief_aio_query_task_type: str = "RETRIEVAL_QUERY"     # heading side (asymmetric)
