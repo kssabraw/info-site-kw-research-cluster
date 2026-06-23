@@ -26,6 +26,7 @@ const OWNER_TABS = [
   { to: "cluster", label: "Cluster" },
   { to: "architecture", label: "Architecture" },
   { to: "schedule", label: "Schedule" },
+  { to: "articles", label: "Articles" },
   { to: "split", label: "Split" },
   { to: "exports", label: "Exports" },
 ];

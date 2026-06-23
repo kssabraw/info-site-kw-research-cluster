@@ -15,8 +15,10 @@ export default function ArticlePanel(props: {
   clusterId: string;
   keyword: string;
   onClose: () => void;
+  // Library reader: load the existing article (GET) instead of (re)generating on open.
+  readOnly?: boolean;
 }) {
-  const { sessionId, clusterId, keyword, onClose } = props;
+  const { sessionId, clusterId, keyword, onClose, readOnly } = props;
   const [status, setStatus] = useState<"running" | "complete" | "error">("running");
   const [article, setArticle] = useState<ArticleOutput | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +62,28 @@ export default function ArticlePanel(props: {
       }
     };
 
+    // Read-only open (the Articles library): just fetch the existing article, never generate.
+    if (readOnly && !force) {
+      getArticle(sessionId, clusterId)
+        .then((res) => {
+          if (cancelled) return;
+          if (res.status === "complete" && res.article) {
+            setArticle(res.article);
+            setStatus("complete");
+          } else {
+            setStatus("error");
+            setError("No article found for this cluster.");
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            setStatus("error");
+            setError(e instanceof Error ? e.message : "No article found.");
+          }
+        });
+      return () => { cancelled = true; };
+    }
+
     startArticle(sessionId, clusterId, force ? { force_refresh: true } : undefined)
       .then((res) => {
         if (cancelled) return;
@@ -92,6 +116,21 @@ export default function ArticlePanel(props: {
   const meta = (article?.metadata ?? {}) as Record<string, unknown>;
   const num = (k: string) => (typeof meta[k] === "number" ? (meta[k] as number) : undefined);
 
+  const fileSlug = keyword.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "article";
+  const copyMarkdown = () => {
+    if (article) navigator.clipboard?.writeText(article.article_markdown);
+  };
+  const downloadMarkdown = () => {
+    if (!article) return;
+    const blob = new Blob([article.article_markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${fileSlug}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // In-app prompt: clustered keywords that no heading covered. Owner confirms to write
   // each (grouped) one as its own article.
   const unused = (Array.isArray(meta["unused_keywords"]) ? meta["unused_keywords"] : []) as string[];
@@ -122,11 +161,17 @@ export default function ArticlePanel(props: {
         {status === "running" && (
           <div style={{ textAlign: "center", padding: "24px 0" }}>
             <div className="spinner" />
-            <p className="progress-stage">Generating the article…</p>
-            <p className="progress-meta">
-              Brief + SIE (stage 1) → Writer · {elapsed}s elapsed
-              <br />several minutes on a cold cache
-            </p>
+            {readOnly ? (
+              <p className="progress-stage">Loading article…</p>
+            ) : (
+              <>
+                <p className="progress-stage">Generating the article…</p>
+                <p className="progress-meta">
+                  Brief + SIE (stage 1) → Writer · {elapsed}s elapsed
+                  <br />several minutes on a cold cache
+                </p>
+              </>
+            )}
           </div>
         )}
         {status === "error" && <p className="banner banner-error">{error}</p>}
@@ -166,9 +211,11 @@ export default function ArticlePanel(props: {
                 )}
               </div>
             )}
-            <button className="btn btn-sm" style={{ justifySelf: "start" }} onClick={() => setForceNext((f) => !f)}>
-              Regenerate
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-sm" onClick={() => setForceNext((f) => !f)}>Regenerate</button>
+              <button className="btn btn-sm" onClick={copyMarkdown}>Copy Markdown</button>
+              <button className="btn btn-sm" onClick={downloadMarkdown}>Download .md</button>
+            </div>
             <pre
               style={{
                 whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit",

@@ -874,6 +874,20 @@ export const startArticle = (
 export const getArticle = (sessionId: string, clusterId: string) =>
   request<ArticleResponse>(`/sessions/${sessionId}/clusters/${clusterId}/article`);
 
+export interface ArticleListItem {
+  cluster_id: string;
+  name: string;
+  total_word_count: number | null;
+  cost_usd: number | null;
+  generated_at: string | null;
+  scheduled: boolean;
+}
+export const listArticles = (sessionId: string) =>
+  request<{ articles: ArticleListItem[]; count: number }>(`/sessions/${sessionId}/articles`);
+export const downloadAllArticles = (sessionId: string) =>
+  request<{ download_url: string; count: number }>(
+    `/sessions/${sessionId}/articles/download-all`, { method: "POST" });
+
 export interface BulkGenerateResponse {
   submitted: string[];
   skipped: string[];

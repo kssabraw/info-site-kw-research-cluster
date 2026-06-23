@@ -1658,6 +1658,70 @@ def start_articles(
     return {"submitted": submitted, "skipped": skipped, "count": len(submitted)}
 
 
+@router.get("/sessions/{session_id}/articles")
+def list_articles(
+    session_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """The Articles library: the latest generated article per cluster for a session (metadata
+    only — name, words, cost, date), newest first. The reader fetches a body one at a time via
+    the per-cluster article endpoint."""
+    from app.writer import store as article_store
+
+    _require_session(user, session_id)
+    rows = article_store.list_session_articles(session_id)
+    names = {c["id"]: c["name"] for c in store.list_clusters(session_id)}
+    items = [{
+        "cluster_id": r["cluster_id"],
+        "name": names.get(r["cluster_id"], "—"),
+        "total_word_count": r.get("total_word_count"),
+        "cost_usd": r.get("cost_usd"),
+        "generated_at": r.get("generated_at"),
+        "scheduled": r.get("scheduled_article_run_id") is not None,
+    } for r in rows]
+    items.sort(key=lambda x: x["generated_at"] or "", reverse=True)
+    return {"articles": items, "count": len(items)}
+
+
+@router.post("/sessions/{session_id}/articles/download-all")
+def download_all_articles(
+    session_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Bundle every written article (latest per cluster) as a .zip of Markdown files, freeze it
+    to the private bucket, and return a short-lived signed URL — same infra as CSV export."""
+    import uuid as _uuid
+
+    from app.csv_export import snapshot_timestamp, zip_named_csvs
+    from app.storage import exports as export_store
+    from app.writer import store as article_store
+    from app.writer.slugs import slugify
+
+    _require_session(user, session_id)
+    bodies = article_store.get_session_article_markdown(session_id)
+    if not bodies:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No articles to download yet")
+
+    names = {c["id"]: c["name"] for c in store.list_clusters(session_id)}
+    used: set[str] = set()
+    named: list[tuple[str, str]] = []
+    for cluster_id, markdown in bodies:
+        base = slugify(names.get(cluster_id, cluster_id))
+        fn = f"{base}.md"
+        i = 2
+        while fn in used:
+            fn = f"{base}-{i}.md"
+            i += 1
+        used.add(fn)
+        named.append((fn, markdown))
+
+    data = zip_named_csvs(named)        # generic (filename, text) -> zip
+    object_path = f"{user.id}/{session_id}/articles-{snapshot_timestamp()}-{_uuid.uuid4().hex[:8]}.zip"
+    export_store.upload_snapshot(object_path, data, "application/zip")
+    download_url = export_store.create_signed_url(
+        object_path, get_settings().csv_signed_url_ttl_s, download_name=f"articles-{session_id[:8]}.zip",
+    )
+    return {"download_url": download_url, "count": len(named)}
+
+
 @router.get("/sessions/{session_id}/clusters/{cluster_id}/article")
 def get_article(
     session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
