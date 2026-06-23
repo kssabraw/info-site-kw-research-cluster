@@ -934,10 +934,25 @@ def run_article_job(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
     force_refresh: bool = False,
 ) -> None:
-    """Generate one article for a cluster's keyword. Stage 1 ensures the Brief (Input A)
-    and SIE (Input C) exist (running them on a miss), then the Writer runs the degraded
-    1.7-no-context flow and the result is persisted to `fanout.article_outputs`. On a
-    WriterAbort / load-bearing failure, logs and persists nothing (the GET then 404s)."""
+    """Ad-hoc article generation (the Generate button). Thin wrapper: meter-bind + the
+    per-cluster inflight guard; the body lives in `generate_article_core` (shared with the
+    scheduler worker)."""
+    try:
+        generate_article_core(session_id, cluster_id, keyword, location_code, force_refresh)
+    finally:
+        with _article_lock:
+            _article_inflight.discard(cluster_id)
+
+
+def generate_article_core(
+    session_id: str, cluster_id: str, keyword: str, location_code: int,
+    force_refresh: bool = False, *, scheduled_article_run_id: str | None = None,
+) -> bool:
+    """Generate one article for a cluster's keyword and persist it. Stage 1 ensures the Brief
+    (Input A) and SIE (Input C) exist (running them on a miss), then the Writer runs the
+    degraded 1.7-no-context flow and the result is persisted to `fanout.article_outputs`.
+    Returns True on success; on a WriterAbort / load-bearing failure logs, persists nothing,
+    and returns False. The caller owns metering + any inflight guard."""
     from app.briefgen import cache as brief_cache
     from app.cost_meter import current_meter
     from app.sie import cache as sie_cache
@@ -1002,17 +1017,14 @@ def run_article_job(
             extra={"event": "step_failed", "step": "article_job", "keyword": keyword,
                    "reason": f"{exc.code}: {exc.message}"},
         )
-        return
+        return False
     except Exception as exc:  # noqa: BLE001 — side analysis; never crash the worker
         logger.error(
             "step_failed",
             extra={"event": "step_failed", "step": "article_job", "keyword": keyword,
                    "reason": repr(exc)},
         )
-        return
-    finally:
-        with _article_lock:
-            _article_inflight.discard(cluster_id)
+        return False
 
     cost = round((meter.snapshot()[0] if meter else 0.0) - before, 6)
     from app.writer import store as article_store
@@ -1022,6 +1034,7 @@ def run_article_job(
         total_word_count=article.metadata.get("total_word_count"), cost_usd=cost,
         schema_version_effective=article.client_context_summary.get(
             "schema_version_effective", "1.7-no-context"),
+        scheduled_article_run_id=scheduled_article_run_id,
     )
     logger.info(
         "step_complete",
@@ -1029,3 +1042,4 @@ def run_article_job(
                "words": article.metadata.get("total_word_count"),
                "sections": article.metadata.get("section_count"), "cost_usd": cost},
     )
+    return True

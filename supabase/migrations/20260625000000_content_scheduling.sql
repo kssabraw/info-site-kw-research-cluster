@@ -97,7 +97,8 @@ create policy scheduled_article_runs_delete on fanout.scheduled_article_runs
 
 -- Worker claim (slice 4): atomically flip up to `cap` due rows queued -> running. PostgREST
 -- can't express FOR UPDATE SKIP LOCKED, so the in-process loop calls this via rpc on the
--- service client. SKIP LOCKED means two ticks / replicas never grab the same row.
+-- service client. SKIP LOCKED means two ticks / replicas never grab the same row. Joins the
+-- parent schedule so a paused/cancelled schedule's runs are never claimed (pause = toggle parent).
 create or replace function fanout.claim_scheduled_runs(cap int)
 returns setof fanout.scheduled_article_runs
 language plpgsql
@@ -107,11 +108,13 @@ begin
   update fanout.scheduled_article_runs r
      set status = 'running', started_at = now()
    where r.id in (
-     select id from fanout.scheduled_article_runs
-      where status = 'queued' and scheduled_at <= now()
-      order by scheduled_at
+     select r2.id
+       from fanout.scheduled_article_runs r2
+       join fanout.content_schedules cs on cs.id = r2.content_schedule_id
+      where r2.status = 'queued' and r2.scheduled_at <= now() and cs.status = 'active'
+      order by r2.scheduled_at
       limit greatest(cap, 0)
-      for update skip locked
+      for update of r2 skip locked
    )
   returning r.*;
 end;
