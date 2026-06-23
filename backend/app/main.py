@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import exports, health, projects, sessions
+from app.api import exports, health, projects, schedules, sessions
 from app.config import get_settings
 from app.logging import (
     bind_correlation_id,
@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("service_startup", extra={"event": "service_startup"})
-    yield
+    from app.writer import scheduler
+    await scheduler.start()
+    try:
+        yield
+    finally:
+        await scheduler.stop()
 
 
 app = FastAPI(title="Topic Fanout Tool", version="0.1.0", lifespan=lifespan)
@@ -67,3 +72,4 @@ app.include_router(health.router)
 app.include_router(projects.router)
 app.include_router(sessions.router)
 app.include_router(exports.router)
+app.include_router(schedules.router)

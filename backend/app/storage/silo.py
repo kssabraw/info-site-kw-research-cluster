@@ -161,7 +161,9 @@ def get_session_cost(session_id: str) -> tuple[float, dict]:
 
 def flush_session_cost(session_id: str, total: float, breakdown: dict) -> None:
     """Single-row UPDATE of the running cost (PRD §16.4 — accumulator flush). Kept
-    to two columns so it never collides with a job's status write on other cols."""
+    to two columns so it never collides with a job's status write on other cols.
+    NOTE: absolute write — only safe under the one-writer-per-session guard. Concurrent
+    writers (the M15 scheduler) must use `increment_session_cost` instead."""
     (
         get_service_client()
         .table("sessions")
@@ -169,6 +171,18 @@ def flush_session_cost(session_id: str, total: float, breakdown: dict) -> None:
         .eq("id", session_id)
         .execute()
     )
+
+
+def increment_session_cost(session_id: str, delta_total: float, delta_breakdown: dict) -> None:
+    """Atomic, row-locked delta increment of the running cost (PRD §16.4). Safe under
+    concurrent writers (the M15 scheduler drains several same-session writes at once), where
+    the absolute `flush_session_cost` would lose updates. No-op deltas are still cheap; callers
+    skip empty ones."""
+    get_service_client().rpc("increment_session_cost", {
+        "p_session_id": session_id,
+        "p_delta": delta_total,
+        "p_breakdown_delta": delta_breakdown or {},
+    }).execute()
 
 
 def get_session_debug(session_id: str) -> dict:

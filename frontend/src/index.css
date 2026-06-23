@@ -1056,6 +1056,35 @@ body {
   gap: 10px;
   margin-bottom: 14px;
 }
+.seg-radios {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.seg-radio {
+  flex: 1;
+  min-width: 110px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.seg-radio-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.schedule-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
 .bulk-bar {
   display: flex;
   align-items: center;

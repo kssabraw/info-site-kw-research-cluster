@@ -324,6 +324,14 @@ class Settings(BaseSettings):
     # Auto-split: uncovered keywords within this cosine (3-small) are grouped into one new
     # article (so near-duplicate phrasings don't each spawn a thin, cannibalizing page).
     auto_split_group_threshold: float = 0.85
+    # M15 scheduler — in-process asyncio loop that drains due scheduled_article_runs.
+    scheduler_enabled: bool = True
+    scheduler_tick_seconds: int = 60
+    scheduler_concurrency_cap: int = 3        # in-flight article writes (LLM rate-limit guard)
+    scheduler_stuck_minutes: int = 30         # startup sweep: running rows older than this requeue
+    scheduler_shutdown_grace_s: float = 20.0  # max wait for in-flight writes on shutdown
+    writer_schedule_approval_threshold_usd: float = 90.0   # VA Schedule-all > this -> M9 approval
+    writer_article_cost_estimate_usd: float = 0.30         # per-article preview figure (§9.4)
     brief_aio_query_task_type: str = "RETRIEVAL_QUERY"     # heading side (asymmetric)
     brief_aio_doc_task_type: str = "RETRIEVAL_DOCUMENT"    # answer side
     brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation

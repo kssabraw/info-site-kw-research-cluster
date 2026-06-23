@@ -23,7 +23,7 @@ def get_latest_article(cluster_id: str) -> dict | None:
 def save_article(
     *, cluster_id: str, session_id: str, article_json: dict, article_markdown: str,
     article_html: str, total_word_count: int | None, cost_usd: float | None,
-    schema_version_effective: str,
+    schema_version_effective: str, scheduled_article_run_id: str | None = None,
 ) -> dict:
     res = (
         get_service_client()
@@ -33,6 +33,7 @@ def save_article(
             "article_json": article_json, "article_markdown": article_markdown,
             "article_html": article_html, "total_word_count": total_word_count,
             "cost_usd": cost_usd, "schema_version_effective": schema_version_effective,
+            "scheduled_article_run_id": scheduled_article_run_id,
         })
         .execute()
     )

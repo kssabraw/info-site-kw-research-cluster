@@ -47,6 +47,7 @@ export interface SiloDiscovery {
   interpretations: string[];
   degraded_notes: string[];
   silos: Silo[];
+  site_base_url?: string | null;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -894,3 +895,79 @@ export const splitUncovered = (sessionId: string, clusterId: string) =>
     `/sessions/${sessionId}/clusters/${clusterId}/split-uncovered`,
     { method: "POST" },
   );
+
+// ----- M15 content scheduling -----------------------------------------------
+
+export interface ScheduleRequest {
+  mode: "all_at_once" | "drip" | "fixed";
+  cluster_ids?: string[];          // omit/[] -> whole session
+  per_day?: number;                // drip
+  start_date?: string;             // YYYY-MM-DD — drip start / fixed target day
+  time_of_day?: string;            // HH:MM
+  timezone?: string;
+  site_base_url?: string;
+}
+export interface ScheduleEstimate {
+  count: number;
+  cost_estimate_usd: number;
+  mode: string;
+  days?: number;
+  finish_date?: string;
+  already_scheduled: number;
+  requires_approval: boolean;
+  approval_threshold_usd: number;
+}
+export interface ContentSchedule {
+  id: string;
+  session_id: string;
+  mode: string;
+  per_day: number | null;
+  start_date: string | null;
+  time_of_day: string;
+  timezone: string;
+  status: "active" | "paused" | "complete" | "cancelled";
+  total_count: number;
+  created_at: string;
+  progress?: Record<string, number>;
+}
+export interface ScheduledRun {
+  id: string;
+  content_schedule_id: string | null;
+  cluster_id: string;
+  scheduled_at: string;
+  status: "queued" | "running" | "complete" | "failed" | "cancelled";
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+}
+export interface CreateScheduleResponse {
+  status: "scheduled" | "requires_approval";
+  created: boolean;
+  schedule?: ContentSchedule;
+  scheduled?: number;
+  skipped?: number;
+  estimate: ScheduleEstimate;
+  approval_threshold_usd?: number;
+}
+
+export const scheduleEstimate = (sessionId: string, body: ScheduleRequest) =>
+  request<ScheduleEstimate>(`/sessions/${sessionId}/schedule-estimate`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const createSchedule = (sessionId: string, body: ScheduleRequest) =>
+  request<CreateScheduleResponse>(`/sessions/${sessionId}/schedule`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const listSchedules = (sessionId: string) =>
+  request<{ schedules: ContentSchedule[] }>(`/sessions/${sessionId}/schedules`);
+export const listScheduleRuns = (sessionId: string) =>
+  request<{ runs: ScheduledRun[] }>(`/sessions/${sessionId}/schedule-runs`);
+export const pauseSchedule = (sessionId: string, scheduleId: string) =>
+  request<{ status: string }>(`/sessions/${sessionId}/schedules/${scheduleId}/pause`, { method: "POST" });
+export const resumeSchedule = (sessionId: string, scheduleId: string) =>
+  request<{ status: string }>(`/sessions/${sessionId}/schedules/${scheduleId}/resume`, { method: "POST" });
+export const cancelSchedule = (sessionId: string, scheduleId: string) =>
+  request<{ status: string; cancelled_runs: number }>(
+    `/sessions/${sessionId}/schedules/${scheduleId}/cancel`, { method: "POST" });
