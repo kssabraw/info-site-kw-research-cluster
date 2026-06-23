@@ -47,6 +47,7 @@ export interface SiloDiscovery {
   interpretations: string[];
   degraded_notes: string[];
   silos: Silo[];
+  site_base_url?: string | null;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

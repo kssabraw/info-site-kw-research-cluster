@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import TermAnalysisPanel from "./TermAnalysisPanel";
 import BriefPanel from "./BriefPanel";
 import ArticlePanel from "./ArticlePanel";
+import { ScheduleModal } from "../../shared/ScheduleModal";
 import {
   acceptGap,
   bulkKeywordMove,
@@ -88,6 +89,8 @@ export function ClusterView() {
     },
     onError: (e: Error) => alert(e.message),
   });
+  // M15 — schedule the selected articles for a future write (specific date / drip).
+  const [scheduleSel, setScheduleSel] = useState<string[] | null>(null);
 
   const byCluster = useMemo(() => {
     const m = new Map<string, Keyword[]>();
@@ -187,10 +190,22 @@ export function ClusterView() {
             disabled={bulkGen.isPending}
             onClick={() => bulkGen.mutate([...genSel])}
           >
-            {bulkGen.isPending ? "Starting…" : `Generate ${genSel.size} selected`}
+            {bulkGen.isPending ? "Starting…" : `Generate ${genSel.size} now`}
+          </button>
+          <button className="btn btn-sm" onClick={() => setScheduleSel([...genSel])}>
+            Schedule {genSel.size} selected…
           </button>
           <button className="link-btn" onClick={() => setGenSel(new Set())}>Clear</button>
         </div>
+      )}
+
+      {scheduleSel && (
+        <ScheduleModal
+          sessionId={sessionId}
+          clusterIds={scheduleSel}
+          onClose={() => setScheduleSel(null)}
+          onScheduled={(n) => { setScheduleSel(null); setGenSel(new Set()); alert(`Scheduled ${n} article(s).`); }}
+        />
       )}
 
       <div className="cluster-tree">

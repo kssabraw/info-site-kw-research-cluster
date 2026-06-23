@@ -13,6 +13,7 @@ import { ClusterView } from "./owner/views/ClusterView";
 import { ArchitectureView } from "./owner/views/ArchitectureView";
 import { SplitView } from "./owner/views/SplitView";
 import { ExportsView } from "./owner/views/ExportsView";
+import { ScheduleView } from "./owner/views/ScheduleView";
 import { Wizard } from "./va/Wizard";
 
 // Role-gated app (PRD §11.1). Owners get the full §9 Owner UI; VAs get the §10
@@ -54,6 +55,7 @@ function OwnerRoutes() {
         <Route path="cluster" element={<ClusterView />} />
         <Route path="architecture" element={<ArchitectureView />} />
         <Route path="split" element={<SplitView />} />
+        <Route path="schedule" element={<ScheduleView />} />
         <Route path="exports" element={<ExportsView />} />
       </Route>
       <Route path="*" element={<Navigate to="/projects" replace />} />
@@ -73,6 +75,7 @@ function VaRoutes() {
         <Route path="table" element={<TableView />} />
         <Route path="cluster" element={<ClusterView />} />
         <Route path="architecture" element={<ArchitectureView />} />
+        <Route path="schedule" element={<ScheduleView />} />
         <Route path="exports" element={<ExportsView />} />
         <Route path="split" element={<Navigate to="../table" replace />} />
       </Route>

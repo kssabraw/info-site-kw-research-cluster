@@ -145,6 +145,7 @@ class SiloDiscoveryResponse(BaseModel):
     interpretations: list[str] = []
     degraded_notes: list[str] = []
     silos: list[dict] = []
+    site_base_url: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +380,7 @@ def get_session(
         seed_keyword=session.get("seed_keyword"),
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
+        site_base_url=session.get("site_base_url"),
     )
 
 

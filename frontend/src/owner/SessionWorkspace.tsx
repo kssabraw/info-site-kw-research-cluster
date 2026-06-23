@@ -25,6 +25,7 @@ const OWNER_TABS = [
   { to: "table", label: "Table" },
   { to: "cluster", label: "Cluster" },
   { to: "architecture", label: "Architecture" },
+  { to: "schedule", label: "Schedule" },
   { to: "split", label: "Split" },
   { to: "exports", label: "Exports" },
 ];
@@ -32,6 +33,7 @@ const VA_TABS = [
   { to: "table", label: "Table" },
   { to: "cluster", label: "Cluster" },
   { to: "architecture", label: "Architecture" },
+  { to: "schedule", label: "Schedule" },
   { to: "exports", label: "Exports" },
 ];
 
