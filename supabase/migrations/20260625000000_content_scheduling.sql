@@ -9,8 +9,8 @@
 create table fanout.content_schedules (
   id           uuid primary key default gen_random_uuid(),
   session_id   uuid not null references fanout.sessions (id) on delete cascade,
-  mode         text not null check (mode in ('all_at_once', 'drip')),
-  per_day      int,                                  -- null for all_at_once; >=1 for drip
+  mode         text not null check (mode in ('all_at_once', 'drip', 'fixed')),
+  per_day      int,                                  -- null unless drip; >=1 for drip
   start_date   date,
   time_of_day  time not null default '09:00',
   timezone     text not null default 'UTC',

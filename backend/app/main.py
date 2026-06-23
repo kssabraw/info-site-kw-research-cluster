@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import exports, health, projects, sessions
+from app.api import exports, health, projects, schedules, sessions
 from app.config import get_settings
 from app.logging import (
     bind_correlation_id,
@@ -72,3 +72,4 @@ app.include_router(health.router)
 app.include_router(projects.router)
 app.include_router(sessions.router)
 app.include_router(exports.router)
+app.include_router(schedules.router)

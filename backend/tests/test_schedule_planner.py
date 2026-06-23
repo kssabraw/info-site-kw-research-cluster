@@ -74,6 +74,21 @@ def test_drip_timezone_converts_to_utc():
     assert runs[0].scheduled_at == datetime(2026, 6, 16, 13, 0, tzinfo=timezone.utc)
 
 
+def test_fixed_date_all_runs_on_chosen_day():
+    # "deliver July 4 -> write July 3": every selected article scheduled for the same day.
+    runs = plan_runs(
+        ["a", "b", "c"], mode="fixed", start_date=date(2026, 7, 3),
+        time_of_day=time(8, 0), tz_name="UTC",
+    )
+    assert all(r.scheduled_at == datetime(2026, 7, 3, 8, 0, tzinfo=timezone.utc) for r in runs)
+    assert [r.cluster_id for r in runs] == ["a", "b", "c"]
+
+
+def test_fixed_requires_a_date():
+    with pytest.raises(ScheduleError):
+        plan_runs(["a"], mode="fixed")
+
+
 def test_drip_over_365_days_raises_with_hint():
     with pytest.raises(ScheduleError) as ei:
         plan_runs(["x"] * 400, mode="drip", per_day=1, start_date=date(2026, 6, 16),

@@ -84,6 +84,13 @@ def plan_runs(
 
     if mode == "all_at_once":
         return [PlannedRun(cid, now) for cid in ids]
+    if mode == "fixed":
+        # All selected articles written on one chosen calendar day (e.g. "deliver July 4 ->
+        # write July 3"). start_date is the target day; time_of_day/tz set the moment.
+        if not start_date:
+            raise ScheduleError("A specific-date schedule requires a target date")
+        target = _local_to_utc(start_date, time_of_day or time(9, 0), tz_name)
+        return [PlannedRun(cid, target) for cid in ids]
     if mode != "drip":
         raise ScheduleError(f"Unknown mode: {mode}")
 
@@ -97,13 +104,15 @@ def plan_runs(
         )
     start = start_date or now.date()
     tod = time_of_day or time(9, 0)
+    runs: list[PlannedRun] = []
+    for i, cid in enumerate(ids):
+        runs.append(PlannedRun(cid, _local_to_utc(start + timedelta(days=i // per_day), tod, tz_name)))
+    return runs
+
+
+def _local_to_utc(d: date, tod: time, tz_name: str) -> datetime:
     try:
         tz = ZoneInfo(tz_name)
     except Exception as exc:  # noqa: BLE001 — unknown tz -> 400
         raise ScheduleError(f"Unknown timezone: {tz_name}") from exc
-
-    runs: list[PlannedRun] = []
-    for i, cid in enumerate(ids):
-        local_dt = datetime.combine(start + timedelta(days=i // per_day), tod, tzinfo=tz)
-        runs.append(PlannedRun(cid, local_dt.astimezone(timezone.utc)))
-    return runs
+    return datetime.combine(d, tod, tzinfo=tz).astimezone(timezone.utc)

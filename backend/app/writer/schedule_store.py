@@ -63,6 +63,15 @@ def schedule_progress(schedule_id: str) -> dict:
     return out
 
 
+def pending_cluster_ids(session_id: str) -> set[str]:
+    """Clusters that already have a queued/running run in this session — so a new schedule
+    doesn't double-book (and double-write) them. Returns their cluster ids."""
+    rows = (get_service_client().table("scheduled_article_runs").select("cluster_id")
+            .eq("session_id", session_id).in_("status", ["queued", "running"])
+            .execute().data or [])
+    return {r["cluster_id"] for r in rows}
+
+
 def list_runs(session_id: str, *, limit: int = 500) -> list[dict]:
     return (get_service_client().table("scheduled_article_runs").select("*")
             .eq("session_id", session_id).order("scheduled_at", desc=False)
