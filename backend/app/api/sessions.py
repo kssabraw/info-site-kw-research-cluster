@@ -146,6 +146,7 @@ class SiloDiscoveryResponse(BaseModel):
     degraded_notes: list[str] = []
     silos: list[dict] = []
     site_base_url: str | None = None
+    publish_config: dict = {}
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +382,7 @@ def get_session(
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
         site_base_url=session.get("site_base_url"),
+        publish_config=session.get("publish_config") or {},
     )
 
 
@@ -1720,6 +1722,127 @@ def download_all_articles(
         object_path, get_settings().csv_signed_url_ttl_s, download_name=f"articles-{session_id[:8]}.zip",
     )
     return {"download_url": download_url, "count": len(named)}
+
+
+class PublishConfigBody(BaseModel):
+    github_repo: str | None = None          # "owner/repo"
+    github_branch: str | None = None
+    github_content_path: str | None = None  # e.g. "src/content/blog"
+
+
+@router.patch("/sessions/{session_id}/publish-config")
+def set_publish_config(
+    session_id: str, body: PublishConfigBody, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Set the session's GitHub publish target (repo/branch/content path). Stored in
+    `sessions.publish_config`; the token itself is a server env var."""
+    session = _require_session(user, session_id)
+    cfg = dict(session.get("publish_config") or {})
+    gh = dict(cfg.get("github") or {})
+    if body.github_repo is not None:
+        gh["repo"] = body.github_repo.strip()
+    if body.github_branch is not None:
+        gh["branch"] = body.github_branch.strip()
+    if body.github_content_path is not None:
+        gh["content_path"] = body.github_content_path.strip().strip("/")
+    cfg["github"] = gh
+    store.update_session(session_id, {"publish_config": cfg})
+    return {"publish_config": cfg}
+
+
+def _github_target(session: dict) -> tuple[str, str, str, str]:
+    """(repo, branch, content_path, token) for a session's GitHub target, or a 400 if the repo
+    isn't configured / the server has no token."""
+    s = get_settings()
+    gh = (session.get("publish_config") or {}).get("github") or {}
+    repo = (gh.get("repo") or "").strip()
+    if not repo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Set the GitHub repo (owner/repo) for this session first.")
+    if not s.github_publish_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="GitHub publishing isn't configured on the server (no token).")
+    return (repo, gh.get("branch") or s.github_default_branch,
+            (gh.get("content_path") or s.github_default_content_path).strip("/"),
+            s.github_publish_token)
+
+
+def _astro_file(content_path: str, *, markdown: str, title: str, article_slug: str, silo_name: str):
+    from app.writer.publish.markdown import build_astro_markdown
+    from app.writer.slugs import slugify
+
+    silo_slug = slugify(silo_name) if silo_name else "content"
+    md = build_astro_markdown(
+        article_markdown=markdown, title=title, slug=article_slug, silo=silo_name)
+    return f"{content_path}/{silo_slug}/{article_slug}.md", md
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/publish/github")
+def publish_cluster_github(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Commit one article to the session's GitHub repo as Astro content Markdown."""
+    from app.writer import store as article_store
+    from app.writer.publish import github as gh_pub
+
+    session = _require_session(user, session_id)
+    repo, branch, content_path, token = _github_target(session)
+    row = article_store.get_latest_article(cluster_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No article to publish")
+    cluster = store.get_cluster(cluster_id)
+    if not cluster or store.cluster_session_id(cluster_id) != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    article_slug = store.ensure_session_slugs(session_id).get(cluster_id) or cluster.get("slug")
+    if not article_slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cluster has no slug")
+    topic = store.get_topic(cluster["topic_id"]) or {}
+    aj = row["article_json"]
+    path, content = _astro_file(
+        content_path, markdown=aj.get("article_markdown", ""), title=aj.get("title", ""),
+        article_slug=article_slug, silo_name=topic.get("name", ""))
+    try:
+        res = gh_pub.commit_file(
+            repo=repo, path=path, content=content,
+            message=f"content: {aj.get('title') or path}", branch=branch, token=token)
+    except gh_pub.GitHubPublishError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"published": True, **res}
+
+
+@router.post("/sessions/{session_id}/publish/github")
+def publish_all_github(
+    session_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Commit every written article to the repo in ONE commit (Git Trees API)."""
+    from app.writer import store as article_store
+    from app.writer.publish import github as gh_pub
+
+    session = _require_session(user, session_id)
+    repo, branch, content_path, token = _github_target(session)
+    bodies = dict(article_store.get_session_article_markdown(session_id))   # {cluster_id: md}
+    if not bodies:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No articles to publish")
+    slugs = store.ensure_session_slugs(session_id)
+    topics = {t["id"]: t for t in store.list_topics(session_id)}
+    files: list[tuple[str, str]] = []
+    for c in store.list_clusters(session_id):
+        markdown = bodies.get(c["id"])
+        article_slug = slugs.get(c["id"]) or c.get("slug")
+        if not markdown or not article_slug:
+            continue
+        silo_name = (topics.get(c["topic_id"]) or {}).get("name", "")
+        files.append(_astro_file(content_path, markdown=markdown, title="",
+                                 article_slug=article_slug, silo_name=silo_name))
+    if not files:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No publishable articles")
+    try:
+        res = gh_pub.commit_tree(
+            repo=repo, branch=branch, files=files,
+            message=f"content: publish {len(files)} articles", token=token)
+    except gh_pub.GitHubPublishError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"published": True, **res}
 
 
 @router.get("/sessions/{session_id}/clusters/{cluster_id}/article")

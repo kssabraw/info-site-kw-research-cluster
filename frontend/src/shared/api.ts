@@ -48,6 +48,7 @@ export interface SiloDiscovery {
   degraded_notes: string[];
   silos: Silo[];
   site_base_url?: string | null;
+  publish_config?: { github?: { repo?: string; branch?: string; content_path?: string } };
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -887,6 +888,22 @@ export const listArticles = (sessionId: string) =>
 export const downloadAllArticles = (sessionId: string) =>
   request<{ download_url: string; count: number }>(
     `/sessions/${sessionId}/articles/download-all`, { method: "POST" });
+
+export interface PublishConfig {
+  github_repo?: string;
+  github_branch?: string;
+  github_content_path?: string;
+}
+export const setPublishConfig = (sessionId: string, cfg: PublishConfig) =>
+  request<{ publish_config: Record<string, unknown> }>(
+    `/sessions/${sessionId}/publish-config`,
+    { method: "PATCH", body: JSON.stringify(cfg) });
+export const publishClusterGithub = (sessionId: string, clusterId: string) =>
+  request<{ published: boolean; path: string; html_url: string | null }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/publish/github`, { method: "POST" });
+export const publishAllGithub = (sessionId: string) =>
+  request<{ published: boolean; committed: number; commit_sha: string | null }>(
+    `/sessions/${sessionId}/publish/github`, { method: "POST" });
 
 export interface BulkGenerateResponse {
   submitted: string[];
