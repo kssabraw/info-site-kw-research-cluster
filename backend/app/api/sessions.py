@@ -147,6 +147,7 @@ class SiloDiscoveryResponse(BaseModel):
     silos: list[dict] = []
     site_base_url: str | None = None
     publish_config: dict = {}
+    publish_available: dict = {}     # which destinations have server creds (no secrets)
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +376,7 @@ def get_session(
 ) -> SiloDiscoveryResponse:
     session = _require_session(user, session_id)
     bind_session_id(session_id)
+    _s = get_settings()
     return SiloDiscoveryResponse(
         session_id=session_id,
         status=session["status"],
@@ -383,6 +385,10 @@ def get_session(
         silos=store.list_topics(session_id),
         site_base_url=session.get("site_base_url"),
         publish_config=session.get("publish_config") or {},
+        publish_available={
+            "github": bool(_s.github_publish_token),
+            "drive": bool(_s.google_oauth_client_id and _s.google_oauth_refresh_token),
+        },
     )
 
 
@@ -1728,14 +1734,15 @@ class PublishConfigBody(BaseModel):
     github_repo: str | None = None          # "owner/repo"
     github_branch: str | None = None
     github_content_path: str | None = None  # e.g. "src/content/blog"
+    drive_folder_id: str | None = None      # optional Google Drive folder
 
 
 @router.patch("/sessions/{session_id}/publish-config")
 def set_publish_config(
     session_id: str, body: PublishConfigBody, user: AuthedUser = Depends(require_owner)
 ) -> dict:
-    """Set the session's GitHub publish target (repo/branch/content path). Stored in
-    `sessions.publish_config`; the token itself is a server env var."""
+    """Set the session's publish targets (GitHub repo/branch/path + Drive folder). Stored in
+    `sessions.publish_config`; the tokens themselves are server env vars."""
     session = _require_session(user, session_id)
     cfg = dict(session.get("publish_config") or {})
     gh = dict(cfg.get("github") or {})
@@ -1746,8 +1753,36 @@ def set_publish_config(
     if body.github_content_path is not None:
         gh["content_path"] = body.github_content_path.strip().strip("/")
     cfg["github"] = gh
+    if body.drive_folder_id is not None:
+        cfg["drive"] = {"folder_id": body.drive_folder_id.strip()}
     store.update_session(session_id, {"publish_config": cfg})
     return {"publish_config": cfg}
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/publish/drive")
+def publish_cluster_drive(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Save one article to Google Drive as a Google Doc (from its HTML)."""
+    from app.writer import store as article_store
+    from app.writer.publish import drive as drive_pub
+
+    session = _require_session(user, session_id)
+    if store.cluster_session_id(cluster_id) != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    row = article_store.get_latest_article(cluster_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No article to save")
+    aj = row["article_json"]
+    html = aj.get("article_html") or ""
+    if not html:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Article has no HTML body")
+    folder_id = ((session.get("publish_config") or {}).get("drive") or {}).get("folder_id") or None
+    try:
+        res = drive_pub.create_doc_from_html(name=aj.get("title") or "Article", html=html, folder_id=folder_id)
+    except drive_pub.DrivePublishError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"published": True, **res}
 
 
 def _github_target(session: dict) -> tuple[str, str, str, str]:

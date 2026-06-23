@@ -48,7 +48,11 @@ export interface SiloDiscovery {
   degraded_notes: string[];
   silos: Silo[];
   site_base_url?: string | null;
-  publish_config?: { github?: { repo?: string; branch?: string; content_path?: string } };
+  publish_config?: {
+    github?: { repo?: string; branch?: string; content_path?: string };
+    drive?: { folder_id?: string };
+  };
+  publish_available?: { github?: boolean; drive?: boolean };
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -893,6 +897,7 @@ export interface PublishConfig {
   github_repo?: string;
   github_branch?: string;
   github_content_path?: string;
+  drive_folder_id?: string;
 }
 export const setPublishConfig = (sessionId: string, cfg: PublishConfig) =>
   request<{ publish_config: Record<string, unknown> }>(
@@ -904,6 +909,9 @@ export const publishClusterGithub = (sessionId: string, clusterId: string) =>
 export const publishAllGithub = (sessionId: string) =>
   request<{ published: boolean; committed: number; commit_sha: string | null }>(
     `/sessions/${sessionId}/publish/github`, { method: "POST" });
+export const publishClusterDrive = (sessionId: string, clusterId: string) =>
+  request<{ published: boolean; doc_id: string; url: string | null }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/publish/drive`, { method: "POST" });
 
 export interface BulkGenerateResponse {
   submitted: string[];

@@ -5,6 +5,7 @@ import {
   getSession,
   listArticles,
   publishAllGithub,
+  publishClusterDrive,
   publishClusterGithub,
   setPublishConfig,
   type ArticleListItem,
@@ -42,6 +43,11 @@ export function ArticlesView() {
     onSuccess: (res) => res.html_url && window.open(res.html_url, "_blank", "noopener"),
     onError: (e: Error) => alert(e.message),
   });
+  const saveDrive = useMutation({
+    mutationFn: (clusterId: string) => publishClusterDrive(sessionId, clusterId),
+    onSuccess: (res) => res.url && window.open(res.url, "_blank", "noopener"),
+    onError: (e: Error) => alert(e.message),
+  });
 
   if (q.isLoading) return <p className="muted">Loading articles…</p>;
   if (q.isError) return <p className="form-error">Couldn’t load articles.</p>;
@@ -49,6 +55,7 @@ export function ArticlesView() {
   const articles = q.data?.articles ?? [];
   const gh = session.data?.publish_config?.github ?? {};
   const repoConfigured = !!gh.repo;
+  const driveAvailable = !!session.data?.publish_available?.drive;
 
   return (
     <div>
@@ -63,7 +70,7 @@ export function ArticlesView() {
           {downloadAll.isPending ? "Zipping…" : "Download all (.zip)"}
         </button>
         <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setShowGh((s) => !s)}>
-          GitHub settings
+          Publish settings
         </button>
         <button
           className="btn btn-ghost"
@@ -79,7 +86,15 @@ export function ArticlesView() {
         </span>
       </div>
 
-      {showGh && <GithubSettings sessionId={sessionId} initial={gh} onSaved={() => session.refetch()} />}
+      {showGh && (
+        <PublishSettings
+          sessionId={sessionId}
+          gh={gh}
+          driveFolder={session.data?.publish_config?.drive?.folder_id ?? ""}
+          driveAvailable={driveAvailable}
+          onSaved={() => session.refetch()}
+        />
+      )}
 
       {articles.length === 0 ? (
         <p className="muted">No articles written yet for this session.</p>
@@ -107,9 +122,21 @@ export function ArticlesView() {
                       className="link-btn"
                       style={{ marginLeft: 10 }}
                       disabled={pushOne.isPending}
+                      title="Commit this article to the GitHub repo"
                       onClick={() => pushOne.mutate(a.cluster_id)}
                     >
-                      Push
+                      GitHub
+                    </button>
+                  )}
+                  {driveAvailable && (
+                    <button
+                      className="link-btn"
+                      style={{ marginLeft: 10 }}
+                      disabled={saveDrive.isPending}
+                      title="Save this article to Google Drive as a Google Doc"
+                      onClick={() => saveDrive.mutate(a.cluster_id)}
+                    >
+                      Drive
                     </button>
                   )}
                 </td>
@@ -132,24 +159,29 @@ export function ArticlesView() {
   );
 }
 
-function GithubSettings(p: {
+function PublishSettings(p: {
   sessionId: string;
-  initial: { repo?: string; branch?: string; content_path?: string };
+  gh: { repo?: string; branch?: string; content_path?: string };
+  driveFolder: string;
+  driveAvailable: boolean;
   onSaved: () => void;
 }) {
-  const [repo, setRepo] = useState(p.initial.repo ?? "");
-  const [branch, setBranch] = useState(p.initial.branch ?? "main");
-  const [path, setPath] = useState(p.initial.content_path ?? "src/content/blog");
+  const [repo, setRepo] = useState(p.gh.repo ?? "");
+  const [branch, setBranch] = useState(p.gh.branch ?? "main");
+  const [path, setPath] = useState(p.gh.content_path ?? "src/content/blog");
+  const [folder, setFolder] = useState(p.driveFolder);
   const save = useMutation({
     mutationFn: () => setPublishConfig(p.sessionId, {
       github_repo: repo.trim(), github_branch: branch.trim(), github_content_path: path.trim(),
+      drive_folder_id: folder.trim(),
     }),
     onSuccess: () => p.onSaved(),
     onError: (e: Error) => alert(e.message),
   });
   return (
-    <div className="card" style={{ display: "grid", gap: 10, marginBottom: 14, maxWidth: 560 }}>
-      <div className="muted" style={{ fontSize: 13 }}>
+    <div className="card" style={{ display: "grid", gap: 12, marginBottom: 14, maxWidth: 560 }}>
+      <strong style={{ fontSize: 14 }}>GitHub</strong>
+      <div className="muted" style={{ fontSize: 13, marginTop: -6 }}>
         Articles commit as Astro content Markdown to{" "}
         <code>{path || "src/content/blog"}/&#123;silo&#125;/&#123;slug&#125;.md</code>. The server needs a
         GitHub token with Contents:write on this repo.
@@ -168,6 +200,19 @@ function GithubSettings(p: {
           <input className="input" value={path} onChange={(e) => setPath(e.target.value)} />
         </label>
       </div>
+
+      <strong style={{ fontSize: 14, marginTop: 4 }}>Google Drive</strong>
+      <div className="muted" style={{ fontSize: 13, marginTop: -6 }}>
+        {p.driveAvailable
+          ? "Save articles as Google Docs into this folder (leave blank for your Drive root)."
+          : "Not configured on the server yet (needs the Google OAuth credentials)."}
+      </div>
+      <label className="field">
+        <span className="field-label">Drive folder ID</span>
+        <input className="input" placeholder="folder id from the Drive URL" value={folder}
+          onChange={(e) => setFolder(e.target.value)} disabled={!p.driveAvailable} />
+      </label>
+
       <div>
         <button className="btn btn-primary" style={{ width: "auto" }} disabled={save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? "Saving…" : "Save"}

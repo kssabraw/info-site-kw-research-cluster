@@ -34,6 +34,10 @@ dependencies = [
   # python:3.11-slim base image doesn't ship /usr/share/zoneinfo, so bundle the
   # tzdata package as a guaranteed fallback (else a non-UTC timezone 400s).
   "tzdata>=2024.1",
+  # Publishing: Google Drive save (OAuth-as-user → a Google Doc from the article
+  # HTML). Dormant until the OAuth creds are set.
+  "google-api-python-client>=2.100,<3.0",
+  "google-auth>=2.30,<3.0",
 ]
 
 [project.optional-dependencies]

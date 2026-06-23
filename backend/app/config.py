@@ -337,6 +337,11 @@ class Settings(BaseSettings):
     github_publish_token: str = ""
     github_default_branch: str = "main"
     github_default_content_path: str = "src/content/blog"
+    # Google Drive save (OAuth-as-user, personal Gmail has no Shared Drives). The refresh
+    # token is minted once; publish the consent screen to production so it doesn't expire.
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_refresh_token: str = ""
     brief_aio_query_task_type: str = "RETRIEVAL_QUERY"     # heading side (asymmetric)
     brief_aio_doc_task_type: str = "RETRIEVAL_DOCUMENT"    # answer side
     brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation
