@@ -92,21 +92,49 @@ def test_plain_executor_does_not_propagate(monkeypatch):
     assert total == 0.0  # lost, because contextvars don't cross into raw workers
 
 
-def test_metered_sync_flushes_base_plus_delta(monkeypatch):
-    """metered_sync reads the existing total as base and writes base + metered."""
-    flushed = {}
-
-    monkeypatch.setattr(ca.store, "get_session_cost", lambda sid: (2.00, {"expand": 2.00}))
+def test_make_flusher_sends_only_incremental_deltas(monkeypatch):
+    """Repeated flushes of the same meter send only the spend since the previous flush —
+    so concurrent same-session writers accumulate correctly (no double-count, no lost base)."""
+    calls: list[tuple] = []
     monkeypatch.setattr(
-        ca.store, "flush_session_cost",
-        lambda sid, total, breakdown: flushed.update(total=total, breakdown=breakdown),
+        ca.store, "increment_session_cost",
+        lambda sid, dt, db: calls.append((round(dt, 6), dict(db))),
     )
+    meter = CostMeter()
+    bind_meter(meter)
+    set_step("article_generation")
+    flush = ca._make_flusher("s1", meter)
+
+    record_cost(0.30)
+    flush()                                   # first flush: +0.30
+    record_cost(0.20)
+    flush()                                   # second flush: only the new +0.20
+    flush()                                   # no change -> no-op (no extra call)
+    bind_meter(None)
+
+    assert calls == [
+        (0.30, {"article_generation": 0.30}),
+        (0.20, {"article_generation": 0.20}),
+    ]
+
+
+def test_metered_sync_increments_by_metered_delta(monkeypatch):
+    """metered_sync atomically increments the session cost by its metered spend (the DB-side
+    increment accumulates onto whatever's already there — no Python base read)."""
+    inc = {"total": 0.0, "breakdown": {}}
+
+    def fake_increment(sid, delta_total, delta_breakdown):
+        inc["total"] = round(inc["total"] + delta_total, 6)
+        for k, v in delta_breakdown.items():
+            inc["breakdown"][k] = round(inc["breakdown"].get(k, 0.0) + v, 6)
+
+    monkeypatch.setattr(ca.store, "increment_session_cost", fake_increment)
 
     with ca.metered_sync("s1", "article_planning"):
         record_cost(0.60)
         record_cost(0.10)
 
-    assert flushed["total"] == 2.70
-    assert flushed["breakdown"] == {"expand": 2.00, "article_planning": 0.70}
+    assert inc["total"] == 0.70
+    assert inc["breakdown"] == {"article_planning": 0.70}
     # The meter is unbound on exit so a later record_cost is a no-op.
     assert current_meter() is None

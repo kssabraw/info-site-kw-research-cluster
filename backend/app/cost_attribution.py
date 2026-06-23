@@ -11,10 +11,12 @@ including on failure, so a crashed/partial run still records the cost spent so f
 path: bind + single final flush, no periodic thread.
 
 Cost accumulates across a session's runs (expand → plan → architecture, plus any
-re-plan/regate/fanout): each run reads the existing total as its base and adds its
-own metered spend, so the persisted figure is the session's real cumulative cost
-(matches §16.4 "the session's running cost"). The per-session run guard
-(`try_mark_running`) means two jobs never write the same row concurrently.
+re-plan/regate/fanout): each flush atomically *increments* `actual_cost_usd` +
+`cost_breakdown` by the spend since the previous flush (`increment_session_cost`,
+row-locked in SQL), so the persisted figure is the session's real cumulative cost
+(matches §16.4 "the session's running cost"). The delta increment is correct even when
+several writers touch the same session at once — the M15 scheduler drains up to `cap`
+article writes of one session concurrently, which the old base+absolute write lost.
 """
 
 import logging
@@ -28,47 +30,57 @@ from app.storage import silo as store
 logger = logging.getLogger(__name__)
 
 
-def _merge(base: dict[str, float], delta: dict[str, float]) -> dict[str, float]:
-    merged = dict(base)
-    for step, cost in delta.items():
-        merged[step] = round(merged.get(step, 0.0) + cost, 6)
-    return merged
+def _breakdown_delta(curr: dict[str, float], last: dict[str, float]) -> dict[str, float]:
+    """Per-step spend since the last flush (only the changed steps, rounded)."""
+    out: dict[str, float] = {}
+    for step, cost in curr.items():
+        d = round(cost - last.get(step, 0.0), 6)
+        if d:
+            out[step] = d
+    return out
 
 
-def _flush(session_id: str, meter: CostMeter, base_total: float, base_breakdown: dict) -> None:
-    total, breakdown = meter.snapshot()
-    try:
-        store.flush_session_cost(
-            session_id,
-            round(base_total + total, 6),
-            _merge(base_breakdown, breakdown),
-        )
-    except Exception as exc:  # noqa: BLE001 — a flush failure must not kill the run
-        logger.warning(
-            "cost_flush_failed",
-            extra={"event": "cost_flush_failed", "reason": repr(exc)},
-        )
+def _make_flusher(session_id: str, meter: CostMeter):
+    """A do_flush() closure that increments the session by the delta since its last successful
+    flush. `last` only advances on success, so a transient flush failure is retried (its delta
+    rolls into the next flush) rather than lost."""
+    last = {"total": 0.0, "breakdown": {}}
+
+    def do_flush() -> None:
+        total, breakdown = meter.snapshot()
+        d_total = round(total - last["total"], 6)
+        d_breakdown = _breakdown_delta(breakdown, last["breakdown"])
+        if d_total == 0.0 and not d_breakdown:
+            return
+        try:
+            store.increment_session_cost(session_id, d_total, d_breakdown)
+        except Exception as exc:  # noqa: BLE001 — a flush failure must not kill the run
+            logger.warning("cost_flush_failed",
+                           extra={"event": "cost_flush_failed", "reason": repr(exc)})
+            return                                      # don't advance last -> retry the delta
+        last["total"] = total
+        last["breakdown"] = dict(breakdown)
+
+    return do_flush
 
 
 @contextmanager
 def metered_run(session_id: str, step: str):
     """Background-job metering: periodic + final flush (PRD §16.4)."""
-    base_total, base_breakdown = store.get_session_cost(session_id)
     meter = CostMeter()
     bind_meter(meter)
     set_step(step)
     interval = float(get_settings().cost_flush_interval_s)
     stop = threading.Event()
-    # Serialize DB writes so the final flush is always the last write: once stop is
-    # set the loop never starts another flush, so at most one periodic flush can be
-    # in flight, and the final flush blocks on this lock until it finishes — then
-    # writes the largest (latest) value. Without it, a slow periodic flush could
-    # land after the final one and overwrite it with a slightly stale total.
+    # Serialize this run's own DB writes so its final flush is always its last write: once stop
+    # is set the loop starts no new flush, so at most one periodic flush is in flight, and the
+    # final flush blocks on the lock until it finishes. (Cross-run safety is the SQL row lock.)
     flush_lock = threading.Lock()
+    flush = _make_flusher(session_id, meter)
 
     def do_flush() -> None:
         with flush_lock:
-            _flush(session_id, meter, base_total, base_breakdown)
+            flush()
 
     def loop() -> None:
         while not stop.wait(interval):
@@ -89,12 +101,12 @@ def metered_run(session_id: str, step: str):
 def metered_sync(session_id: str, step: str):
     """Synchronous metering for the in-request silo-discovery call: a single
     final flush, no periodic thread (the call is quick)."""
-    base_total, base_breakdown = store.get_session_cost(session_id)
     meter = CostMeter()
     bind_meter(meter)
     set_step(step)
+    flush = _make_flusher(session_id, meter)
     try:
         yield meter
     finally:
-        _flush(session_id, meter, base_total, base_breakdown)
+        flush()
         bind_meter(None)

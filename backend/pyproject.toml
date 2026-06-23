@@ -30,6 +30,10 @@ dependencies = [
   # M14 Writer module (docs/writer-module-plan.md §4): title-case normalization
   # (PRD §5.18). Pure-python, pinned to match the Brief Generator's choice.
   "titlecase==2.4.1",
+  # M15 scheduling: ZoneInfo needs a tz database for drip/fixed schedules. The
+  # python:3.11-slim base image doesn't ship /usr/share/zoneinfo, so bundle the
+  # tzdata package as a guaranteed fallback (else a non-UTC timezone 400s).
+  "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelSchedule,
+  getClusters,
   getSession,
   listScheduleRuns,
   listSchedules,
@@ -21,6 +22,7 @@ export function ScheduleView() {
   const [showModal, setShowModal] = useState(false);
 
   const session = useQuery({ queryKey: ["session", sessionId], queryFn: () => getSession(sessionId) });
+  const clustersQ = useQuery({ queryKey: ["clusters", sessionId], queryFn: () => getClusters(sessionId) });
   const schedulesQ = useQuery({
     queryKey: ["schedules", sessionId],
     queryFn: () => listSchedules(sessionId),
@@ -34,8 +36,9 @@ export function ScheduleView() {
 
   const clusterName = useMemo(() => {
     const m = new Map<string, string>();
+    clustersQ.data?.clusters.forEach((c) => m.set(c.id, c.name));
     return (id: string) => m.get(id) ?? id.slice(0, 8);
-  }, []);
+  }, [clustersQ.data]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["schedules", sessionId] });
