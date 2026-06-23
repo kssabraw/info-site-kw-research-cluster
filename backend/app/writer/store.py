@@ -7,6 +7,47 @@ from __future__ import annotations
 from app.storage.supabase_client import get_service_client
 
 
+def list_session_articles(session_id: str) -> list[dict]:
+    """Latest generated article per cluster for a session, metadata only (no bodies — those
+    are large; the reader fetches one at a time). Paged so it stays correct above PostgREST's
+    ~1000-row cap; keeps the newest row per cluster_id."""
+    client = get_service_client()
+    latest: dict[str, dict] = {}
+    page = 0
+    while True:
+        rows = (client.table("article_outputs")
+                .select("id, cluster_id, total_word_count, cost_usd, schema_version_effective, "
+                        "generated_at, scheduled_article_run_id")
+                .eq("session_id", session_id).order("generated_at", desc=True)
+                .range(page * 1000, page * 1000 + 999).execute().data or [])
+        for r in rows:
+            latest.setdefault(r["cluster_id"], r)        # desc order -> first seen is newest
+        if len(rows) < 1000:
+            break
+        page += 1
+    return list(latest.values())
+
+
+def get_session_article_markdown(session_id: str) -> list[tuple[str, str]]:
+    """(cluster_id, article_markdown) for the latest article per cluster — the bodies for the
+    'Download all' zip. Paged; newest row per cluster_id wins."""
+    client = get_service_client()
+    latest: dict[str, str] = {}
+    page = 0
+    while True:
+        rows = (client.table("article_outputs")
+                .select("cluster_id, article_markdown, generated_at")
+                .eq("session_id", session_id).order("generated_at", desc=True)
+                .range(page * 1000, page * 1000 + 999).execute().data or [])
+        for r in rows:
+            if r["cluster_id"] not in latest and r.get("article_markdown"):
+                latest[r["cluster_id"]] = r["article_markdown"]
+        if len(rows) < 1000:
+            break
+        page += 1
+    return list(latest.items())
+
+
 def get_latest_article(cluster_id: str) -> dict | None:
     res = (
         get_service_client()

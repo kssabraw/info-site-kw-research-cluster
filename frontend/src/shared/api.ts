@@ -48,6 +48,11 @@ export interface SiloDiscovery {
   degraded_notes: string[];
   silos: Silo[];
   site_base_url?: string | null;
+  publish_config?: {
+    github?: { repo?: string; branch?: string; content_path?: string };
+    drive?: { folder_id?: string };
+  };
+  publish_available?: { github?: boolean; drive?: boolean };
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -873,6 +878,40 @@ export const startArticle = (
 
 export const getArticle = (sessionId: string, clusterId: string) =>
   request<ArticleResponse>(`/sessions/${sessionId}/clusters/${clusterId}/article`);
+
+export interface ArticleListItem {
+  cluster_id: string;
+  name: string;
+  total_word_count: number | null;
+  cost_usd: number | null;
+  generated_at: string | null;
+  scheduled: boolean;
+}
+export const listArticles = (sessionId: string) =>
+  request<{ articles: ArticleListItem[]; count: number }>(`/sessions/${sessionId}/articles`);
+export const downloadAllArticles = (sessionId: string) =>
+  request<{ download_url: string; count: number }>(
+    `/sessions/${sessionId}/articles/download-all`, { method: "POST" });
+
+export interface PublishConfig {
+  github_repo?: string;
+  github_branch?: string;
+  github_content_path?: string;
+  drive_folder_id?: string;
+}
+export const setPublishConfig = (sessionId: string, cfg: PublishConfig) =>
+  request<{ publish_config: Record<string, unknown> }>(
+    `/sessions/${sessionId}/publish-config`,
+    { method: "PATCH", body: JSON.stringify(cfg) });
+export const publishClusterGithub = (sessionId: string, clusterId: string) =>
+  request<{ published: boolean; path: string; html_url: string | null }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/publish/github`, { method: "POST" });
+export const publishAllGithub = (sessionId: string) =>
+  request<{ published: boolean; committed: number; commit_sha: string | null }>(
+    `/sessions/${sessionId}/publish/github`, { method: "POST" });
+export const publishClusterDrive = (sessionId: string, clusterId: string) =>
+  request<{ published: boolean; doc_id: string; url: string | null }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/publish/drive`, { method: "POST" });
 
 export interface BulkGenerateResponse {
   submitted: string[];

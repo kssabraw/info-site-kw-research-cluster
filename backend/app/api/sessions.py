@@ -146,6 +146,8 @@ class SiloDiscoveryResponse(BaseModel):
     degraded_notes: list[str] = []
     silos: list[dict] = []
     site_base_url: str | None = None
+    publish_config: dict = {}
+    publish_available: dict = {}     # which destinations have server creds (no secrets)
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +376,7 @@ def get_session(
 ) -> SiloDiscoveryResponse:
     session = _require_session(user, session_id)
     bind_session_id(session_id)
+    _s = get_settings()
     return SiloDiscoveryResponse(
         session_id=session_id,
         status=session["status"],
@@ -381,6 +384,11 @@ def get_session(
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
         site_base_url=session.get("site_base_url"),
+        publish_config=session.get("publish_config") or {},
+        publish_available={
+            "github": bool(_s.github_publish_token),
+            "drive": bool(_s.google_oauth_client_id and _s.google_oauth_refresh_token),
+        },
     )
 
 
@@ -1656,6 +1664,220 @@ def start_articles(
             continue
         submitted.append(cid)
     return {"submitted": submitted, "skipped": skipped, "count": len(submitted)}
+
+
+@router.get("/sessions/{session_id}/articles")
+def list_articles(
+    session_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """The Articles library: the latest generated article per cluster for a session (metadata
+    only — name, words, cost, date), newest first. The reader fetches a body one at a time via
+    the per-cluster article endpoint."""
+    from app.writer import store as article_store
+
+    _require_session(user, session_id)
+    rows = article_store.list_session_articles(session_id)
+    names = {c["id"]: c["name"] for c in store.list_clusters(session_id)}
+    items = [{
+        "cluster_id": r["cluster_id"],
+        "name": names.get(r["cluster_id"], "—"),
+        "total_word_count": r.get("total_word_count"),
+        "cost_usd": r.get("cost_usd"),
+        "generated_at": r.get("generated_at"),
+        "scheduled": r.get("scheduled_article_run_id") is not None,
+    } for r in rows]
+    items.sort(key=lambda x: x["generated_at"] or "", reverse=True)
+    return {"articles": items, "count": len(items)}
+
+
+@router.post("/sessions/{session_id}/articles/download-all")
+def download_all_articles(
+    session_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Bundle every written article (latest per cluster) as a .zip of Markdown files, freeze it
+    to the private bucket, and return a short-lived signed URL — same infra as CSV export."""
+    import uuid as _uuid
+
+    from app.csv_export import snapshot_timestamp, zip_named_csvs
+    from app.storage import exports as export_store
+    from app.writer import store as article_store
+    from app.writer.slugs import slugify
+
+    _require_session(user, session_id)
+    bodies = article_store.get_session_article_markdown(session_id)
+    if not bodies:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No articles to download yet")
+
+    names = {c["id"]: c["name"] for c in store.list_clusters(session_id)}
+    used: set[str] = set()
+    named: list[tuple[str, str]] = []
+    for cluster_id, markdown in bodies:
+        base = slugify(names.get(cluster_id, cluster_id))
+        fn = f"{base}.md"
+        i = 2
+        while fn in used:
+            fn = f"{base}-{i}.md"
+            i += 1
+        used.add(fn)
+        named.append((fn, markdown))
+
+    data = zip_named_csvs(named)        # generic (filename, text) -> zip
+    object_path = f"{user.id}/{session_id}/articles-{snapshot_timestamp()}-{_uuid.uuid4().hex[:8]}.zip"
+    export_store.upload_snapshot(object_path, data, "application/zip")
+    download_url = export_store.create_signed_url(
+        object_path, get_settings().csv_signed_url_ttl_s, download_name=f"articles-{session_id[:8]}.zip",
+    )
+    return {"download_url": download_url, "count": len(named)}
+
+
+class PublishConfigBody(BaseModel):
+    github_repo: str | None = None          # "owner/repo"
+    github_branch: str | None = None
+    github_content_path: str | None = None  # e.g. "src/content/blog"
+    drive_folder_id: str | None = None      # optional Google Drive folder
+
+
+@router.patch("/sessions/{session_id}/publish-config")
+def set_publish_config(
+    session_id: str, body: PublishConfigBody, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Set the session's publish targets (GitHub repo/branch/path + Drive folder). Stored in
+    `sessions.publish_config`; the tokens themselves are server env vars."""
+    session = _require_session(user, session_id)
+    cfg = dict(session.get("publish_config") or {})
+    gh = dict(cfg.get("github") or {})
+    if body.github_repo is not None:
+        gh["repo"] = body.github_repo.strip()
+    if body.github_branch is not None:
+        gh["branch"] = body.github_branch.strip()
+    if body.github_content_path is not None:
+        gh["content_path"] = body.github_content_path.strip().strip("/")
+    cfg["github"] = gh
+    if body.drive_folder_id is not None:
+        cfg["drive"] = {"folder_id": body.drive_folder_id.strip()}
+    store.update_session(session_id, {"publish_config": cfg})
+    return {"publish_config": cfg}
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/publish/drive")
+def publish_cluster_drive(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Save one article to Google Drive as a Google Doc (from its HTML)."""
+    from app.writer import store as article_store
+    from app.writer.publish import drive as drive_pub
+
+    session = _require_session(user, session_id)
+    if store.cluster_session_id(cluster_id) != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    row = article_store.get_latest_article(cluster_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No article to save")
+    aj = row["article_json"]
+    html = aj.get("article_html") or ""
+    if not html:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Article has no HTML body")
+    folder_id = ((session.get("publish_config") or {}).get("drive") or {}).get("folder_id") or None
+    try:
+        res = drive_pub.create_doc_from_html(name=aj.get("title") or "Article", html=html, folder_id=folder_id)
+    except drive_pub.DrivePublishError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"published": True, **res}
+
+
+def _github_target(session: dict) -> tuple[str, str, str, str]:
+    """(repo, branch, content_path, token) for a session's GitHub target, or a 400 if the repo
+    isn't configured / the server has no token."""
+    s = get_settings()
+    gh = (session.get("publish_config") or {}).get("github") or {}
+    repo = (gh.get("repo") or "").strip()
+    if not repo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Set the GitHub repo (owner/repo) for this session first.")
+    if not s.github_publish_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="GitHub publishing isn't configured on the server (no token).")
+    return (repo, gh.get("branch") or s.github_default_branch,
+            (gh.get("content_path") or s.github_default_content_path).strip("/"),
+            s.github_publish_token)
+
+
+def _astro_file(content_path: str, *, markdown: str, title: str, article_slug: str, silo_name: str):
+    from app.writer.publish.markdown import build_astro_markdown
+    from app.writer.slugs import slugify
+
+    silo_slug = slugify(silo_name) if silo_name else "content"
+    md = build_astro_markdown(
+        article_markdown=markdown, title=title, slug=article_slug, silo=silo_name)
+    return f"{content_path}/{silo_slug}/{article_slug}.md", md
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/publish/github")
+def publish_cluster_github(
+    session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Commit one article to the session's GitHub repo as Astro content Markdown."""
+    from app.writer import store as article_store
+    from app.writer.publish import github as gh_pub
+
+    session = _require_session(user, session_id)
+    repo, branch, content_path, token = _github_target(session)
+    row = article_store.get_latest_article(cluster_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No article to publish")
+    cluster = store.get_cluster(cluster_id)
+    if not cluster or store.cluster_session_id(cluster_id) != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    article_slug = store.ensure_session_slugs(session_id).get(cluster_id) or cluster.get("slug")
+    if not article_slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cluster has no slug")
+    topic = store.get_topic(cluster["topic_id"]) or {}
+    aj = row["article_json"]
+    path, content = _astro_file(
+        content_path, markdown=aj.get("article_markdown", ""), title=aj.get("title", ""),
+        article_slug=article_slug, silo_name=topic.get("name", ""))
+    try:
+        res = gh_pub.commit_file(
+            repo=repo, path=path, content=content,
+            message=f"content: {aj.get('title') or path}", branch=branch, token=token)
+    except gh_pub.GitHubPublishError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"published": True, **res}
+
+
+@router.post("/sessions/{session_id}/publish/github")
+def publish_all_github(
+    session_id: str, user: AuthedUser = Depends(require_owner)
+) -> dict:
+    """Commit every written article to the repo in ONE commit (Git Trees API)."""
+    from app.writer import store as article_store
+    from app.writer.publish import github as gh_pub
+
+    session = _require_session(user, session_id)
+    repo, branch, content_path, token = _github_target(session)
+    bodies = dict(article_store.get_session_article_markdown(session_id))   # {cluster_id: md}
+    if not bodies:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No articles to publish")
+    slugs = store.ensure_session_slugs(session_id)
+    topics = {t["id"]: t for t in store.list_topics(session_id)}
+    files: list[tuple[str, str]] = []
+    for c in store.list_clusters(session_id):
+        markdown = bodies.get(c["id"])
+        article_slug = slugs.get(c["id"]) or c.get("slug")
+        if not markdown or not article_slug:
+            continue
+        silo_name = (topics.get(c["topic_id"]) or {}).get("name", "")
+        files.append(_astro_file(content_path, markdown=markdown, title="",
+                                 article_slug=article_slug, silo_name=silo_name))
+    if not files:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No publishable articles")
+    try:
+        res = gh_pub.commit_tree(
+            repo=repo, branch=branch, files=files,
+            message=f"content: publish {len(files)} articles", token=token)
+    except gh_pub.GitHubPublishError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"published": True, **res}
 
 
 @router.get("/sessions/{session_id}/clusters/{cluster_id}/article")
