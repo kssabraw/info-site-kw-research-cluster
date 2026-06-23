@@ -2,30 +2,49 @@
 
 This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-v1_7.md` first** — they hold the locked decisions and the spec. This file captures live state, the immediate next action, and hard-won gotchas not in those docs.
 
-> **▶ Resume here (2026-06-23, latest):** **M15 (scheduling + link injection) is DONE —
-> built, adversarially reviewed, deployed, and the prod worker is live-verified (signed off).**
-> 6 slices on `claude/intelligent-keller-6sx8ho` (PRs #35 + #38), all on `main` + deployed.
-> **Internal linking** (`writer/slugs.py` + `link_injector.py` + `link_targets.py`) injects the
-> M6 architecture graph as absolute internal links after generation, gated on
-> `sessions.site_base_url`. **Scheduling**: `content_schedules` + `scheduled_article_runs` +
-> an **in-process asyncio worker** (`scheduler.py`, ~60s tick, cap 3, startup recovery sweep)
-> that claims due runs via the `claim_scheduled_runs` RPC and writes each via the shared
-> `generate_article_core`. **`api/schedules.py`** = estimate/schedule/list/pause/resume/cancel,
-> with **3 modes (all-at-once / drip N-day / specific-date)**, **subset selection**, a
-> double-book guard, and the **VA `Schedule all` > $90 → owner approval** gate. UI: `ScheduleModal`
-> + `ScheduleView` + a **Schedule tab** + "Schedule N selected…" in the Cluster bulk bar.
-> All 3 pending migrations applied to prod (`20260625000000_content_scheduling.sql`,
-> `20260625100000_atomic_session_cost.sql`, + the earlier `20260624*` linking/auto-split);
-> PR #38 deploy `d1a8e690` SUCCESS; prod logs confirm `scheduler_started` (cap=3, tick=60s) +
-> the recovery sweep + the first `claim_scheduled_runs` RPC → 200, no `scheduler_tick_failed`.
-> **Adversarial-review fixes baked in before deploy:** `tzdata` dep (ZoneInfo on
-> `python:3.11-slim`); **atomic session-cost increment** (`increment_session_cost` RPC +
-> delta-flush in `cost_attribution` — the scheduler runs several same-session writes at once,
-> which the old read-base+absolute-write meter lost); paged `schedule_store` reads (>1000-row
-> cap); + 6 LOW cleanups. **#35 also shipped** bulk generation (`POST /generate-articles`), the
-> **2b clustered-keyword coverage** audit (`briefgen/coverage.py`, surfaced in `BriefPanel`),
-> and **confirm-to-write auto-split** of uncovered keywords (`clusters.auto_split`). See the
-> 2026-06-23 entry below for the full slice list + review findings.
+> **▶ Resume here (2026-06-23, latest):** **Articles library + 3 publish/save destinations
+> are DONE — deployed.** (M15 scheduling + link injection was signed off earlier the same day;
+> see that banner content folded into the dated entries below.) Owner decision: written content
+> must **"live somewhere"** — **(1) in the app**, **(2) saved to Google Drive**, or **(3) printed
+> to a GitHub repo** — explicitly **NOT** auto-pushed to a live WordPress/site. Three commits
+> (PR #40), all on `main` + deployed (`a0cc3e20` SUCCESS):
+> - **In-app library:** owner **Articles tab** + `GET /sessions/{id}/articles` (latest per cluster,
+>   paged); `ArticlePanel` **read-only** mode (GET, no regenerate) + **Copy Markdown** / **Download
+>   .md**; **Download-all (.zip)** via the `csv-snapshots` bucket + signed URL. Articles already
+>   live in `fanout.article_outputs`; this is the browse/read/export surface. **Works now, no setup.**
+> - **GitHub publish:** per-article commit + **Push-all** (Git **Trees** API, one commit) as **Astro
+>   content Markdown** at `{content_path}/{silo}/{slug}.md` — same slug/silo as the M15 links, so
+>   links resolve on the built site. `writer/publish/markdown.py` (pure, tested) + `github.py`
+>   (httpx). Env `GITHUB_PUBLISH_TOKEN` (fine-grained PAT, Contents:write) + per-session repo in
+>   Publish settings. **Dormant until the token is set.**
+> - **Google Drive save:** per-article → a formatted **Google Doc** (Drive HTML→Doc of `article_html`).
+>   Personal Gmail = **no Shared Drives** → **OAuth-as-user** (`drive.file`), not a service account.
+>   Env `GOOGLE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN` (**publish the consent screen to *production***
+>   or the refresh token dies after 7 days). `writer/publish/drive.py`; deps
+>   `google-api-python-client` + `google-auth`. Bulk-Drive deferred. **Dormant until the OAuth creds
+>   are set.**
+> - **Wiring:** `sessions.publish_config` jsonb (migration `20260626000000_publish_config.sql`,
+>   applied to prod) = per-session GitHub repo/branch/path + Drive folder; `GET /sessions` returns
+>   `publish_config` + `publish_available {github, drive}` (booleans from env presence, **no
+>   secrets**) so the Articles tab shows the GitHub/Drive buttons only once creds exist; **Publish
+>   settings** card.
+>
+> **TO ACTIVATE (owner, when ready):** GitHub → set `GITHUB_PUBLISH_TOKEN` + the repo in Publish
+> settings. Drive → Google Cloud (Drive API; consent screen External + **published to production**;
+> OAuth web client w/ `developers.google.com/oauthplayground` redirect) → OAuth-Playground a
+> `drive.file` **refresh token** → set the 3 `GOOGLE_OAUTH_*` env vars. **NOT yet done:** the first
+> real schedule run (M15) + the first GitHub/Drive push (await creds).
+>
+> **Prior (2026-06-23, M15):** **scheduling + link injection DONE — deployed, prod worker
+> live-verified.** 6 slices (PRs #35 + #38): internal link injection (`writer/slugs.py` +
+> `link_injector.py` + `link_targets.py`, gated on `sessions.site_base_url`); `content_schedules` +
+> `scheduled_article_runs` + an in-process asyncio **worker** (`scheduler.py`, ~60s, cap 3, recovery
+> sweep) draining due runs via `claim_scheduled_runs`; `api/schedules.py` (estimate/schedule/list/
+> pause/resume/cancel, **3 modes all-at-once/drip/specific-date**, subset, double-book guard, **VA
+> >$90 → owner approval**); `ScheduleModal` + `ScheduleView` + Schedule tab. Review fixes baked in:
+> **tzdata** dep; **atomic `increment_session_cost`** (concurrent same-session cost no longer lost);
+> paged `schedule_store`; +6 LOW cleanups. Migrations `20260625000000_content_scheduling.sql` +
+> `20260625100000_atomic_session_cost.sql` applied. See the dated entries below.
 >
 > **NOT yet done:** the first **real end-to-end schedule run** (owner drives it from the
 > Schedule tab — pick All-at-once for an immediate test, or a specific date). **Still open /
@@ -68,6 +87,53 @@ This is a session-continuity doc. **Read `CLAUDE.md` and `docs/topic-fanout-prd-
 > **stay in place (dormant)** for a future revisit (Embedding 2 at GA and/or
 > `RETRIEVAL_*` task types → would need a re-embed + recalibration). Caught entirely
 > in calibration — **no production data affected.**
+
+_2026-06-23 (Articles library + publish destinations) — written content now "lives somewhere":
+in-app library + Google Drive save + GitHub-repo print (owner decision; NOT auto-pushed to a
+live site). PR #40, deployed (`a0cc3e20`). Worked on `claude/intelligent-keller-6sx8ho`:_
+
+- **In-app library:** owner **Articles tab** + `GET /sessions/{id}/articles` (latest article per
+  cluster — name/words/cost/source/date; `writer/store.list_session_articles`, paged above the
+  ~1000-row cap). `ArticlePanel` gained a **`readOnly`** mode (loads the stored article via
+  `getArticle` instead of regenerating) + **Copy Markdown** / **Download .md** (client-side Blob).
+  **Download-all (.zip)** — `POST /sessions/{id}/articles/download-all` zips every article's
+  Markdown (slugified filenames) and serves a signed URL from the existing `csv-snapshots` bucket
+  (reuses `csv_export.zip_named_csvs` + `storage/exports`). Articles already lived in
+  `fanout.article_outputs`; **this works now, no provisioning.**
+- **GitHub publish (Astro content):** `app/writer/publish/markdown.py` (PURE — YAML frontmatter
+  title/description/pubDate/slug/silo/draft; lifts the leading H1 into `title` so the layout
+  doesn't double it; derives a meta description; `tests/test_publish_markdown.py`) + `github.py`
+  (httpx: `commit_file` = Contents API create-or-update with the existing-blob SHA; `commit_tree` =
+  Git Data/Trees API so **Push-all is ONE commit** regardless of count — no new dep). Files land at
+  `{content_path}/{silo-slug}/{article-slug}.md` — the **same** slug/silo the M15 link injector
+  uses, so internal links resolve on the built site. Endpoints
+  `POST .../clusters/{id}/publish/github` + `POST .../publish/github`. Env `GITHUB_PUBLISH_TOKEN`
+  (fine-grained PAT, Contents:write); repo/branch/path per-session.
+- **Google Drive save (Google Doc):** `app/writer/publish/drive.py` converts `article_html` →
+  a Google Doc via Drive's import. **Personal Gmail has no Shared Drives**, so a service account
+  can't own files there → **OAuth-as-user** with scope `drive.file` (only files the app creates).
+  `POST .../clusters/{id}/publish/drive` (single; **bulk deferred** — Drive has no one-shot
+  multi-file commit like GitHub's tree). Env `GOOGLE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN`; new
+  deps `google-api-python-client` + `google-auth`. **Gotcha for the owner:** mint the refresh
+  token with the consent screen **published to *production*** (a "Testing" app's refresh token
+  expires after 7 days) — the unverified-app warning is fine for a single user.
+- **Wiring:** migration `20260626000000_publish_config.sql` = `sessions.publish_config jsonb`
+  (applied to prod, verified) holds `{github:{repo,branch,content_path}, drive:{folder_id}}`;
+  `PATCH /sessions/{id}/publish-config`. `GET /sessions` now returns `publish_config` +
+  **`publish_available {github, drive}`** (booleans derived from env-token presence — **no
+  secrets**), so the Articles tab only renders the GitHub/Drive buttons once their server creds
+  exist. **Publish settings** card (GitHub repo/branch/path + Drive folder id). Frontend:
+  `owner/views/ArticlesView.tsx`, `api.ts` (`listArticles`/`downloadAllArticles`/`setPublishConfig`/
+  `publishClusterGithub`/`publishAllGithub`/`publishClusterDrive`).
+- **Deploy (`a0cc3e20` SUCCESS):** new deps (`google-api-python-client`/`google-auth`/`tzdata`)
+  installed; app booted clean (Google libs imported, scheduler still `scheduler_started` cap=3 +
+  `claim_scheduled_runs` 200). All publish destinations **dormant until creds are set** — the
+  in-app library is the only one active right now.
+- **Flagged carried:** bulk-Drive (background job, like scheduling); a "Copy for WordPress"
+  rich-HTML clipboard button was floated then dropped (owner doesn't want WordPress); GitHub
+  bulk over very large sessions sends one big Trees payload (fine for hundreds; chunk if it ever
+  grows huge). The Drive button/save is **untested live** (no creds yet) — it's an egress module
+  like ScrapeOwl/TextRazor, validated on the deployed stack once the owner provisions OAuth.
 
 _2026-06-23 (M15 signoff) — M15 (scheduling + link injection) DONE — built, adversarially
 reviewed, deployed, prod worker live-verified, signed off. Worked on
